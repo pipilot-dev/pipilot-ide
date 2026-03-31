@@ -1,0 +1,143 @@
+Create an open-source IDE app equipped with smart load search and refactor preview.  Fork of VScode ui design and fdeatures ,  then  chat sidepanel like on vscode for  its own github copilat chat experince wutht the chat and Agent mode available,     powered by this ai api  # Chat Completions API
+OpenAI-compatible chat completions endpoint with built-in tools and custom tool support.
+**Endpoint:** `POST https://the3rdacademy.com/api/chat/completions`
+## Quick Start
+### Basic Chat
+```bash
+curl -X POST /api/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      { "role": "user", "content": "Hello, how are you?" }
+    ]
+  }'
+```### Streaming
+```bash
+curl -X POST /api/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      { "role": "user", "content": "Write a short poem" }
+    ],
+    "stream": true
+  }'
+```
+## Request Body
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `messages` | `Message[]` | *required* | Conversation history |
+| `model` | `string` | `"a0-default"` | Model identifier (passed through) |
+| `max_tokens` | `number` | `4096` | Maximum tokens to generate |
+| `temperature` | `number` | `0.7` | Sampling temperature (0-2) |
+| `stream` | `boolean` | `false` | Enable SSE streaming |
+| `tools` | `Tool[]` | `undefined` | Custom tool definitions |
+| `tool_choice` | `any` | `undefined` | Tool selection preference |
+| `multistep` | `boolean` | `false` | Enable multi-step agent loop |
+| `max_steps` | `number` | `10` | Max tool-use turns (when `multistep: true`, cap: 60) |
+### Message Format
+```ts
+interface Message {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  tool_calls?: ToolCall[];     // Present on assistant messages with tool calls
+  tool_call_id?: string;       // Required on tool result messages
+  name?: string;               // Optional tool name
+}
+### Tool Definition Format
+Same as OpenAI's function calling format:
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "lookup_order",
+    "description": "Look up an order by its ID",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "The order ID to look up"
+        }
+      },
+      "required": ["order_id"]
+    }
+  }
+}
+```## Built-in Tools
+These tools are always available and execute automatically on the server. You do not need to define them in `tools` or handle their execution.
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `web_search` | Search the web via DuckDuckGo | `query: string` |
+| `web_extract` | Extract text content from a URL | `url: string` |
+| `image_generation` | Generate an image from a prompt | `prompt: string`, `aspect?: string`, `seed?: number` |
+
+When streaming, built-in tool execution emits status events (see [Streaming: Status Events](#status-events-built-in-tools)).
+## Non-Streaming Response
+### Standard Response (`finish_reason: "stop"`)
+```json{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1709900000,
+  "model": "a0-default",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Hello! I'm doing well. How can I help you?"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 12,
+    "completion_tokens": 12,
+    "total_tokens": 24
+  },
+  "_meta": {
+    "internal_tool_calls": 0,
+    "tools_used": []
+  }
+}
+```### Tool Call Response (`finish_reason: "tool_calls"`)
+Returned when the model wants to call one of your custom tools:
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1709900000,
+  "model": "a0-default",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Let me look that up for you.",
+        "tool_calls": [
+          {
+            "id": "call_9xk2m4pq7n",
+            "type": "function",
+            "function": {
+              "name": "lookup_order",
+              "arguments": "{\"order_id\":\"ORD-456\"}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": { "prompt_tokens": 40, "completion_tokens": 30, "total_tokens": 70 },
+  "_meta": {
+    "internal_tool_calls": 0,
+    "tools_used": []
+  }
+}
+```The `_meta` field exposes which built-in tools were used internally (e.g., the model searched the web before deciding to call your custom tool).
+---
+## Streaming (SSE)
+Set `"stream": true` to receive Server-Sent Events. The stream uses the same `chat.completion.chunk` format as OpenAI.
+### Text Chunks
+Tokens stream in with variable timing for a natural feel:
+```data: {"id":"chatcmpl-x","object":"chat.completion.chunk","created":1709900000,"model":"a0-default","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+data: {"id":"chatcmpl-x","object":"chat.comple
