@@ -89,12 +89,19 @@ export function IDELayout() {
 
       const result = await executeTool(name, args);
       // Create checkpoint after file mutations
-      if (name === "create_file" || name === "edit_file" || name === "delete_file") {
+      const mutationTools = ["create_file", "edit_file", "delete_file", "rename_file", "copy_file", "batch_create_files"];
+      if (mutationTools.includes(name)) {
         const label = name === "create_file"
           ? `Created ${args.path}`
           : name === "edit_file"
             ? `Edited ${args.path}`
-            : `Deleted ${args.path}`;
+            : name === "delete_file"
+              ? `Deleted ${args.path}`
+              : name === "rename_file"
+                ? `Renamed ${args.oldPath} → ${args.newPath}`
+                : name === "copy_file"
+                  ? `Copied ${args.srcPath} → ${args.destPath}`
+                  : `Batch created ${(args.files as unknown[])?.length ?? 0} files`;
         checkpoints.createCheckpoint(label).catch(console.error);
       }
       return result;

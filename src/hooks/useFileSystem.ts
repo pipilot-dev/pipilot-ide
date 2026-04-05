@@ -130,6 +130,33 @@ export function useFileSystem() {
         case "get_file_info":
           result = await fileOps.getFileInfo(args.path as string, activeProjectId);
           break;
+        case "rename_file":
+          result = await fileOps.renameFile(
+            args.oldPath as string,
+            args.newPath as string,
+            activeProjectId
+          );
+          setChangeLog((prev) => [...prev, { type: "edit", path: args.newPath as string, timestamp: new Date() }]);
+          break;
+        case "copy_file":
+          result = await fileOps.copyFile(
+            args.srcPath as string,
+            args.destPath as string,
+            activeProjectId
+          );
+          setChangeLog((prev) => [...prev, { type: "create", path: args.destPath as string, timestamp: new Date() }]);
+          break;
+        case "batch_create_files": {
+          const files = args.files as { path: string; content: string }[];
+          result = await fileOps.batchCreateFiles(files, activeProjectId);
+          for (const f of files) {
+            setChangeLog((prev) => [...prev, { type: "create", path: f.path, timestamp: new Date() }]);
+          }
+          break;
+        }
+        case "get_project_tree":
+          result = await fileOps.getProjectTree(args.path as string | undefined, activeProjectId);
+          break;
         default:
           throw new Error(`Unknown tool: ${name}`);
       }

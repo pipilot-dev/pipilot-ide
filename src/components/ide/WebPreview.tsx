@@ -9,7 +9,7 @@ interface WebPreviewProps {
   files: FileNode[];
 }
 
-const WEB_EXTENSIONS = new Set([".html", ".css", ".js", ".svg", ".json"]);
+const WEB_EXTENSIONS = new Set([".html", ".htm", ".css", ".js", ".mjs", ".jsx", ".svg", ".json", ".ts", ".tsx", ".md", ".xml", ".txt"]);
 
 function getExt(name: string): string {
   const i = name.lastIndexOf(".");

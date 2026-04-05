@@ -56,8 +56,25 @@ export interface DBCheckpoint {
 // Shared language map for file extensions
 export const LANG_MAP: Record<string, string> = {
   tsx: "typescript", jsx: "typescript", ts: "typescript", js: "javascript",
-  json: "json", md: "markdown", css: "css", html: "html", sh: "shell",
-  py: "python", go: "go", rs: "rust", java: "java",
+  mjs: "javascript", cjs: "javascript", mts: "typescript", cts: "typescript",
+  json: "json", jsonc: "json", json5: "json",
+  md: "markdown", mdx: "markdown",
+  css: "css", scss: "scss", sass: "scss", less: "less",
+  html: "html", htm: "html", svg: "xml", xml: "xml",
+  sh: "shell", bash: "shell", zsh: "shell", fish: "shell",
+  py: "python", pyw: "python", pyi: "python",
+  go: "go", rs: "rust", java: "java", kt: "kotlin", kts: "kotlin",
+  c: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", h: "c", hpp: "cpp",
+  cs: "csharp", fs: "fsharp",
+  rb: "ruby", php: "php", swift: "swift", m: "objective-c",
+  sql: "sql", graphql: "graphql", gql: "graphql",
+  yaml: "yaml", yml: "yaml", toml: "toml", ini: "ini", conf: "ini",
+  dockerfile: "dockerfile", makefile: "makefile",
+  lua: "lua", r: "r", dart: "dart", scala: "scala",
+  vue: "html", svelte: "html", astro: "html",
+  tf: "hcl", hcl: "hcl",
+  prisma: "prisma", proto: "protobuf",
+  txt: "plaintext", log: "plaintext", env: "shell",
 };
 
 class PiPilotDB extends Dexie {
@@ -172,10 +189,10 @@ export async function seedDatabaseIfEmpty() {
   return true;
 }
 
-// Constants
-const MAX_READ_LINES = 150;
-const MAX_LIST_ITEMS = 50;
-const MAX_SEARCH_RESULTS = 20;
+// Constants — generous limits for power users
+const MAX_READ_LINES = 500;
+const MAX_LIST_ITEMS = 200;
+const MAX_SEARCH_RESULTS = 50;
 
 // File operations on IndexedDB
 export const fileOps = {
@@ -406,6 +423,121 @@ export const fileOps = {
       output += `\n\n[Results capped at ${MAX_SEARCH_RESULTS}. Narrow your query or specify a path to search within.]`;
     }
     return output;
+  },
+
+  /**
+   * Rename/move a file or folder to a new path.
+   */
+  async renameFile(oldPath: string, newPath: string, projectId?: string): Promise<string> {
+    const file = await db.files.get(oldPath);
+    if (!file) throw new Error(`File not found: ${oldPath}`);
+    if (projectId && file.projectId && file.projectId !== projectId) {
+      throw new Error(`File ${oldPath} belongs to a different project`);
+    }
+    const existing = await db.files.get(newPath);
+    if (existing) throw new Error(`Target path already exists: ${newPath}`);
+
+    const newParts = newPath.replace(/^\//, "").split("/");
+    const newName = newParts.pop()!;
+    const newParent = newParts.join("/");
+
+    // Ensure parent dirs exist
+    let parentPath = "";
+    for (const part of newParts) {
+      const dirId = parentPath ? `${parentPath}/${part}` : part;
+      const existingDir = await db.files.get(dirId);
+      if (!existingDir) {
+        await db.files.put({
+          id: dirId, name: part, type: "folder", parentPath,
+          projectId, createdAt: new Date(), updatedAt: new Date(),
+        });
+      }
+      parentPath = dirId;
+    }
+
+    if (file.type === "folder") {
+      // Move all children recursively
+      const children = await db.files.where("parentPath").equals(oldPath).toArray();
+      for (const child of children) {
+        const childNewPath = `${newPath}/${child.name}`;
+        await fileOps.renameFile(child.id, childNewPath, projectId);
+      }
+    }
+
+    await db.files.put({
+      ...file, id: newPath, name: newName, parentPath: newParent, updatedAt: new Date(),
+    });
+    await db.files.delete(oldPath);
+
+    return `✓ Renamed: ${oldPath} → ${newPath}`;
+  },
+
+  /**
+   * Copy a file to a new path.
+   */
+  async copyFile(srcPath: string, destPath: string, projectId?: string): Promise<string> {
+    const file = await db.files.get(srcPath);
+    if (!file) throw new Error(`File not found: ${srcPath}`);
+    if (file.type === "folder") throw new Error(`Cannot copy directory (yet): ${srcPath}`);
+
+    return await fileOps.createFile(destPath, file.content ?? "", projectId);
+  },
+
+  /**
+   * Batch create multiple files in one call. Returns summary.
+   */
+  async batchCreateFiles(files: { path: string; content: string }[], projectId?: string): Promise<string> {
+    const results: string[] = [];
+    for (const f of files) {
+      try {
+        const result = await fileOps.createFile(f.path, f.content, projectId);
+        results.push(result);
+      } catch (err) {
+        results.push(`✗ Failed: ${f.path} — ${err instanceof Error ? err.message : "Unknown error"}`);
+      }
+    }
+    return results.join("\n");
+  },
+
+  /**
+   * Get a tree view of the entire project structure.
+   */
+  async getProjectTree(basePath?: string, projectId?: string): Promise<string> {
+    let allFiles = await db.files.toArray();
+    if (projectId) {
+      allFiles = allFiles.filter((f) => f.projectId === projectId);
+    }
+    if (basePath && basePath !== "/" && basePath !== ".") {
+      allFiles = allFiles.filter((f) => f.id === basePath || f.id.startsWith(basePath + "/"));
+    }
+
+    // Build tree structure
+    allFiles.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+      return a.id.localeCompare(b.id);
+    });
+
+    const lines: string[] = [];
+    const rootPath = basePath && basePath !== "/" && basePath !== "." ? basePath : "";
+
+    function buildTree(parentPath: string, prefix: string) {
+      const children = allFiles.filter((f) => f.parentPath === parentPath);
+      children.forEach((child, idx) => {
+        const isLast = idx === children.length - 1;
+        const connector = isLast ? "└── " : "├── ";
+        const suffix = child.type === "folder" ? "/" : "";
+        const lineCount = child.type === "file" && child.content ? ` (${child.content.split("\n").length}L)` : "";
+        lines.push(`${prefix}${connector}${child.name}${suffix}${lineCount}`);
+        if (child.type === "folder") {
+          const newPrefix = prefix + (isLast ? "    " : "│   ");
+          buildTree(child.id, newPrefix);
+        }
+      });
+    }
+
+    lines.push(rootPath || ".");
+    buildTree(rootPath, "");
+    return lines.join("\n");
   },
 
   async getFileInfo(path: string, projectId?: string): Promise<string> {

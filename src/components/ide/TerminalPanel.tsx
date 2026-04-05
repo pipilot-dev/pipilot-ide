@@ -94,21 +94,37 @@ export function TerminalPanel() {
           case "help":
             addLines(shellId, [
               { type: "info", text: "Available commands:" },
-              { type: "output", text: "  ls [path]        List files in directory" },
-              { type: "output", text: "  cd <path>        Change directory" },
-              { type: "output", text: "  cat <file>       Print file contents" },
-              { type: "output", text: "  head <file>      Print first 20 lines" },
-              { type: "output", text: "  wc <file>        Count lines in file" },
-              { type: "output", text: "  find <pattern>   Search files by name" },
-              { type: "output", text: "  grep <q> <file>  Search content in file" },
-              { type: "output", text: "  touch <file>     Create empty file" },
-              { type: "output", text: "  rm <file>        Delete file" },
-              { type: "output", text: "  mkdir <dir>      Create directory" },
-              { type: "output", text: "  pwd              Print working directory" },
-              { type: "output", text: "  echo <text>      Print text" },
-              { type: "output", text: "  date             Show date/time" },
-              { type: "output", text: "  clear            Clear terminal" },
-              { type: "output", text: "  whoami           Show current user" },
+              { type: "info", text: "\n── File Operations ──" },
+              { type: "output", text: "  ls [path]            List files in directory" },
+              { type: "output", text: "  cat <file>           Print file contents" },
+              { type: "output", text: "  head [-n N] <file>   Print first N lines (default 20)" },
+              { type: "output", text: "  tail [-n N] <file>   Print last N lines (default 20)" },
+              { type: "output", text: "  wc <file>            Count lines, words, chars" },
+              { type: "output", text: "  touch <file>         Create empty file" },
+              { type: "output", text: "  rm [-r] <path>       Delete file or directory" },
+              { type: "output", text: "  cp <src> <dest>      Copy file" },
+              { type: "output", text: "  mv <src> <dest>      Move/rename file" },
+              { type: "output", text: "  mkdir [-p] <dir>     Create directory" },
+              { type: "info", text: "\n── Navigation ──" },
+              { type: "output", text: "  cd <path>            Change directory" },
+              { type: "output", text: "  pwd                  Print working directory" },
+              { type: "output", text: "  tree [path]          Show directory tree" },
+              { type: "info", text: "\n── Search ──" },
+              { type: "output", text: "  find <pattern>       Search files by name" },
+              { type: "output", text: "  grep <q> <file>      Search content in file" },
+              { type: "output", text: "  grep -r <q> [path]   Search content recursively" },
+              { type: "info", text: "\n── Info & Utils ──" },
+              { type: "output", text: "  stat <file>          Show file details" },
+              { type: "output", text: "  du [path]            Show disk usage (sizes)" },
+              { type: "output", text: "  diff <f1> <f2>       Compare two files" },
+              { type: "output", text: "  echo <text>          Print text" },
+              { type: "output", text: "  env                  Show environment info" },
+              { type: "output", text: "  date                 Show date/time" },
+              { type: "output", text: "  whoami               Show current user" },
+              { type: "output", text: "  history              Show command history" },
+              { type: "output", text: "  clear                Clear terminal" },
+              { type: "output", text: "  export <K>=<V>       Set environment variable" },
+              { type: "output", text: "  xargs <cmd>          Pipe input to command" },
               { type: "output", text: "" },
             ]);
             break;
@@ -190,12 +206,33 @@ export function TerminalPanel() {
           }
 
           case "head": {
-            if (!arg) { addLines(shellId, [{ type: "error", text: "head: missing file operand" }]); break; }
-            const headPath = cwd ? `${cwd}/${arg}` : arg;
+            let headN = 20;
+            let headArg = arg;
+            const headNMatch = arg.match(/^-n\s+(\d+)\s+(.+)$/);
+            if (headNMatch) { headN = parseInt(headNMatch[1]); headArg = headNMatch[2]; }
+            else if (arg.match(/^-(\d+)\s+(.+)$/)) { const m = arg.match(/^-(\d+)\s+(.+)$/)!; headN = parseInt(m[1]); headArg = m[2]; }
+            if (!headArg) { addLines(shellId, [{ type: "error", text: "head: missing file operand" }]); break; }
+            const headPath = cwd ? `${cwd}/${headArg}` : headArg;
             const headFile = await db.files.get(headPath);
-            if (!headFile) { addLines(shellId, [{ type: "error", text: `head: ${arg}: No such file` }]); break; }
-            const headContent = (headFile.content ?? "").split("\n").slice(0, 20).join("\n");
+            if (!headFile) { addLines(shellId, [{ type: "error", text: `head: ${headArg}: No such file` }]); break; }
+            const headContent = (headFile.content ?? "").split("\n").slice(0, headN).join("\n");
             addLines(shellId, [{ type: "output", text: headContent }]);
+            break;
+          }
+
+          case "tail": {
+            let tailN = 20;
+            let tailArg = arg;
+            const tailNMatch = arg.match(/^-n\s+(\d+)\s+(.+)$/);
+            if (tailNMatch) { tailN = parseInt(tailNMatch[1]); tailArg = tailNMatch[2]; }
+            else if (arg.match(/^-(\d+)\s+(.+)$/)) { const m = arg.match(/^-(\d+)\s+(.+)$/)!; tailN = parseInt(m[1]); tailArg = m[2]; }
+            if (!tailArg) { addLines(shellId, [{ type: "error", text: "tail: missing file operand" }]); break; }
+            const tailPath = cwd ? `${cwd}/${tailArg}` : tailArg;
+            const tailFile = await db.files.get(tailPath);
+            if (!tailFile) { addLines(shellId, [{ type: "error", text: `tail: ${tailArg}: No such file` }]); break; }
+            const tailLines = (tailFile.content ?? "").split("\n");
+            const tailContent = tailLines.slice(-tailN).join("\n");
+            addLines(shellId, [{ type: "output", text: tailContent }]);
             break;
           }
 
@@ -225,9 +262,41 @@ export function TerminalPanel() {
           }
 
           case "grep": {
-            const grepParts = arg.match(/^"([^"]+)"\s+(.+)$/) || arg.match(/^(\S+)\s+(.+)$/);
+            // Support grep -r <pattern> [path] for recursive search
+            const isRecursive = arg.startsWith("-r ") || arg.startsWith("-ri ");
+            const grepArg = isRecursive ? arg.replace(/^-ri?\s+/, "") : arg;
+
+            if (isRecursive) {
+              const rGrepParts = grepArg.match(/^"([^"]+)"(?:\s+(.+))?$/) || grepArg.match(/^(\S+)(?:\s+(.+))?$/);
+              if (!rGrepParts) { addLines(shellId, [{ type: "error", text: 'grep -r: usage: grep -r <pattern> [path]' }]); break; }
+              const rQuery = rGrepParts[1];
+              const rBasePath = rGrepParts[2] ? (cwd ? `${cwd}/${rGrepParts[2]}` : rGrepParts[2]) : cwd || "";
+              const allGrepFiles = await db.files.where("type").equals("file").toArray();
+              const filteredFiles = rBasePath
+                ? allGrepFiles.filter((f) => f.id.startsWith(rBasePath))
+                : allGrepFiles;
+              const rMatches: string[] = [];
+              for (const f of filteredFiles) {
+                const fLines = (f.content ?? "").split("\n");
+                fLines.forEach((line, i) => {
+                  if (line.toLowerCase().includes(rQuery.toLowerCase())) {
+                    rMatches.push(`${f.id}:${i + 1}: ${line.trim()}`);
+                  }
+                });
+                if (rMatches.length > 50) break;
+              }
+              if (rMatches.length === 0) {
+                addLines(shellId, [{ type: "output", text: "(no matches)" }]);
+              } else {
+                addLines(shellId, rMatches.slice(0, 50).map((m) => ({ type: "output" as const, text: m })));
+                if (rMatches.length > 50) addLines(shellId, [{ type: "info", text: `... more matches (showing first 50)` }]);
+              }
+              break;
+            }
+
+            const grepParts = grepArg.match(/^"([^"]+)"\s+(.+)$/) || grepArg.match(/^(\S+)\s+(.+)$/);
             if (!grepParts) {
-              addLines(shellId, [{ type: "error", text: 'grep: usage: grep <pattern> <file>' }]);
+              addLines(shellId, [{ type: "error", text: 'grep: usage: grep <pattern> <file> or grep -r <pattern> [path]' }]);
               break;
             }
             const grepQuery = grepParts[1];
@@ -282,11 +351,24 @@ export function TerminalPanel() {
 
           case "rm": {
             if (!arg) { addLines(shellId, [{ type: "error", text: "rm: missing operand" }]); break; }
-            const rmPath = cwd ? `${cwd}/${arg}` : arg;
+            const rmRecursive = arg.startsWith("-r ") || arg.startsWith("-rf ") || arg.startsWith("-fr ");
+            const rmTarget = rmRecursive ? arg.replace(/^-r[f]?\s+|-fr\s+/, "") : arg;
+            const rmPath = cwd ? `${cwd}/${rmTarget}` : rmTarget;
             const rmFile = await db.files.get(rmPath);
-            if (!rmFile) { addLines(shellId, [{ type: "error", text: `rm: ${arg}: No such file` }]); break; }
-            await db.files.delete(rmPath);
-            addLines(shellId, [{ type: "success", text: `removed: ${rmPath}` }]);
+            if (!rmFile) { addLines(shellId, [{ type: "error", text: `rm: ${rmTarget}: No such file or directory` }]); break; }
+            if (rmFile.type === "folder" && !rmRecursive) {
+              addLines(shellId, [{ type: "error", text: `rm: ${rmTarget}: Is a directory (use rm -r)` }]); break;
+            }
+            if (rmFile.type === "folder") {
+              // Recursive delete
+              const rmChildren = await db.files.toArray();
+              const toDelete = rmChildren.filter((f) => f.id === rmPath || f.id.startsWith(rmPath + "/"));
+              for (const f of toDelete) await db.files.delete(f.id);
+              addLines(shellId, [{ type: "success", text: `removed: ${rmPath} (${toDelete.length} items)` }]);
+            } else {
+              await db.files.delete(rmPath);
+              addLines(shellId, [{ type: "success", text: `removed: ${rmPath}` }]);
+            }
             break;
           }
 
@@ -307,6 +389,176 @@ export function TerminalPanel() {
             break;
           }
 
+          case "cp": {
+            const cpMatch = arg.match(/^(\S+)\s+(\S+)$/);
+            if (!cpMatch) { addLines(shellId, [{ type: "error", text: "cp: usage: cp <source> <destination>" }]); break; }
+            const cpSrc = cwd ? `${cwd}/${cpMatch[1]}` : cpMatch[1];
+            const cpDest = cwd ? `${cwd}/${cpMatch[2]}` : cpMatch[2];
+            const cpFile = await db.files.get(cpSrc);
+            if (!cpFile) { addLines(shellId, [{ type: "error", text: `cp: ${cpMatch[1]}: No such file` }]); break; }
+            if (cpFile.type === "folder") { addLines(shellId, [{ type: "error", text: `cp: ${cpMatch[1]}: Is a directory (use cp -r)` }]); break; }
+            const cpExt = cpMatch[2].split(".").pop()?.toLowerCase();
+            const cpLangMap: Record<string, string> = { tsx: "typescript", jsx: "typescript", ts: "typescript", js: "javascript", json: "json", md: "markdown", css: "css", html: "html" };
+            await db.files.put({
+              id: cpDest, name: cpMatch[2].split("/").pop()!, type: "file",
+              parentPath: cpDest.includes("/") ? cpDest.split("/").slice(0, -1).join("/") : cwd,
+              language: cpLangMap[cpExt ?? ""] ?? cpFile.language ?? "plaintext",
+              content: cpFile.content ?? "", createdAt: new Date(), updatedAt: new Date(),
+            });
+            addLines(shellId, [{ type: "success", text: `copied: ${cpSrc} → ${cpDest}` }]);
+            break;
+          }
+
+          case "mv": {
+            const mvMatch = arg.match(/^(\S+)\s+(\S+)$/);
+            if (!mvMatch) { addLines(shellId, [{ type: "error", text: "mv: usage: mv <source> <destination>" }]); break; }
+            const mvSrc = cwd ? `${cwd}/${mvMatch[1]}` : mvMatch[1];
+            const mvDest = cwd ? `${cwd}/${mvMatch[2]}` : mvMatch[2];
+            const mvFile = await db.files.get(mvSrc);
+            if (!mvFile) { addLines(shellId, [{ type: "error", text: `mv: ${mvMatch[1]}: No such file` }]); break; }
+            await db.files.put({
+              ...mvFile, id: mvDest, name: mvMatch[2].split("/").pop()!,
+              parentPath: mvDest.includes("/") ? mvDest.split("/").slice(0, -1).join("/") : cwd,
+              updatedAt: new Date(),
+            });
+            await db.files.delete(mvSrc);
+            addLines(shellId, [{ type: "success", text: `moved: ${mvSrc} → ${mvDest}` }]);
+            break;
+          }
+
+          case "tree": {
+            const treePath = arg ? (cwd ? `${cwd}/${arg}` : arg) : cwd || "";
+            const treeAllFiles = await db.files.toArray();
+            const treeLines: string[] = [];
+
+            function buildTreeOutput(parentPath: string, prefix: string) {
+              const children = treeAllFiles
+                .filter((f) => f.parentPath === parentPath)
+                .sort((a, b) => {
+                  if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+                  return a.name.localeCompare(b.name);
+                });
+              children.forEach((child, idx) => {
+                const isLast = idx === children.length - 1;
+                const connector = isLast ? "└── " : "├── ";
+                const suffix = child.type === "folder" ? "/" : "";
+                treeLines.push(`${prefix}${connector}${child.name}${suffix}`);
+                if (child.type === "folder") {
+                  buildTreeOutput(child.id, prefix + (isLast ? "    " : "│   "));
+                }
+              });
+            }
+
+            treeLines.push(treePath || ".");
+            buildTreeOutput(treePath, "");
+            const dirs = treeAllFiles.filter((f) => f.parentPath === treePath || f.id.startsWith(treePath ? treePath + "/" : "")).filter((f) => f.type === "folder").length;
+            const files = treeAllFiles.filter((f) => f.parentPath === treePath || f.id.startsWith(treePath ? treePath + "/" : "")).filter((f) => f.type === "file").length;
+            treeLines.push(`\n${dirs} directories, ${files} files`);
+            addLines(shellId, [{ type: "output", text: treeLines.join("\n") }]);
+            break;
+          }
+
+          case "stat": {
+            if (!arg) { addLines(shellId, [{ type: "error", text: "stat: missing file operand" }]); break; }
+            const statPath = cwd ? `${cwd}/${arg}` : arg;
+            const statFile = await db.files.get(statPath);
+            if (!statFile) { addLines(shellId, [{ type: "error", text: `stat: ${arg}: No such file` }]); break; }
+            const statLines = statFile.content ? statFile.content.split("\n").length : 0;
+            const statSize = statFile.content ? statFile.content.length : 0;
+            addLines(shellId, [
+              { type: "output", text: `  File: ${statFile.name}` },
+              { type: "output", text: `  Type: ${statFile.type}` },
+              { type: "output", text: `  Language: ${statFile.language || "N/A"}` },
+              { type: "output", text: `  Size: ${statSize} bytes (${statLines} lines)` },
+              { type: "output", text: `  Created: ${statFile.createdAt}` },
+              { type: "output", text: `  Modified: ${statFile.updatedAt}` },
+            ]);
+            break;
+          }
+
+          case "du": {
+            const duPath = arg ? (cwd ? `${cwd}/${arg}` : arg) : cwd || "";
+            const duAllFiles = await db.files.where("type").equals("file").toArray();
+            const duFiltered = duPath
+              ? duAllFiles.filter((f) => f.id.startsWith(duPath))
+              : duAllFiles;
+            const totalSize = duFiltered.reduce((sum, f) => sum + (f.content?.length ?? 0), 0);
+            const sizeStr = totalSize > 1024 ? `${(totalSize / 1024).toFixed(1)}KB` : `${totalSize}B`;
+            addLines(shellId, [
+              { type: "output", text: `${sizeStr}\t${duPath || "."} (${duFiltered.length} files)` },
+            ]);
+            break;
+          }
+
+          case "diff": {
+            const diffMatch = arg.match(/^(\S+)\s+(\S+)$/);
+            if (!diffMatch) { addLines(shellId, [{ type: "error", text: "diff: usage: diff <file1> <file2>" }]); break; }
+            const diffPath1 = cwd ? `${cwd}/${diffMatch[1]}` : diffMatch[1];
+            const diffPath2 = cwd ? `${cwd}/${diffMatch[2]}` : diffMatch[2];
+            const diffFile1 = await db.files.get(diffPath1);
+            const diffFile2 = await db.files.get(diffPath2);
+            if (!diffFile1) { addLines(shellId, [{ type: "error", text: `diff: ${diffMatch[1]}: No such file` }]); break; }
+            if (!diffFile2) { addLines(shellId, [{ type: "error", text: `diff: ${diffMatch[2]}: No such file` }]); break; }
+            const lines1 = (diffFile1.content ?? "").split("\n");
+            const lines2 = (diffFile2.content ?? "").split("\n");
+            const maxLen = Math.max(lines1.length, lines2.length);
+            const diffOutput: { type: "output" | "error" | "success"; text: string }[] = [];
+            let hasDiff = false;
+            for (let i = 0; i < maxLen; i++) {
+              if (lines1[i] !== lines2[i]) {
+                hasDiff = true;
+                if (lines1[i] !== undefined) diffOutput.push({ type: "error", text: `- ${i + 1}: ${lines1[i]}` });
+                if (lines2[i] !== undefined) diffOutput.push({ type: "success", text: `+ ${i + 1}: ${lines2[i]}` });
+              }
+            }
+            if (!hasDiff) {
+              addLines(shellId, [{ type: "info", text: "Files are identical." }]);
+            } else {
+              addLines(shellId, diffOutput.slice(0, 60));
+              if (diffOutput.length > 60) addLines(shellId, [{ type: "info", text: `... ${diffOutput.length - 60} more diff lines` }]);
+            }
+            break;
+          }
+
+          case "env": {
+            const envVars = (shell as ShellTab & { env?: Record<string, string> }).env || {};
+            addLines(shellId, [
+              { type: "output", text: `SHELL=/bin/bash` },
+              { type: "output", text: `USER=developer` },
+              { type: "output", text: `HOME=/workspace` },
+              { type: "output", text: `PWD=/${cwd || ""}` },
+              { type: "output", text: `TERM=xterm-256color` },
+              { type: "output", text: `EDITOR=pipilot-ide` },
+              { type: "output", text: `NODE_ENV=development` },
+              ...Object.entries(envVars).map(([k, v]) => ({ type: "output" as const, text: `${k}=${v}` })),
+            ]);
+            break;
+          }
+
+          case "export": {
+            const exportMatch = arg.match(/^(\w+)=(.*)$/);
+            if (!exportMatch) { addLines(shellId, [{ type: "error", text: "export: usage: export KEY=VALUE" }]); break; }
+            updateShell(shellId, (s) => {
+              const env = (s as ShellTab & { env?: Record<string, string> }).env || {};
+              env[exportMatch[1]] = exportMatch[2];
+              return { ...s, env } as ShellTab;
+            });
+            addLines(shellId, [{ type: "success", text: `${exportMatch[1]}=${exportMatch[2]}` }]);
+            break;
+          }
+
+          case "history": {
+            if (shell.history.length === 0) {
+              addLines(shellId, [{ type: "output", text: "(no history)" }]);
+            } else {
+              addLines(shellId, shell.history.map((h, i) => ({
+                type: "output" as const,
+                text: `  ${i + 1}  ${h}`,
+              })));
+            }
+            break;
+          }
+
           case "echo":
             addLines(shellId, [{ type: "output", text: arg }]);
             break;
@@ -317,6 +569,24 @@ export function TerminalPanel() {
 
           case "whoami":
             addLines(shellId, [{ type: "output", text: "developer@pipilot-ide" }]);
+            break;
+
+          case "uname":
+            addLines(shellId, [{ type: "output", text: "PiPilot IDE v2.0 — Browser-based Virtual Workspace" }]);
+            break;
+
+          case "uptime":
+            addLines(shellId, [{ type: "output", text: `up ${Math.floor(performance.now() / 60000)} minutes` }]);
+            break;
+
+          case "which":
+            if (!arg) { addLines(shellId, [{ type: "error", text: "which: missing argument" }]); break; }
+            const knownCmds = ["ls","cd","cat","head","tail","wc","find","grep","touch","rm","cp","mv","mkdir","tree","stat","du","diff","echo","date","whoami","env","export","history","clear","pwd","uname","uptime","which","help"];
+            if (knownCmds.includes(arg)) {
+              addLines(shellId, [{ type: "output", text: `/usr/bin/${arg}` }]);
+            } else {
+              addLines(shellId, [{ type: "error", text: `${arg} not found` }]);
+            }
             break;
 
           default:

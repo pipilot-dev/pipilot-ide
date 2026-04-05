@@ -7,10 +7,11 @@ export interface Tool {
 }
 
 export const availableTools: Tool[] = [
+  // ── Core File Operations ──
   {
     id: 'read_file',
     name: 'Read File',
-    description: 'Read contents of a file from the project',
+    description: 'Read contents of a file (up to 500 lines with ranges)',
     icon: 'FileText',
     category: 'file_ops',
   },
@@ -24,24 +25,69 @@ export const availableTools: Tool[] = [
   {
     id: 'edit_file',
     name: 'Edit File',
-    description: 'Edit an existing file using search/replace',
+    description: 'Edit an existing file using search/replace or full rewrite',
     icon: 'FileEdit',
     category: 'file_ops',
   },
   {
     id: 'delete_file',
     name: 'Delete File',
-    description: 'Remove a file from the project',
+    description: 'Remove a file or directory (recursive)',
     icon: 'Trash2',
     category: 'file_ops',
   },
   {
     id: 'list_files',
     name: 'List Files',
-    description: 'List all files and directories in the project',
+    description: 'List files and directories (up to 200 items)',
     icon: 'FolderTree',
     category: 'file_ops',
   },
+  // ── Power File Operations ──
+  {
+    id: 'batch_create_files',
+    name: 'Batch Create',
+    description: 'Create multiple files at once for fast scaffolding',
+    icon: 'Files',
+    category: 'file_ops',
+  },
+  {
+    id: 'rename_file',
+    name: 'Rename / Move',
+    description: 'Rename or move a file or folder to a new path',
+    icon: 'FileSymlink',
+    category: 'file_ops',
+  },
+  {
+    id: 'copy_file',
+    name: 'Copy File',
+    description: 'Duplicate a file to a new location',
+    icon: 'Copy',
+    category: 'file_ops',
+  },
+  {
+    id: 'get_project_tree',
+    name: 'Project Tree',
+    description: 'Visual tree view of the entire project with line counts',
+    icon: 'Network',
+    category: 'file_ops',
+  },
+  // ── Search ──
+  {
+    id: 'search_files',
+    name: 'Search Files',
+    description: 'Search files by name or content (up to 50 results)',
+    icon: 'Search',
+    category: 'code_search',
+  },
+  {
+    id: 'get_file_info',
+    name: 'File Info',
+    description: 'Get detailed file metadata (size, lines, dates)',
+    icon: 'Info',
+    category: 'code_search',
+  },
+  // ── Project ──
   {
     id: 'generate_plan',
     name: 'Generate Plan',
@@ -55,27 +101,6 @@ export const availableTools: Tool[] = [
     description: 'Mark plan steps as completed',
     icon: 'CheckSquare',
     category: 'project',
-  },
-  {
-    id: 'frontend_design_guide',
-    name: 'Design Guide',
-    description: 'Generate or read the design system',
-    icon: 'Palette',
-    category: 'dev',
-  },
-  {
-    id: 'project_file_strategy',
-    name: 'File Strategy',
-    description: 'Get optimized file structure recommendations',
-    icon: 'Layout',
-    category: 'dev',
-  },
-  {
-    id: 'discover_tools',
-    name: 'Discover Tools',
-    description: 'Search for available tools by keyword',
-    icon: 'Search',
-    category: 'special',
   },
   {
     id: 'update_project_context',
@@ -97,6 +122,37 @@ export const availableTools: Tool[] = [
     description: 'Exit build mode and return to summary',
     icon: 'StopCircle',
     category: 'project',
+  },
+  // ── Development ──
+  {
+    id: 'frontend_design_guide',
+    name: 'Design Guide',
+    description: 'Generate or read the design system',
+    icon: 'Palette',
+    category: 'dev',
+  },
+  {
+    id: 'project_file_strategy',
+    name: 'File Strategy',
+    description: 'Get optimized file structure recommendations',
+    icon: 'Layout',
+    category: 'dev',
+  },
+  // ── Deployment ──
+  {
+    id: 'deploy_site',
+    name: 'Deploy Site',
+    description: 'Deploy the project to a live public URL',
+    icon: 'Globe',
+    category: 'web',
+  },
+  // ── Special ──
+  {
+    id: 'discover_tools',
+    name: 'Discover Tools',
+    description: 'Search for available tools by keyword',
+    icon: 'Search',
+    category: 'special',
   },
 ];
 
