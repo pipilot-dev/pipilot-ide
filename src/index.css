@@ -413,3 +413,23 @@
   color: hsl(207 90% 60%);
   margin-left: 1px;
 }
+
+/* ── Sandpack Preview: fill entire tab height ── */
+.sp-wrapper {
+  height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+.sp-preview {
+  flex: 1 !important;
+  min-height: 0 !important;
+}
+.sp-preview iframe {
+  height: 100% !important;
+}
+.sp-preview-container {
+  height: 100% !important;
+}
+.sp-stack {
+  height: 100% !important;
+}

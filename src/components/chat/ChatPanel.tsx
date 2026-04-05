@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, KeyboardEvent } from "react";
+import { useEffect, useRef, useState, useCallback, KeyboardEvent } from "react";
 import {
   Send,
   Square,
@@ -7,14 +7,48 @@ import {
   Zap,
   ChevronDown,
   Sparkles,
+  Paperclip,
 } from "lucide-react";
-import { useChat, ChatMode } from "@/hooks/useChat";
+import { useChat, ChatMode, ToolExecutor, WorkspaceContext, CheckpointManager } from "@/hooks/useChat";
 import { ChatMessageItem } from "./ChatMessage";
 
-export function ChatPanel() {
-  const { messages, isStreaming, mode, setMode, sendMessage, stopStreaming, clearMessages } =
-    useChat();
+interface ChatPanelProps {
+  toolExecutor?: ToolExecutor;
+  workspaceContext?: WorkspaceContext;
+  checkpointManager?: CheckpointManager;
+  projectId?: string;
+}
+
+export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, projectId }: ChatPanelProps) {
+  const {
+    messages,
+    isStreaming,
+    mode,
+    setMode,
+    sendMessage,
+    stopStreaming,
+    clearMessages,
+    deleteMessage,
+    revertToMessage,
+  } = useChat(toolExecutor, workspaceContext, checkpointManager, projectId);
+
+  const handleDeleteMessage = useCallback(
+    (messageId: string) => {
+      if (isStreaming) return;
+      deleteMessage(messageId);
+    },
+    [deleteMessage, isStreaming]
+  );
+
   const [input, setInput] = useState("");
+  const handleRevertToMessage = useCallback(
+    async (messageId: string) => {
+      if (isStreaming) return;
+      const content = await revertToMessage(messageId);
+      if (content) setInput(content);
+    },
+    [revertToMessage, isStreaming]
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showModeMenu, setShowModeMenu] = useState(false);
@@ -53,7 +87,7 @@ export function ChatPanel() {
     agent: {
       label: "Agent",
       icon: <Zap size={12} />,
-      desc: "Multi-step autonomous mode",
+      desc: "Multi-step with file tools",
     },
   };
 
@@ -71,7 +105,7 @@ export function ChatPanel() {
         <div className="flex items-center gap-2">
           <Sparkles size={14} style={{ color: "hsl(207 90% 60%)" }} />
           <span className="text-sm font-medium" style={{ color: "hsl(220 14% 90%)" }}>
-            AI Chat
+            PiPilot AI
           </span>
         </div>
 
@@ -81,8 +115,8 @@ export function ChatPanel() {
             <button
               className="flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors"
               style={{
-                background: "hsl(220 13% 22%)",
-                color: "hsl(220 14% 75%)",
+                background: mode === "agent" ? "hsl(207 90% 36% / 0.3)" : "hsl(220 13% 22%)",
+                color: mode === "agent" ? "hsl(207 90% 75%)" : "hsl(220 14% 75%)",
               }}
               onClick={() => setShowModeMenu((p) => !p)}
               data-testid="chat-mode-toggle"
@@ -98,7 +132,7 @@ export function ChatPanel() {
                 style={{
                   background: "hsl(220 13% 18%)",
                   borderColor: "hsl(220 13% 28%)",
-                  minWidth: "160px",
+                  minWidth: "180px",
                 }}
               >
                 {(["chat", "agent"] as ChatMode[]).map((m) => (
@@ -152,7 +186,7 @@ export function ChatPanel() {
           }}
         >
           <Zap size={10} />
-          <span>Agent mode — multi-step autonomous execution enabled</span>
+          <span>Agent mode — can read, create, edit & search files</span>
         </div>
       )}
 
@@ -164,25 +198,25 @@ export function ChatPanel() {
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-3 py-8">
             <div
-              className="w-10 h-10 rounded-full flex items-center justify-center"
+              className="w-12 h-12 rounded-xl flex items-center justify-center"
               style={{ background: "hsl(207 90% 36% / 0.2)" }}
             >
-              <Sparkles size={18} style={{ color: "hsl(207 90% 60%)" }} />
+              <Sparkles size={22} style={{ color: "hsl(207 90% 60%)" }} />
             </div>
             <div>
               <p className="text-sm font-medium" style={{ color: "hsl(220 14% 75%)" }}>
-                AI Assistant
+                PiPilot AI
               </p>
               <p className="text-xs mt-1" style={{ color: "hsl(220 14% 50%)" }}>
-                Ask anything about your code
+                Your AI coding assistant with file access
               </p>
             </div>
-            <div className="flex flex-col gap-1.5 mt-2 w-full max-w-[200px]">
+            <div className="flex flex-col gap-1.5 mt-2 w-full max-w-[220px]">
               {[
-                "Explain this code",
-                "Fix the bug",
-                "Write tests",
-                "Refactor for clarity",
+                "Show me the project structure",
+                "Build a landing page",
+                "Add a contact form",
+                "Create a dark mode toggle",
               ].map((prompt) => (
                 <button
                   key={prompt}
@@ -206,7 +240,12 @@ export function ChatPanel() {
         )}
 
         {messages.map((msg) => (
-          <ChatMessageItem key={msg.id} message={msg} />
+          <ChatMessageItem
+            key={msg.id}
+            message={msg}
+            onDelete={handleDeleteMessage}
+            onRevert={handleRevertToMessage}
+          />
         ))}
         <div ref={bottomRef} />
       </div>
@@ -220,7 +259,8 @@ export function ChatPanel() {
           className="rounded-lg border overflow-hidden"
           style={{
             background: "hsl(220 13% 20%)",
-            borderColor: "hsl(220 13% 28%)",
+            borderColor: isStreaming ? "hsl(207 90% 45%)" : "hsl(220 13% 28%)",
+            transition: "border-color 0.2s",
           }}
         >
           <textarea
@@ -233,8 +273,8 @@ export function ChatPanel() {
             }}
             placeholder={
               mode === "agent"
-                ? "Ask AI Agent to do something…"
-                : "Ask AI anything…"
+                ? "Ask AI to read, edit, or create files..."
+                : "Ask AI anything..."
             }
             value={input}
             onChange={handleInputChange}
@@ -243,16 +283,25 @@ export function ChatPanel() {
             data-testid="chat-input"
           />
           <div className="flex items-center justify-between px-2 pb-2">
-            <span className="text-xs" style={{ color: "hsl(220 14% 45%)" }}>
-              {isStreaming ? (
-                <span className="flex items-center gap-1">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-                  Generating…
-                </span>
-              ) : (
-                "Enter to send, Shift+Enter for newline"
-              )}
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                className="rounded p-1 transition-colors hover:bg-accent"
+                style={{ color: "hsl(220 14% 45%)" }}
+                title="Attach file context"
+              >
+                <Paperclip size={13} />
+              </button>
+              <span className="text-xs" style={{ color: "hsl(220 14% 45%)" }}>
+                {isStreaming ? (
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                    Working...
+                  </span>
+                ) : (
+                  "Enter to send"
+                )}
+              </span>
+            </div>
             <div className="flex items-center gap-1">
               {isStreaming ? (
                 <button
@@ -266,9 +315,9 @@ export function ChatPanel() {
                 </button>
               ) : (
                 <button
-                  className="rounded px-2 py-1 text-xs flex items-center gap-1 transition-colors disabled:opacity-40"
+                  className="rounded px-2.5 py-1 text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40"
                   style={{
-                    background: "hsl(207 90% 38%)",
+                    background: input.trim() ? "hsl(207 90% 38%)" : "hsl(220 13% 26%)",
                     color: "white",
                   }}
                   onClick={handleSend}

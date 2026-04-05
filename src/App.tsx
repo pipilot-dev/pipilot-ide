@@ -1,11 +1,11 @@
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { IDELayout } from "@/components/ide/IDELayout";
+import { ProjectProvider } from "@/contexts/ProjectContext";
 
 function App() {
   return (
-    <TooltipProvider delayDuration={400}>
+    <ProjectProvider>
       <IDELayout />
-    </TooltipProvider>
+    </ProjectProvider>
   );
 }
 
