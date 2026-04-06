@@ -2722,7 +2722,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 const textParts = m.content
                   .filter((c: any) => c.type === "text")
                   .map((c: any) => c.text);
-                return { ...m, content: textParts.join("\n") + "\n[Note: Screenshot image was captured but could not be sent to a vision model. All vision models are rate-limited. The text analysis of the UI is included above instead.]" };
+                return { ...m, content: textParts.join("\n") + "\n[Note: An image was attached but could not be processed — all vision models are currently rate-limited. Please analyze based on the text content provided.]" };
               }
               return m;
             });

@@ -35,6 +35,31 @@ function generateId() {
   return Math.random().toString(36).substring(2, 9);
 }
 
+/**
+ * Resize a base64 image data URL to fit within maxWidth.
+ * Reduces payload size to avoid API rate limits and timeouts.
+ */
+async function resizeImageDataUrl(dataUrl: string, maxWidth: number): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      // If already small enough, return as-is
+      if (img.width <= maxWidth) { resolve(dataUrl); return; }
+
+      const scale = maxWidth / img.width;
+      const canvas = document.createElement("canvas");
+      canvas.width = maxWidth;
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      // Use JPEG for photos (much smaller than PNG)
+      resolve(canvas.toDataURL("image/jpeg", 0.7));
+    };
+    img.onerror = () => resolve(dataUrl); // fallback to original on error
+    img.src = dataUrl;
+  });
+}
+
 // Known file tools that we execute client-side
 const LOCAL_TOOL_NAMES = new Set([
   "read_file", "list_files", "edit_file", "create_file",
@@ -707,9 +732,11 @@ export function useChat(
               { type: "text", text: lastMsg.content as string },
             ];
             for (const dataUrl of imageDataUrls) {
+              // Resize large images to reduce payload — max ~800px wide
+              const resized = await resizeImageDataUrl(dataUrl, 800);
               contentArray.push({
                 type: "image_url",
-                image_url: { url: dataUrl, detail: "high" },
+                image_url: { url: resized, detail: "low" },
               });
             }
             lastMsg.content = contentArray;
@@ -806,7 +833,7 @@ export function useChat(
               const textParts = (m.content as Record<string, unknown>[])
                 .filter((c) => c.type === "text")
                 .map((c) => c.text as string);
-              return { ...m, content: textParts.join("\n") + "\n[Note: An image was attached but the model doesn't support vision. Describe what you need verbally.]" };
+              return { ...m, content: textParts.join("\n") + "\n[Note: An image was attached but could not be processed by the AI — vision models are currently unavailable. Please describe what the image shows or what you need help with.]" };
             }
             return m;
           });
