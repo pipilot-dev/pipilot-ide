@@ -35,31 +35,6 @@ function generateId() {
   return Math.random().toString(36).substring(2, 9);
 }
 
-/**
- * Resize a base64 image data URL to fit within maxWidth.
- * Reduces payload size to avoid API rate limits and timeouts.
- */
-async function resizeImageDataUrl(dataUrl: string, maxWidth: number): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      // If already small enough, return as-is
-      if (img.width <= maxWidth) { resolve(dataUrl); return; }
-
-      const scale = maxWidth / img.width;
-      const canvas = document.createElement("canvas");
-      canvas.width = maxWidth;
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      // Use JPEG for photos (much smaller than PNG)
-      resolve(canvas.toDataURL("image/jpeg", 0.7));
-    };
-    img.onerror = () => resolve(dataUrl); // fallback to original on error
-    img.src = dataUrl;
-  });
-}
-
 // Known file tools that we execute client-side
 const LOCAL_TOOL_NAMES = new Set([
   "read_file", "list_files", "edit_file", "create_file",
@@ -687,7 +662,7 @@ export function useChat(
   }, [messages, projectId]);
 
   const sendMessage = useCallback(
-    async (userContent: string, imageDataUrls?: string[]) => {
+    async (userContent: string) => {
       if (!userContent.trim() || isStreaming) return;
 
       const userMsg: ChatMessage = {
@@ -723,25 +698,6 @@ export function useChat(
             if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
             return msg;
           });
-
-        // If images were attached, convert the last user message to vision format
-        if (imageDataUrls && imageDataUrls.length > 0) {
-          const lastMsg = conversationMessages[conversationMessages.length - 1];
-          if (lastMsg && lastMsg.role === "user") {
-            const contentArray: Record<string, unknown>[] = [
-              { type: "text", text: lastMsg.content as string },
-            ];
-            for (const dataUrl of imageDataUrls) {
-              // Resize large images to reduce payload — max ~800px wide
-              const resized = await resizeImageDataUrl(dataUrl, 800);
-              contentArray.push({
-                type: "image_url",
-                image_url: { url: resized, detail: "low" },
-              });
-            }
-            lastMsg.content = contentArray;
-          }
-        }
 
         const apiMessages: Record<string, unknown>[] = [
           { role: "system", content: buildSystemPrompt(contextRef.current) },
@@ -819,33 +775,6 @@ export function useChat(
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-
-      // If API fails and we have image content, retry without images
-      if (!response.ok) {
-        const hasImages = apiMessages.some((m: Record<string, unknown>) =>
-          Array.isArray(m.content) && (m.content as unknown[]).some((c: unknown) => (c as Record<string, unknown>).type === "image_url")
-        );
-        if (hasImages) {
-          console.warn("API failed with image content, retrying without images...");
-          // Strip image content from messages — keep only text
-          const cleanedMessages = apiMessages.map((m: Record<string, unknown>) => {
-            if (Array.isArray(m.content)) {
-              const textParts = (m.content as Record<string, unknown>[])
-                .filter((c) => c.type === "text")
-                .map((c) => c.text as string);
-              return { ...m, content: textParts.join("\n") + "\n[Note: An image was attached but could not be processed by the AI — vision models are currently unavailable. Please describe what the image shows or what you need help with.]" };
-            }
-            return m;
-          });
-          const retryBody = { ...body, messages: cleanedMessages };
-          response = await fetch(API_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(retryBody),
-            signal: controller.signal,
-          });
-        }
-      }
 
       if (!response.ok) {
         throw new Error(`API error: ${response.status} ${response.statusText}`);
@@ -1053,7 +982,7 @@ export function useChat(
           if (tc.name === "screenshot_preview" && toolResult.startsWith("data:image/")) {
             // Split: first line is the data URL, rest is the layout analysis
             const splitIdx = toolResult.indexOf("\n\n");
-            const imageDataUrl = splitIdx > 0 ? toolResult.slice(0, splitIdx) : toolResult;
+            const screenshotDataUrl = splitIdx > 0 ? toolResult.slice(0, splitIdx) : toolResult;
             const layoutReport = splitIdx > 0 ? toolResult.slice(splitIdx + 2) : "Screenshot captured.";
 
             // Send the TEXT layout analysis as the tool result (always works, no vision needed!)
@@ -1073,7 +1002,7 @@ export function useChat(
                 {
                   type: "image_url",
                   image_url: {
-                    url: imageDataUrl,
+                    url: screenshotDataUrl,
                     detail: "low",
                   },
                 },
