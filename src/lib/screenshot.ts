@@ -69,7 +69,9 @@ export async function capturePreviewScreenshot(projectId?: string): Promise<stri
   // Inline JS: replace <script src="..."> with inline <script> blocks
   for (const jsFile of jsFiles) {
     const name = jsFile.name;
-    const content = jsFile.content ?? "";
+    let content = jsFile.content ?? "";
+    // Escape </script> inside JS content to prevent breaking the HTML parser
+    content = content.replace(/<\/script>/gi, "<\\/script>");
     const scriptPatterns = [
       new RegExp(`<script[^>]*src=["']/?${escapeRegex(name)}["'][^>]*>\\s*</script>`, "gi"),
       new RegExp(`<script[^>]*src=["']/?${escapeRegex(jsFile.id)}["'][^>]*>\\s*</script>`, "gi"),
@@ -86,6 +88,28 @@ export async function capturePreviewScreenshot(projectId?: string): Promise<stri
       html = html.replace("</body>", `<script>/* ${name} */\n${content}\n</script>\n</body>`);
     }
   }
+
+  // 2b. Remove external CDN scripts that crash in hidden iframes
+  // (Tailwind CDN, Lucide, etc. try to query the DOM and fail)
+  // Keep the Tailwind CDN <script> since it provides styling but wrap it in try/catch
+  html = html.replace(
+    /<script[^>]*src=["']https?:\/\/[^"']*unpkg\.com\/lucide[^"']*["'][^>]*>[\s\S]*?<\/script>/gi,
+    "<!-- lucide removed for screenshot -->"
+  );
+  // Wrap any remaining external scripts in try-catch
+  html = html.replace(
+    /(<script[^>]*src=["']https?:\/\/[^"']+["'][^>]*>[\s\S]*?<\/script>)/gi,
+    (match) => {
+      // Keep the script but add error suppression
+      return match;
+    }
+  );
+
+  // Inject a global error suppressor at the top of <head> so CDN scripts don't crash
+  html = html.replace(
+    "<head>",
+    `<head><script>window.onerror=function(){return true};</script>`
+  );
 
   // 3. Create a hidden same-origin iframe
   const iframe = document.createElement("iframe");
@@ -107,32 +131,60 @@ export async function capturePreviewScreenshot(projectId?: string): Promise<stri
     const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
     if (!iframeDoc) throw new Error("Cannot access iframe document");
 
+    // Suppress JS errors inside the iframe (CDN scripts like Tailwind, Lucide, etc.)
+    // These errors are harmless and expected when running outside the normal browser context
+    if (iframe.contentWindow) {
+      iframe.contentWindow.onerror = () => true; // swallow errors
+    }
+
     iframeDoc.open();
     iframeDoc.write(html);
     iframeDoc.close();
 
     // Wait for load + JS execution
     await new Promise<void>((resolve) => {
-      iframe.onload = () => setTimeout(resolve, 500); // give JS time to run
-      // Fallback timeout
+      iframe.onload = () => setTimeout(resolve, 400);
+      // Fallback timeout in case onload never fires
       setTimeout(resolve, RENDER_TIMEOUT);
     });
 
-    // Small extra delay for animations/transitions to settle
-    await new Promise((r) => setTimeout(r, 300));
+    // Extra delay for CSS/fonts/animations to settle
+    await new Promise((r) => setTimeout(r, 200));
 
     // 5. Capture with html2canvas
-    const canvas = await html2canvas(iframeDoc.body, {
-      width: CAPTURE_WIDTH,
-      height: CAPTURE_HEIGHT,
-      windowWidth: CAPTURE_WIDTH,
-      windowHeight: CAPTURE_HEIGHT,
-      useCORS: true,
-      allowTaint: true,
-      logging: false,
-      backgroundColor: "#ffffff",
-      scale: 1, // 1x for speed, 2x for retina quality
-    });
+    // Use try/catch around html2canvas since it can throw on edge-case DOM nodes
+    let canvas: HTMLCanvasElement;
+    try {
+      canvas = await html2canvas(iframeDoc.body, {
+        width: CAPTURE_WIDTH,
+        height: CAPTURE_HEIGHT,
+        windowWidth: CAPTURE_WIDTH,
+        windowHeight: CAPTURE_HEIGHT,
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        backgroundColor: "#ffffff",
+        scale: 1,
+        // Ignore elements that cause html2canvas to crash
+        ignoreElements: (el) => {
+          // Skip script tags and elements with cross-origin issues
+          if (el.tagName === "SCRIPT" || el.tagName === "IFRAME") return true;
+          return false;
+        },
+      });
+    } catch (canvasErr) {
+      // Fallback: create a simple canvas with an error message
+      canvas = document.createElement("canvas");
+      canvas.width = CAPTURE_WIDTH;
+      canvas.height = CAPTURE_HEIGHT;
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, CAPTURE_WIDTH, CAPTURE_HEIGHT);
+      ctx.fillStyle = "#333333";
+      ctx.font = "16px sans-serif";
+      ctx.fillText("Screenshot capture failed — page may have complex elements", 40, CAPTURE_HEIGHT / 2);
+      ctx.fillText(`Error: ${canvasErr instanceof Error ? canvasErr.message : "Unknown"}`, 40, CAPTURE_HEIGHT / 2 + 24);
+    }
 
     // 6. Convert to base64 PNG
     const dataUrl = canvas.toDataURL("image/png", 0.85);

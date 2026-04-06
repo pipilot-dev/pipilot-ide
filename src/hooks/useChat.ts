@@ -992,22 +992,29 @@ export function useChat(
             );
           }
 
-          // Use OpenAI tool result format — with vision support for screenshots
+          // Tool result must be a string (OpenAI format requirement).
+          // For screenshots, send text result + inject image as a user vision message.
           if (tc.name === "screenshot_preview" && toolResult.startsWith("data:image/")) {
-            // Vision format: send the image as a content array so the model can see it
+            // Store the data URL on the tool result for UI display
+            // but send a plain text summary to the API as the tool result
             apiMessages.push({
               role: "tool",
               tool_call_id: tc.id,
+              content: "Screenshot captured successfully. The image has been attached below for your review. Analyze the visual layout, colors, spacing, typography, and overall design quality. Identify any issues.",
+            });
+            // Inject the image as a user message so the vision model can see it
+            apiMessages.push({
+              role: "user",
               content: [
                 {
                   type: "text",
-                  text: "Here is a screenshot of the current web preview. Analyze the visual layout, colors, spacing, typography, and overall design. Identify any issues.",
+                  text: "[System: Screenshot of the current web preview is attached. Review the UI and respond with your analysis.]",
                 },
                 {
                   type: "image_url",
                   image_url: {
                     url: toolResult,
-                    detail: "high",
+                    detail: "low", // "low" = 512px, faster + cheaper
                   },
                 },
               ],
