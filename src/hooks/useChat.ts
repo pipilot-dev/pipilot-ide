@@ -46,17 +46,17 @@ export type ToolExecutor = (name: string, args: Record<string, unknown>) => Prom
 
 // OpenAI-format tool definitions sent to the server so it can forward them to task_agent/Kilo
 const FILE_TOOLS = [
-  { type: "function", function: { name: "read_file", description: "Read file contents (max 150 lines). Use startLine/endLine for ranges.", parameters: { type: "object", properties: { path: { type: "string" }, startLine: { type: "number" }, endLine: { type: "number" } }, required: ["path"] } } },
-  { type: "function", function: { name: "list_files", description: "List files and directories at a path.", parameters: { type: "object", properties: { path: { type: "string" }, offset: { type: "number" } }, required: ["path"] } } },
-  { type: "function", function: { name: "create_file", description: "Create a new file with content. Parent dirs auto-created.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path"] } } },
-  { type: "function", function: { name: "edit_file", description: "Edit a file. Use search/replace for partial edits or newContent for full rewrite.", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" }, newContent: { type: "string" } }, required: ["path"] } } },
-  { type: "function", function: { name: "delete_file", description: "Delete a file or directory.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
-  { type: "function", function: { name: "search_files", description: "Search files by name or content.", parameters: { type: "object", properties: { query: { type: "string" }, path: { type: "string" }, searchContents: { type: "boolean" } }, required: ["query"] } } },
+  { type: "function", function: { name: "read_file", description: "Read file contents (up to 500 lines). IMPORTANT: path must be relative with NO leading slash. Use 'app.js' NOT '/app.js'. Use startLine/endLine for ranges.", parameters: { type: "object", properties: { path: { type: "string", description: "Relative file path, e.g. 'app.js' or 'src/utils.js'. NO leading slash." }, startLine: { type: "number" }, endLine: { type: "number" } }, required: ["path"] } } },
+  { type: "function", function: { name: "list_files", description: "List files and directories. IMPORTANT: path must be relative. Use '' for root, 'src' for src folder. NO leading slash.", parameters: { type: "object", properties: { path: { type: "string", description: "Relative directory path. Use '' for root. NO leading slash." }, offset: { type: "number" } }, required: ["path"] } } },
+  { type: "function", function: { name: "create_file", description: "Create a new file with content. Parent dirs auto-created. Path must be relative: 'app.js' NOT '/app.js'.", parameters: { type: "object", properties: { path: { type: "string", description: "Relative file path. NO leading slash." }, content: { type: "string" } }, required: ["path"] } } },
+  { type: "function", function: { name: "edit_file", description: "Edit a file. Use search/replace for partial edits or newContent for full rewrite. Path must be relative.", parameters: { type: "object", properties: { path: { type: "string", description: "Relative file path. NO leading slash." }, search: { type: "string" }, replace: { type: "string" }, newContent: { type: "string" } }, required: ["path"] } } },
+  { type: "function", function: { name: "delete_file", description: "Delete a file or directory. Path must be relative.", parameters: { type: "object", properties: { path: { type: "string", description: "Relative file path. NO leading slash." } }, required: ["path"] } } },
+  { type: "function", function: { name: "search_files", description: "Search files by name or content.", parameters: { type: "object", properties: { query: { type: "string" }, path: { type: "string", description: "Optional relative directory to search in. NO leading slash." }, searchContents: { type: "boolean" } }, required: ["query"] } } },
   { type: "function", function: { name: "deploy_site", description: "Deploy the current project to a live URL. Call this after building the site to make it publicly accessible.", parameters: { type: "object", properties: {}, required: [] } } },
-  { type: "function", function: { name: "rename_file", description: "Rename or move a file/folder to a new path.", parameters: { type: "object", properties: { oldPath: { type: "string" }, newPath: { type: "string" } }, required: ["oldPath", "newPath"] } } },
-  { type: "function", function: { name: "copy_file", description: "Copy a file to a new location.", parameters: { type: "object", properties: { srcPath: { type: "string" }, destPath: { type: "string" } }, required: ["srcPath", "destPath"] } } },
-  { type: "function", function: { name: "batch_create_files", description: "Create multiple files at once. More efficient than multiple create_file calls.", parameters: { type: "object", properties: { files: { type: "array", items: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } }, required: ["files"] } } },
-  { type: "function", function: { name: "get_project_tree", description: "Get a visual tree view of the entire project structure with line counts. Use this to understand the project layout.", parameters: { type: "object", properties: { path: { type: "string", description: "Optional base path to show tree from" } }, required: [] } } },
+  { type: "function", function: { name: "rename_file", description: "Rename or move a file/folder to a new path. Paths must be relative.", parameters: { type: "object", properties: { oldPath: { type: "string", description: "Current relative path. NO leading slash." }, newPath: { type: "string", description: "New relative path. NO leading slash." } }, required: ["oldPath", "newPath"] } } },
+  { type: "function", function: { name: "copy_file", description: "Copy a file to a new location. Paths must be relative.", parameters: { type: "object", properties: { srcPath: { type: "string", description: "Source relative path. NO leading slash." }, destPath: { type: "string", description: "Destination relative path. NO leading slash." } }, required: ["srcPath", "destPath"] } } },
+  { type: "function", function: { name: "batch_create_files", description: "Create multiple files at once. More efficient than multiple create_file calls. All paths must be relative.", parameters: { type: "object", properties: { files: { type: "array", items: { type: "object", properties: { path: { type: "string", description: "Relative file path. NO leading slash." }, content: { type: "string" } }, required: ["path", "content"] } } }, required: ["files"] } } },
+  { type: "function", function: { name: "get_project_tree", description: "Get a visual tree view of the entire project structure with line counts.", parameters: { type: "object", properties: { path: { type: "string", description: "Optional relative base path. NO leading slash." } }, required: [] } } },
 ];
 
 export interface WorkspaceContext {
@@ -182,6 +182,18 @@ NEVER build a single-page static site. ALWAYS build multi-page apps with routing
 ## FILE TOOLS
 
 You have powerful file management tools via native function calling. The user sees files update live in the editor and preview.
+
+### ⚠️ PATH FORMAT (CRITICAL — READ THIS):
+- All file paths are **relative** with **NO leading slash**.
+- Correct: \`"path": "app.js"\`, \`"path": "src/utils.js"\`, \`"path": "styles.css"\`
+- **WRONG**: \`"path": "/app.js"\`, \`"path": "/workspace/app.js"\`, \`"path": "./app.js"\`
+- There is NO \`/workspace/\` prefix. There is NO root \`/\`. Just the bare filename or relative path.
+- For list_files, use \`"path": ""\` or \`"path": "src"\` — never \`"/"\` or \`"/workspace"\`.
+- Folders: \`"path": "src"\` NOT \`"path": "/src"\` or \`"path": "src/"\`.
+- Examples:
+  - Read a file: \`{ "path": "index.html" }\` ✅  NOT \`{ "path": "/index.html" }\` ❌
+  - List root: \`{ "path": "" }\` ✅  NOT \`{ "path": "/" }\` ❌
+  - Read nested: \`{ "path": "src/components/App.tsx" }\` ✅  NOT \`{ "path": "/src/components/App.tsx" }\` ❌
 
 ### Core Tools:
 - **create_file** — Create a new file with full content. Parent dirs auto-created.

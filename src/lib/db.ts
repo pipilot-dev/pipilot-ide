@@ -194,6 +194,23 @@ const MAX_READ_LINES = 500;
 const MAX_LIST_ITEMS = 200;
 const MAX_SEARCH_RESULTS = 50;
 
+/**
+ * Sanitize paths from the AI — strips leading slashes, /workspace/ prefix,
+ * ./ prefix, trailing slashes, and normalizes backslashes.
+ */
+function sanitizePath(p: string): string {
+  let cleaned = p
+    .replace(/\\/g, "/")                    // backslashes → forward slashes
+    .replace(/^\/workspace\//, "")           // remove /workspace/ prefix
+    .replace(/^workspace\//, "")             // remove workspace/ prefix
+    .replace(/^\.\//, "")                    // remove ./ prefix
+    .replace(/^\/+/, "")                     // remove leading slashes
+    .replace(/\/+$/, "");                    // remove trailing slashes
+  // Collapse double slashes
+  cleaned = cleaned.replace(/\/\/+/g, "/");
+  return cleaned;
+}
+
 // File operations on IndexedDB
 export const fileOps = {
   /**
@@ -202,11 +219,12 @@ export const fileOps = {
    * returns the first 150 lines + a warning telling the AI to use ranges.
    */
   async readFile(
-    path: string,
+    rawPath: string,
     startLine?: number,
     endLine?: number,
     projectId?: string
   ): Promise<string> {
+    const path = sanitizePath(rawPath);
     const file = await db.files.get(path);
     if (!file) throw new Error(`File not found: ${path}`);
     if (file.type === "folder") throw new Error(`Cannot read directory: ${path}`);
@@ -251,7 +269,8 @@ export const fileOps = {
    * List files — limited to MAX_LIST_ITEMS entries per call.
    * Returns name, type, and child count for folders.
    */
-  async listFiles(path: string, offset?: number, projectId?: string): Promise<{ items: DBFile[]; total: number; hasMore: boolean }> {
+  async listFiles(rawPath: string, offset?: number, projectId?: string): Promise<{ items: DBFile[]; total: number; hasMore: boolean }> {
+    const path = sanitizePath(rawPath);
     const parentPath = (!path || path === "/" || path === ".") ? "" : path;
     let query = db.files.where("parentPath").equals(parentPath);
     let allItems = await query.toArray();
@@ -267,7 +286,8 @@ export const fileOps = {
   /**
    * Edit file — returns only status message, never file content.
    */
-  async editFile(path: string, search?: string, replace?: string, newContent?: string, projectId?: string): Promise<string> {
+  async editFile(rawPath: string, search?: string, replace?: string, newContent?: string, projectId?: string): Promise<string> {
+    const path = sanitizePath(rawPath);
     const file = await db.files.get(path);
     if (!file) throw new Error(`File not found: ${path}`);
     if (file.type === "folder") throw new Error(`Cannot edit directory: ${path}`);
@@ -303,7 +323,8 @@ export const fileOps = {
   /**
    * Create file — returns only status message, never file content.
    */
-  async createFile(path: string, content: string = "", projectId?: string): Promise<string> {
+  async createFile(rawPath: string, content: string = "", projectId?: string): Promise<string> {
+    const path = sanitizePath(rawPath);
     const existing = await db.files.get(path);
     if (existing) {
       // Guard: don't overwrite files from other projects
@@ -356,7 +377,8 @@ export const fileOps = {
     return `✓ File created: ${path} (${lineCount} lines, ${content.length} chars)`;
   },
 
-  async deleteFile(path: string, projectId?: string): Promise<string> {
+  async deleteFile(rawPath: string, projectId?: string): Promise<string> {
+    const path = sanitizePath(rawPath);
     const file = await db.files.get(path);
     if (!file) throw new Error(`File not found: ${path}`);
     if (projectId && file.projectId && file.projectId !== projectId) {
@@ -378,7 +400,8 @@ export const fileOps = {
    * Search files — limited to MAX_SEARCH_RESULTS results.
    * Content matches show line numbers.
    */
-  async searchFiles(query: string, searchPath?: string, searchContents?: boolean, projectId?: string): Promise<string> {
+  async searchFiles(query: string, rawSearchPath?: string, searchContents?: boolean, projectId?: string): Promise<string> {
+    const searchPath = rawSearchPath ? sanitizePath(rawSearchPath) : undefined;
     let allFiles = await db.files.where("type").equals("file").toArray();
 
     if (projectId) {
@@ -428,7 +451,9 @@ export const fileOps = {
   /**
    * Rename/move a file or folder to a new path.
    */
-  async renameFile(oldPath: string, newPath: string, projectId?: string): Promise<string> {
+  async renameFile(rawOldPath: string, rawNewPath: string, projectId?: string): Promise<string> {
+    const oldPath = sanitizePath(rawOldPath);
+    const newPath = sanitizePath(rawNewPath);
     const file = await db.files.get(oldPath);
     if (!file) throw new Error(`File not found: ${oldPath}`);
     if (projectId && file.projectId && file.projectId !== projectId) {
@@ -475,7 +500,9 @@ export const fileOps = {
   /**
    * Copy a file to a new path.
    */
-  async copyFile(srcPath: string, destPath: string, projectId?: string): Promise<string> {
+  async copyFile(rawSrcPath: string, rawDestPath: string, projectId?: string): Promise<string> {
+    const srcPath = sanitizePath(rawSrcPath);
+    const destPath = sanitizePath(rawDestPath);
     const file = await db.files.get(srcPath);
     if (!file) throw new Error(`File not found: ${srcPath}`);
     if (file.type === "folder") throw new Error(`Cannot copy directory (yet): ${srcPath}`);
@@ -487,6 +514,8 @@ export const fileOps = {
    * Batch create multiple files in one call. Returns summary.
    */
   async batchCreateFiles(files: { path: string; content: string }[], projectId?: string): Promise<string> {
+    // Sanitize all paths
+    files = files.map((f) => ({ ...f, path: sanitizePath(f.path) }));
     const results: string[] = [];
     for (const f of files) {
       try {
@@ -502,7 +531,8 @@ export const fileOps = {
   /**
    * Get a tree view of the entire project structure.
    */
-  async getProjectTree(basePath?: string, projectId?: string): Promise<string> {
+  async getProjectTree(rawBasePath?: string, projectId?: string): Promise<string> {
+    const basePath = rawBasePath ? sanitizePath(rawBasePath) : undefined;
     let allFiles = await db.files.toArray();
     if (projectId) {
       allFiles = allFiles.filter((f) => f.projectId === projectId);
@@ -540,7 +570,8 @@ export const fileOps = {
     return lines.join("\n");
   },
 
-  async getFileInfo(path: string, projectId?: string): Promise<string> {
+  async getFileInfo(rawPath: string, projectId?: string): Promise<string> {
+    const path = sanitizePath(rawPath);
     const file = await db.files.get(path);
     if (!file) throw new Error(`File not found: ${path}`);
     if (projectId && file.projectId && file.projectId !== projectId) {
