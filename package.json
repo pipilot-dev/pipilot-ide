@@ -80,6 +80,7 @@
     "dexie-react-hooks": "^4.4.0",
     "file-saver": "^2.0.5",
     "highlight.js": "^11.11.1",
+    "html2canvas": "^1.4.1",
     "isomorphic-git": "^1.37.4",
     "jszip": "^3.10.1",
     "monaco-editor": "^0.55.1",

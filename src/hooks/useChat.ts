@@ -40,6 +40,7 @@ const LOCAL_TOOL_NAMES = new Set([
   "read_file", "list_files", "edit_file", "create_file",
   "delete_file", "search_files", "get_file_info", "deploy_site",
   "rename_file", "copy_file", "batch_create_files", "get_project_tree",
+  "screenshot_preview",
 ]);
 
 export type ToolExecutor = (name: string, args: Record<string, unknown>) => Promise<string>;
@@ -57,6 +58,7 @@ const FILE_TOOLS = [
   { type: "function", function: { name: "copy_file", description: "Copy a file to a new location. Paths must be relative.", parameters: { type: "object", properties: { srcPath: { type: "string", description: "Source relative path. NO leading slash." }, destPath: { type: "string", description: "Destination relative path. NO leading slash." } }, required: ["srcPath", "destPath"] } } },
   { type: "function", function: { name: "batch_create_files", description: "Create multiple files at once. More efficient than multiple create_file calls. All paths must be relative.", parameters: { type: "object", properties: { files: { type: "array", items: { type: "object", properties: { path: { type: "string", description: "Relative file path. NO leading slash." }, content: { type: "string" } }, required: ["path", "content"] } } }, required: ["files"] } } },
   { type: "function", function: { name: "get_project_tree", description: "Get a visual tree view of the entire project structure with line counts.", parameters: { type: "object", properties: { path: { type: "string", description: "Optional relative base path. NO leading slash." } }, required: [] } } },
+  { type: "function", function: { name: "screenshot_preview", description: "Take a screenshot of the current web preview to see how the UI actually looks. Returns a visual image of the rendered page. Use this AFTER creating/editing files to verify the visual result and spot UI issues. Call with no arguments.", parameters: { type: "object", properties: {}, required: [] } } },
 ];
 
 export interface WorkspaceContext {
@@ -210,11 +212,22 @@ You have powerful file management tools via native function calling. The user se
 - **get_project_tree** — Visual tree view of entire project with line counts. Use at start of complex tasks to understand the codebase.
 - **deploy_site** — Deploy the project to a live public URL. Call this after finishing the site. Returns the live URL.
 
+### Vision Tool:
+- **screenshot_preview** — Takes a screenshot of the current web preview and returns a visual image. You can SEE the actual rendered UI. Use this to:
+  - Verify your work looks correct after creating/editing files
+  - Spot visual bugs (misalignment, wrong colors, broken layouts, overflow issues)
+  - Check responsive design and spacing
+  - Compare the result against the user's request
+  - Call with no arguments: just invoke screenshot_preview
+  - **IMPORTANT**: Call this AFTER you finish creating/editing files, not before. The preview needs the files to exist first.
+  - When you receive the screenshot, describe what you see and identify any issues.
+
 ### Efficiency Tips:
 - Use **batch_create_files** when creating 2+ files — it's much faster.
 - Use **get_project_tree** before making major changes to understand what exists.
 - Use **search_files** with searchContents:true to find specific code patterns.
 - Always **read_file** before editing — never guess at content.
+- Use **screenshot_preview** after building UI to verify it looks right — you have eyes!
 
 ## DEPLOYMENT
 
@@ -346,7 +359,9 @@ document.querySelectorAll('.animate-on-scroll').forEach(el => observer.observe(e
 
 9. **Error resilience.** Add try/catch blocks around data operations, graceful fallbacks for missing images, and user-friendly error messages.
 
-10. **Accessibility.** Use semantic HTML (nav, main, section, article, footer), ARIA labels, proper heading hierarchy, alt text on images, and keyboard-navigable interfaces.`;
+10. **Accessibility.** Use semantic HTML (nav, main, section, article, footer), ARIA labels, proper heading hierarchy, alt text on images, and keyboard-navigable interfaces.
+
+11. **Visual verification.** After building or significantly editing a UI, call **screenshot_preview** to see the actual rendered result. If something looks wrong, fix it immediately. Don't just assume your code is correct — verify visually.`;
 }
 
 // ─── Tag-Based Tool Call Parser ──────────────────────────────────────────────
@@ -647,7 +662,7 @@ export function useChat(
   }, [messages, projectId]);
 
   const sendMessage = useCallback(
-    async (userContent: string) => {
+    async (userContent: string, imageDataUrls?: string[]) => {
       if (!userContent.trim() || isStreaming) return;
 
       const userMsg: ChatMessage = {
@@ -683,6 +698,23 @@ export function useChat(
             if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
             return msg;
           });
+
+        // If images were attached, convert the last user message to vision format
+        if (imageDataUrls && imageDataUrls.length > 0) {
+          const lastMsg = conversationMessages[conversationMessages.length - 1];
+          if (lastMsg && lastMsg.role === "user") {
+            const contentArray: Record<string, unknown>[] = [
+              { type: "text", text: lastMsg.content as string },
+            ];
+            for (const dataUrl of imageDataUrls) {
+              contentArray.push({
+                type: "image_url",
+                image_url: { url: dataUrl, detail: "high" },
+              });
+            }
+            lastMsg.content = contentArray;
+          }
+        }
 
         const apiMessages: Record<string, unknown>[] = [
           { role: "system", content: buildSystemPrompt(contextRef.current) },
@@ -960,12 +992,33 @@ export function useChat(
             );
           }
 
-          // Always use proper OpenAI tool result format
-          apiMessages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            content: toolResult,
-          });
+          // Use OpenAI tool result format — with vision support for screenshots
+          if (tc.name === "screenshot_preview" && toolResult.startsWith("data:image/")) {
+            // Vision format: send the image as a content array so the model can see it
+            apiMessages.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              content: [
+                {
+                  type: "text",
+                  text: "Here is a screenshot of the current web preview. Analyze the visual layout, colors, spacing, typography, and overall design. Identify any issues.",
+                },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: toolResult,
+                    detail: "high",
+                  },
+                },
+              ],
+            });
+          } else {
+            apiMessages.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              content: toolResult,
+            });
+          }
         }
 
         continue;

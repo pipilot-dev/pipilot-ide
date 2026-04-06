@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { db, DBFile, fileOps, seedDatabaseIfEmpty } from "@/lib/db";
+import { capturePreviewScreenshot } from "@/lib/screenshot";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { useLiveQuery } from "dexie-react-hooks";
 
@@ -156,6 +157,10 @@ export function useFileSystem() {
         }
         case "get_project_tree":
           result = await fileOps.getProjectTree(args.path as string | undefined, activeProjectId);
+          break;
+        case "screenshot_preview":
+          // Returns a base64 data URL — the chat hook handles vision format
+          result = await capturePreviewScreenshot(activeProjectId);
           break;
         default:
           throw new Error(`Unknown tool: ${name}`);

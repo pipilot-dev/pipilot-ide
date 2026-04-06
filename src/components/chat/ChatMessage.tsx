@@ -27,6 +27,7 @@ import {
   Files,
   Sparkles,
   Clock,
+  Camera,
 } from "lucide-react";
 
 interface ChatMessageProps {
@@ -50,6 +51,7 @@ function getToolIcon(name: string) {
     batch_create_files: <Files size={12} />,
     get_project_tree: <Network size={12} />,
     deploy_site: <Globe size={12} />,
+    screenshot_preview: <Camera size={12} />,
     web_search: <Globe size={12} />,
     web_extract: <Globe size={12} />,
     image_generation: <Image size={12} />,
@@ -71,6 +73,7 @@ function getToolLabel(name: string) {
     batch_create_files: "Batch Create",
     get_project_tree: "Project Tree",
     deploy_site: "Deploy Site",
+    screenshot_preview: "Screenshot Preview",
     web_search: "Web Search",
     web_extract: "Extract Page",
     image_generation: "Generate Image",
@@ -217,20 +220,38 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
               >
                 Result
               </span>
-              <pre
-                className="mt-1 p-2.5 rounded-lg overflow-x-auto max-h-52 overflow-y-auto"
-                style={{
-                  background: "hsl(220 13% 10%)",
-                  fontSize: "0.68rem",
-                  lineHeight: "1.6",
-                  border: "1px solid hsl(220 13% 17%)",
-                  color: isError ? "hsl(0 84% 65%)" : "hsl(220 14% 68%)",
-                }}
-              >
-                {toolCall.result.length > 3000
-                  ? toolCall.result.slice(0, 3000) + "\n... (truncated)"
-                  : toolCall.result}
-              </pre>
+              {/* Show screenshot as an image instead of base64 blob */}
+              {toolCall.result.startsWith("data:image/") ? (
+                <div className="mt-1 rounded-lg overflow-hidden" style={{ border: "1px solid hsl(220 13% 17%)" }}>
+                  <img
+                    src={toolCall.result}
+                    alt="Preview screenshot"
+                    className="w-full h-auto"
+                    style={{ maxHeight: 400, objectFit: "contain", background: "#fff" }}
+                  />
+                  <div
+                    className="px-2 py-1 text-center font-sans"
+                    style={{ background: "hsl(220 13% 10%)", color: "hsl(220 14% 45%)", fontSize: "0.6rem" }}
+                  >
+                    Screenshot captured — AI can see this image
+                  </div>
+                </div>
+              ) : (
+                <pre
+                  className="mt-1 p-2.5 rounded-lg overflow-x-auto max-h-52 overflow-y-auto"
+                  style={{
+                    background: "hsl(220 13% 10%)",
+                    fontSize: "0.68rem",
+                    lineHeight: "1.6",
+                    border: "1px solid hsl(220 13% 17%)",
+                    color: isError ? "hsl(0 84% 65%)" : "hsl(220 14% 68%)",
+                  }}
+                >
+                  {toolCall.result.length > 3000
+                    ? toolCall.result.slice(0, 3000) + "\n... (truncated)"
+                    : toolCall.result}
+                </pre>
+              )}
             </div>
           )}
         </div>

@@ -138,6 +138,14 @@ export const availableTools: Tool[] = [
     icon: 'Layout',
     category: 'dev',
   },
+  // ── Vision ──
+  {
+    id: 'screenshot_preview',
+    name: 'Screenshot Preview',
+    description: 'Capture a visual screenshot of the web preview to see the UI',
+    icon: 'Camera',
+    category: 'dev',
+  },
   // ── Deployment ──
   {
     id: 'deploy_site',

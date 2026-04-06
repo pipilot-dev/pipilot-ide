@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, useCallback, KeyboardEvent, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback, KeyboardEvent, useMemo, DragEvent, ClipboardEvent } from "react";
 import {
   Send,
   Square,
   Trash2,
+  ImagePlus,
   Bot,
   Zap,
   ChevronDown,
@@ -282,6 +283,63 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     setAttachments((prev) => prev.filter((a) => a.id !== fileId));
   }, []);
 
+  // ── Image attachment state ──
+  const [imageAttachments, setImageAttachments] = useState<{ id: string; dataUrl: string; name: string; sizeKB: number }[]>([]);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
+  const addImageFromFile = useCallback((file: File) => {
+    if (!file.type.startsWith("image/")) return;
+    if (file.size > 10 * 1024 * 1024) { alert("Image too large (max 10MB)"); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const sizeKB = Math.round(file.size / 1024);
+      setImageAttachments((prev) => [...prev, {
+        id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        dataUrl,
+        name: file.name,
+        sizeKB,
+      }]);
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
+  const removeImage = useCallback((id: string) => {
+    setImageAttachments((prev) => prev.filter((i) => i.id !== id));
+  }, []);
+
+  // Handle paste images from clipboard
+  const handlePaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) addImageFromFile(file);
+        return;
+      }
+    }
+  }, [addImageFromFile]);
+
+  // Handle drag-and-drop images
+  const [isDragging, setIsDragging] = useState(false);
+  const handleDragOver = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    const hasImage = Array.from(e.dataTransfer?.types || []).includes("Files");
+    if (hasImage) setIsDragging(true);
+  }, []);
+  const handleDragLeave = useCallback(() => setIsDragging(false), []);
+  const handleDrop = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = e.dataTransfer?.files;
+    if (!files) return;
+    for (const file of Array.from(files)) {
+      if (file.type.startsWith("image/")) addImageFromFile(file);
+    }
+  }, [addImageFromFile]);
+
   // Handle @ autocomplete selection
   const handleAtSelect = useCallback((fileId: string) => {
     attachFile(fileId);
@@ -339,7 +397,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
 
   const handleSend = () => {
     const trimmed = input.trim();
-    if (!trimmed && attachments.length === 0) return;
+    if (!trimmed && attachments.length === 0 && imageAttachments.length === 0) return;
     if (isStreaming) return;
 
     // Build the final message with attached file context
@@ -355,10 +413,20 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
       finalMessage = `${contextBlocks.join("\n\n")}\n\n---\n\n${trimmed}`;
     }
 
-    sendMessage(finalMessage);
+    // If images are attached, prefix with image context instruction
+    if (imageAttachments.length > 0) {
+      const imgNames = imageAttachments.map((i) => i.name).join(", ");
+      finalMessage = `[${imageAttachments.length} image(s) attached: ${imgNames}]\n\n${finalMessage}`;
+    }
+
+    // Send with image data URLs for vision API support
+    const images = imageAttachments.map((i) => i.dataUrl);
+    sendMessage(finalMessage, images.length > 0 ? images : undefined);
+
     setInput("");
     setCharCount(0);
     setAttachments([]);
+    setImageAttachments([]);
     setShowSlashMenu(false);
     setShowAtMenu(false);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -886,10 +954,13 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         style={{ borderTop: "1px solid hsl(220 13% 20%)" }}
       >
         <div
-          className="rounded-xl overflow-hidden transition-all duration-300"
+          className="rounded-xl overflow-hidden transition-all duration-300 relative"
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
           style={{
             background: "hsl(220 13% 18%)",
-            border: `1px solid ${isStreaming ? "hsl(207 90% 45% / 0.5)" : "hsl(220 13% 25%)"}`,
+            border: `1px solid ${isDragging ? "hsl(280 65% 55% / 0.6)" : isStreaming ? "hsl(207 90% 45% / 0.5)" : "hsl(220 13% 25%)"}`,
             boxShadow: isStreaming
               ? "0 0 20px hsl(207 90% 50% / 0.12), inset 0 1px 0 hsl(220 13% 22%)"
               : "0 2px 8px hsl(220 13% 5% / 0.3), inset 0 1px 0 hsl(220 13% 22%)",
@@ -941,6 +1012,61 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
             </div>
           )}
 
+          {/* Drag overlay */}
+          {isDragging && (
+            <div
+              className="absolute inset-0 z-10 flex items-center justify-center rounded-xl"
+              style={{ background: "hsl(280 65% 20% / 0.85)", backdropFilter: "blur(4px)" }}
+            >
+              <div className="text-center">
+                <ImagePlus size={28} style={{ color: "hsl(280 65% 70%)", margin: "0 auto 8px" }} />
+                <p className="text-sm font-medium" style={{ color: "hsl(280 65% 80%)" }}>Drop images here</p>
+                <p className="text-xs mt-1" style={{ color: "hsl(280 65% 55%)" }}>PNG, JPG, GIF, WebP</p>
+              </div>
+            </div>
+          )}
+
+          {/* Image attachment chips */}
+          {imageAttachments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 px-3 pt-2 pb-1">
+              {imageAttachments.map((img) => (
+                <div
+                  key={img.id}
+                  className="relative group/imgchip rounded-lg overflow-hidden"
+                  style={{
+                    border: "1px solid hsl(280 65% 50% / 0.3)",
+                    background: "hsl(280 65% 50% / 0.08)",
+                  }}
+                >
+                  <img
+                    src={img.dataUrl}
+                    alt={img.name}
+                    className="block"
+                    style={{ width: 56, height: 42, objectFit: "cover" }}
+                  />
+                  <div
+                    className="absolute inset-0 flex items-center justify-center opacity-0 group-hover/imgchip:opacity-100 transition-opacity"
+                    style={{ background: "rgba(0,0,0,0.6)" }}
+                  >
+                    <button
+                      onClick={() => removeImage(img.id)}
+                      style={{ color: "hsl(0 84% 65%)" }}
+                      title="Remove image"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <div
+                    className="absolute bottom-0 left-0 right-0 text-center truncate"
+                    style={{ fontSize: "0.5rem", background: "rgba(0,0,0,0.5)", color: "hsl(220 14% 70%)", padding: "1px 2px" }}
+                  >
+                    {img.sizeKB}KB
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <textarea
             ref={textareaRef}
             className="w-full px-3.5 pt-3 pb-1 text-sm resize-none outline-none bg-transparent leading-relaxed"
@@ -959,6 +1085,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             rows={1}
             data-testid="chat-input"
           />
@@ -1007,6 +1134,43 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                 )}
               </button>
 
+              {/* Image upload button */}
+              <button
+                className="relative rounded-lg p-1.5 transition-all duration-150"
+                style={{ color: imageAttachments.length > 0 ? "hsl(280 65% 60%)" : "hsl(220 14% 42%)" }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "hsl(280 65% 70%)";
+                  e.currentTarget.style.background = "hsl(220 13% 24%)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = imageAttachments.length > 0 ? "hsl(280 65% 60%)" : "hsl(220 14% 42%)";
+                  e.currentTarget.style.background = "transparent";
+                }}
+                onClick={() => imageInputRef.current?.click()}
+                title="Attach image (paste or drag-drop also works)"
+              >
+                <ImagePlus size={13} />
+                {imageAttachments.length > 0 && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full flex items-center justify-center text-white font-bold"
+                    style={{ fontSize: "0.5rem", background: "hsl(280 65% 50%)", boxShadow: "0 1px 3px hsl(280 65% 30% / 0.5)" }}
+                  >
+                    {imageAttachments.length}
+                  </span>
+                )}
+              </button>
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  for (const file of Array.from(e.target.files || [])) addImageFromFile(file);
+                  e.target.value = "";
+                }}
+              />
+
               {isStreaming ? (
                 <span className="flex items-center gap-1.5 text-xs" style={{ color: "hsl(207 90% 60%)" }}>
                   <span className="flex gap-0.5">
@@ -1054,29 +1218,29 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                 <button
                   className="rounded-lg px-3 py-1.5 text-xs flex items-center gap-1.5 font-medium transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
                   style={{
-                    background: (input.trim() || attachments.length > 0)
+                    background: (input.trim() || attachments.length > 0 || imageAttachments.length > 0)
                       ? "linear-gradient(135deg, hsl(207 90% 45%) 0%, hsl(207 90% 38%) 100%)"
                       : "hsl(220 13% 24%)",
-                    color: (input.trim() || attachments.length > 0) ? "white" : "hsl(220 14% 45%)",
-                    boxShadow: (input.trim() || attachments.length > 0)
+                    color: (input.trim() || attachments.length > 0 || imageAttachments.length > 0) ? "white" : "hsl(220 14% 45%)",
+                    boxShadow: (input.trim() || attachments.length > 0 || imageAttachments.length > 0)
                       ? "0 2px 8px hsl(207 90% 35% / 0.4), inset 0 1px 0 hsl(207 90% 65% / 0.15)"
                       : "none",
                     border: "none",
                   }}
                   onMouseEnter={(e) => {
-                    if (input.trim() || attachments.length > 0) {
+                    if (input.trim() || attachments.length > 0 || imageAttachments.length > 0) {
                       e.currentTarget.style.transform = "translateY(-1px)";
                       e.currentTarget.style.boxShadow = "0 4px 12px hsl(207 90% 35% / 0.5), inset 0 1px 0 hsl(207 90% 65% / 0.2)";
                     }
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.transform = "translateY(0)";
-                    if (input.trim() || attachments.length > 0) {
+                    if (input.trim() || attachments.length > 0 || imageAttachments.length > 0) {
                       e.currentTarget.style.boxShadow = "0 2px 8px hsl(207 90% 35% / 0.4), inset 0 1px 0 hsl(207 90% 65% / 0.15)";
                     }
                   }}
                   onClick={handleSend}
-                  disabled={(!input.trim() && attachments.length === 0) || isStreaming}
+                  disabled={(!input.trim() && attachments.length === 0 && imageAttachments.length === 0) || isStreaming}
                   data-testid="chat-send-btn"
                 >
                   <Send size={11} />
