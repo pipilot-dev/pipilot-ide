@@ -25,7 +25,8 @@ import {
   X,
 } from "lucide-react";
 import { useChat, ChatMode, ToolExecutor, WorkspaceContext, CheckpointManager } from "@/hooks/useChat";
-import { ChatMessageItem } from "./ChatMessage";
+import { ChatMessageItem, AssistantTurnGroup } from "./ChatMessage";
+import { ChatMessage } from "@/hooks/useChat";
 import { FileNode } from "@/hooks/useFileSystem";
 import { AtSign, FolderOpen, FileCode2, AlertTriangle } from "lucide-react";
 
@@ -809,14 +810,45 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           </div>
         )}
 
-        {messages.map((msg) => (
-          <ChatMessageItem
-            key={msg.id}
-            message={msg}
-            onDelete={handleDeleteMessage}
-            onRevert={handleRevertToMessage}
-          />
-        ))}
+        {(() => {
+          // Group consecutive assistant/tool messages into unified turns
+          const result: React.ReactNode[] = [];
+          let currentTurn: ChatMessage[] = [];
+
+          function flushTurn() {
+            if (currentTurn.length > 0) {
+              const turnMsgs = [...currentTurn];
+              const firstId = turnMsgs[0].id;
+              result.push(
+                <AssistantTurnGroup
+                  key={`turn-${firstId}`}
+                  messages={turnMsgs}
+                  onDelete={handleDeleteMessage}
+                />
+              );
+              currentTurn = [];
+            }
+          }
+
+          for (const msg of messages) {
+            if (msg.role === "user") {
+              flushTurn();
+              result.push(
+                <ChatMessageItem
+                  key={msg.id}
+                  message={msg}
+                  onDelete={handleDeleteMessage}
+                  onRevert={handleRevertToMessage}
+                />
+              );
+            } else {
+              // assistant or tool — accumulate into current turn
+              currentTurn.push(msg);
+            }
+          }
+          flushTurn();
+          return result;
+        })()}
         <div ref={bottomRef} />
       </div>
 

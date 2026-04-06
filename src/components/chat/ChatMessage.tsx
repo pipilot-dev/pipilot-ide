@@ -406,121 +406,281 @@ function MessageActions({
   );
 }
 
-/* ─── Message Item ───────────────────────────────────────────────────── */
+/* ─── Single Message Item (used for user messages) ───────────────────── */
 export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProps) {
   const isUser = message.role === "user";
 
+  // Non-user messages should go through AssistantTurnGroup, but handle gracefully
+  if (!isUser) {
+    return (
+      <AssistantTurnGroup messages={[message]} onDelete={onDelete} />
+    );
+  }
+
   return (
     <div
-      className={`group/msg relative flex gap-2.5 mb-5 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+      className="group/msg relative flex gap-2.5 mb-5 flex-row-reverse"
       style={{ animation: "fadeInMsg 0.3s ease-out" }}
       data-testid={`chat-message-${message.id}`}
     >
-      {/* Avatar */}
+      {/* User Avatar */}
       <div
         className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-xs font-medium mt-0.5"
-        style={
-          isUser
-            ? {
-                background: "linear-gradient(135deg, hsl(207 90% 45%) 0%, hsl(207 90% 38%) 100%)",
-                color: "white",
-                boxShadow: "0 2px 6px hsl(207 90% 35% / 0.3)",
-              }
-            : {
-                background: "linear-gradient(135deg, hsl(220 13% 25%) 0%, hsl(220 13% 20%) 100%)",
-                color: "hsl(207 90% 65%)",
-                border: "1px solid hsl(220 13% 28%)",
-              }
-        }
+        style={{
+          background: "linear-gradient(135deg, hsl(207 90% 45%) 0%, hsl(207 90% 38%) 100%)",
+          color: "white",
+          boxShadow: "0 2px 6px hsl(207 90% 35% / 0.3)",
+        }}
       >
-        {isUser ? <User size={13} /> : <Sparkles size={13} />}
+        <User size={13} />
       </div>
 
-      {/* Bubble */}
-      <div className={`relative flex-1 max-w-[88%] ${isUser ? "text-right" : "text-left"}`}>
+      {/* User Bubble */}
+      <div className="relative flex-1 max-w-[88%] text-right">
         <div
-          className={`inline-block text-left text-sm leading-relaxed ${
-            isUser ? "rounded-2xl rounded-tr-md" : "rounded-2xl rounded-tl-md"
-          }`}
-          style={
-            isUser
-              ? {
-                  background: "linear-gradient(135deg, hsl(207 90% 38%) 0%, hsl(207 85% 33%) 100%)",
-                  color: "white",
-                  padding: "10px 14px",
-                  boxShadow: "0 2px 8px hsl(207 90% 30% / 0.3)",
-                }
-              : {
-                  background: "hsl(220 13% 19%)",
-                  color: "hsl(220 14% 88%)",
-                  padding: "10px 14px",
-                  maxWidth: "100%",
-                  border: "1px solid hsl(220 13% 23%)",
-                  boxShadow: "0 1px 4px hsl(220 13% 5% / 0.2)",
-                }
-          }
+          className="inline-block text-left text-sm leading-relaxed rounded-2xl rounded-tr-md"
+          style={{
+            background: "linear-gradient(135deg, hsl(207 90% 38%) 0%, hsl(207 85% 33%) 100%)",
+            color: "white",
+            padding: "10px 14px",
+            boxShadow: "0 2px 8px hsl(207 90% 30% / 0.3)",
+          }}
         >
-          {isUser ? (
-            <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
-          ) : (
-            <>
-              {/* Built-in tool status badges */}
-              {message.builtinToolStatuses && message.builtinToolStatuses.length > 0 && (
-                <div className="flex flex-wrap gap-1 mb-2">
-                  {message.builtinToolStatuses
-                    .filter((s) => s.type === "tool_start")
-                    .map((s, i) => (
-                      <BuiltinToolBadge key={i} status={s} />
-                    ))}
-                </div>
-              )}
-
-              {/* Tool call cards */}
-              {message.toolCalls && message.toolCalls.length > 0 && (
-                <div className="mb-2">
-                  {message.toolCalls.map((tc) => (
-                    <ToolCallCard key={tc.id} toolCall={tc} />
-                  ))}
-                </div>
-              )}
-
-              {/* Message content */}
-              <div className={`chat-message ${message.streaming ? "streaming-cursor" : ""}`}>
-                {message.content ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {message.content}
-                  </ReactMarkdown>
-                ) : message.streaming ? (
-                  <span className="flex items-center gap-1.5 text-xs" style={{ color: "hsl(207 90% 60%)" }}>
-                    <Loader2 size={12} className="animate-spin" />
-                    <span>Thinking...</span>
-                  </span>
-                ) : null}
-              </div>
-            </>
-          )}
+          <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
         </div>
 
         {/* Action buttons */}
         {!message.streaming && (
           <MessageActions
             message={message}
-            isUser={isUser}
+            isUser
             onDelete={onDelete}
-            onRevert={isUser ? onRevert : undefined}
+            onRevert={onRevert}
           />
         )}
 
         {/* Timestamp */}
         <div
           className="text-xs mt-1 px-1 tabular-nums"
-          style={{ color: "hsl(220 14% 35%)", fontSize: "0.65rem" }}
+          style={{ color: "hsl(220 14% 35%)", fontSize: "0.65rem", textAlign: "right" }}
         >
-          {message.timestamp.toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
+          {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Assistant Turn Group ────────────────────────────────────────────
+ * Renders all consecutive assistant + tool messages from one agent loop
+ * turn inside a SINGLE unified bubble with one avatar and one set of
+ * action buttons.
+ * ──────────────────────────────────────────────────────────────────── */
+interface AssistantTurnGroupProps {
+  messages: ChatMessageType[];
+  onDelete?: (messageId: string) => void;
+}
+
+export function AssistantTurnGroup({ messages, onDelete }: AssistantTurnGroupProps) {
+  const [copied, setCopied] = useState(false);
+
+  // Aggregate all text content for the copy button
+  const allContent = messages
+    .filter((m) => m.role === "assistant" && m.content)
+    .map((m) => m.content)
+    .join("\n\n");
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(allContent).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [allContent]);
+
+  // Check if any message is still streaming
+  const isStreaming = messages.some((m) => m.streaming);
+
+  // Get the last assistant message for the delete action
+  const lastAssistantMsg = [...messages].reverse().find((m) => m.role === "assistant");
+
+  // Collect all tool calls and content blocks across all messages in this turn
+  const assistantMessages = messages.filter((m) => m.role === "assistant");
+
+  // Timestamp from the first message
+  const timestamp = messages[0]?.timestamp;
+
+  const btnBase = {
+    width: "22px",
+    height: "22px",
+    borderRadius: "6px",
+    transition: "all 0.15s ease",
+  };
+
+  return (
+    <div
+      className="group/msg relative flex gap-2.5 mb-5 flex-row"
+      style={{ animation: "fadeInMsg 0.3s ease-out" }}
+      data-testid={`chat-turn-${messages[0]?.id}`}
+    >
+      {/* Single AI Avatar for entire turn */}
+      <div
+        className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-xs font-medium mt-0.5"
+        style={{
+          background: "linear-gradient(135deg, hsl(220 13% 25%) 0%, hsl(220 13% 20%) 100%)",
+          color: "hsl(207 90% 65%)",
+          border: "1px solid hsl(220 13% 28%)",
+        }}
+      >
+        <Sparkles size={13} />
+      </div>
+
+      {/* Single unified bubble for entire turn */}
+      <div className="relative flex-1 max-w-[88%] text-left">
+        <div
+          className="text-left text-sm leading-relaxed rounded-2xl rounded-tl-md"
+          style={{
+            background: "hsl(220 13% 19%)",
+            color: "hsl(220 14% 88%)",
+            padding: "10px 14px",
+            maxWidth: "100%",
+            border: "1px solid hsl(220 13% 23%)",
+            boxShadow: "0 1px 4px hsl(220 13% 5% / 0.2)",
+          }}
+        >
+          {assistantMessages.map((msg, idx) => {
+            const hasContent = msg.content && msg.content.trim();
+            const hasTools = msg.toolCalls && msg.toolCalls.length > 0;
+            const hasBuiltinTools = msg.builtinToolStatuses && msg.builtinToolStatuses.length > 0;
+            const isEmpty = !hasContent && !hasTools && !hasBuiltinTools && !msg.streaming;
+
+            // Skip truly empty messages (e.g. tool-only messages with no text)
+            if (isEmpty) return null;
+
+            // Add a subtle divider between iterations (but not before the first)
+            const showDivider = idx > 0 && (hasContent || hasTools || hasBuiltinTools);
+
+            return (
+              <div key={msg.id}>
+                {showDivider && (
+                  <div
+                    className="my-2"
+                    style={{
+                      borderTop: "1px solid hsl(220 13% 24%)",
+                    }}
+                  />
+                )}
+
+                {/* Built-in tool status badges */}
+                {hasBuiltinTools && (
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {msg.builtinToolStatuses!
+                      .filter((s) => s.type === "tool_start")
+                      .map((s, i) => (
+                        <BuiltinToolBadge key={i} status={s} />
+                      ))}
+                  </div>
+                )}
+
+                {/* Tool call cards */}
+                {hasTools && (
+                  <div className="mb-2">
+                    {msg.toolCalls!.map((tc) => (
+                      <ToolCallCard key={tc.id} toolCall={tc} />
+                    ))}
+                  </div>
+                )}
+
+                {/* Message content */}
+                {(hasContent || msg.streaming) && (
+                  <div className={`chat-message ${msg.streaming ? "streaming-cursor" : ""}`}>
+                    {msg.content ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {msg.content}
+                      </ReactMarkdown>
+                    ) : msg.streaming ? (
+                      <span className="flex items-center gap-1.5 text-xs" style={{ color: "hsl(207 90% 60%)" }}>
+                        <Loader2 size={12} className="animate-spin" />
+                        <span>Thinking...</span>
+                      </span>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            );
           })}
         </div>
+
+        {/* Single set of action buttons for the entire turn */}
+        {!isStreaming && allContent && (
+          <div
+            className="flex items-center gap-0.5 opacity-0 group-hover/msg:opacity-100 transition-all duration-200 mt-1"
+          >
+            {/* Copy all */}
+            <button
+              className="flex items-center justify-center"
+              style={{
+                ...btnBase,
+                background: "hsl(220 13% 18%)",
+                color: copied ? "hsl(142 71% 55%)" : "hsl(220 14% 48%)",
+                border: "1px solid hsl(220 13% 24%)",
+              }}
+              onMouseEnter={(e) => {
+                if (!copied) {
+                  e.currentTarget.style.color = "hsl(220 14% 80%)";
+                  e.currentTarget.style.background = "hsl(220 13% 24%)";
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!copied) {
+                  e.currentTarget.style.color = "hsl(220 14% 48%)";
+                  e.currentTarget.style.background = "hsl(220 13% 18%)";
+                }
+              }}
+              onClick={handleCopy}
+              title="Copy all text"
+            >
+              {copied ? <Check size={11} /> : <Copy size={11} />}
+            </button>
+
+            {/* Delete all messages in this turn */}
+            {onDelete && lastAssistantMsg && (
+              <button
+                className="flex items-center justify-center"
+                style={{
+                  ...btnBase,
+                  background: "hsl(220 13% 18%)",
+                  color: "hsl(220 14% 48%)",
+                  border: "1px solid hsl(220 13% 24%)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "hsl(0 84% 62%)";
+                  e.currentTarget.style.background = "hsl(0 50% 20% / 0.3)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "hsl(220 14% 48%)";
+                  e.currentTarget.style.background = "hsl(220 13% 18%)";
+                }}
+                onClick={() => {
+                  // Delete all messages in this turn
+                  for (const m of messages) onDelete(m.id);
+                }}
+                title="Delete this response"
+              >
+                <Trash2 size={11} />
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Single timestamp */}
+        {timestamp && (
+          <div
+            className="text-xs mt-1 px-1 tabular-nums"
+            style={{ color: "hsl(220 14% 35%)", fontSize: "0.65rem" }}
+          >
+            {timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </div>
+        )}
       </div>
     </div>
   );
