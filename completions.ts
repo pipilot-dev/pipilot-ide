@@ -2662,8 +2662,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return false;
       });
       // Use a vision-capable model when images are present
-      // kilo-auto/free tries to route to minimax which is dead, so force a working vision model
-      const kiloModel = hasImageContent ? "google/gemini-2.5-flash-preview:free" : KILO_DEFAULT_MODEL;
+      // kilo-auto/free tries to route to minimax which is dead, so force a working free vision model
+      // Available free vision models: qwen/qwen3.6-plus:free, bytedance-seed/dola-seed-2.0-pro:free, openrouter/free
+      const kiloModel = hasImageContent ? "qwen/qwen3.6-plus:free" : KILO_DEFAULT_MODEL;
       if (hasImageContent) {
         log.info(`Vision content detected — using model: ${kiloModel}`);
       }
