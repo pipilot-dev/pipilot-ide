@@ -24,6 +24,9 @@ import {
 import { exportProjectAsZip } from "@/lib/exportZip";
 import { importFromZip, importFromFolder } from "@/lib/importFiles";
 import { useActiveProject } from "@/contexts/ProjectContext";
+import { ExtensionMarketplace } from "@/components/extensions/ExtensionMarketplace";
+import { ExtensionSidebarHost } from "@/components/extensions/ExtensionSidebarHost";
+import { RunDebugPanel } from "@/components/ide/RunDebugPanel";
 import { useProjects } from "@/hooks/useProjects";
 import { db, fileOps, LANG_MAP } from "@/lib/db";
 import { useGit, type FileStatus } from "@/hooks/useGit";
@@ -100,9 +103,10 @@ interface SidebarPanelProps {
   onSelectFile: (node: FileNode) => void;
   files: FileNode[];
   onSearchFiles?: (query: string) => void;
+  onRunPreview?: () => void;
 }
 
-export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSearchFiles }: SidebarPanelProps) {
+export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSearchFiles, onRunPreview }: SidebarPanelProps) {
   const { activeProjectId } = useActiveProject();
   const { activeProject } = useProjects();
   const [searchQuery, setSearchQuery] = useState("");
@@ -945,40 +949,15 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
       )}
 
       {view === "debug" && (
-        <div className="flex flex-col p-3">
-          <div className="flex items-center gap-2 mb-3">
-            <Bug size={14} style={{ color: "hsl(220 14% 60%)" }} />
-            <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: "hsl(220 14% 60%)" }}>
-              Run and Debug
-            </span>
-          </div>
-          <div className="text-xs text-muted-foreground px-1">
-            <p className="mb-2">No configuration found.</p>
-            <p>Create a launch configuration to debug your app.</p>
-          </div>
-        </div>
+        <RunDebugPanel onRunPreview={onRunPreview} />
       )}
 
       {view === "extensions" && (
-        <div className="flex flex-col p-3">
-          <div className="flex items-center gap-2 mb-3">
-            <Package size={14} style={{ color: "hsl(220 14% 60%)" }} />
-            <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: "hsl(220 14% 60%)" }}>
-              Extensions
-            </span>
-          </div>
-          <div className="flex items-center gap-2 rounded px-2 py-1 mb-2" style={{ background: "hsl(220 13% 22%)" }}>
-            <Search size={12} style={{ color: "hsl(220 14% 55%)" }} />
-            <input
-              className="bg-transparent text-xs outline-none w-full placeholder:text-muted-foreground"
-              placeholder="Search extensions"
-              style={{ color: "hsl(220 14% 85%)" }}
-            />
-          </div>
-          <div className="text-xs text-muted-foreground px-1">
-            <p>Discover extensions to enhance your workflow.</p>
-          </div>
-        </div>
+        <ExtensionMarketplace />
+      )}
+
+      {view && !["explorer", "search", "source-control", "debug", "extensions"].includes(view) && (
+        <ExtensionSidebarHost panelId={view} />
       )}
     </div>
   );

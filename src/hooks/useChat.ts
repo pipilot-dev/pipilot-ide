@@ -1,5 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { db } from "@/lib/db";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { streamText, tool, stepCountIs } from "ai";
+import { z } from "zod";
 
 export type ChatMode = "chat" | "agent";
 
@@ -29,8 +32,6 @@ export interface ChatMessage {
   checkpointId?: string; // checkpoint created after this conversation turn
 }
 
-const API_URL = "https://the3rdacademy.com/api/chat/completions";
-
 function generateId() {
   return Math.random().toString(36).substring(2, 9);
 }
@@ -41,24 +42,32 @@ const LOCAL_TOOL_NAMES = new Set([
   "delete_file", "search_files", "get_file_info", "deploy_site",
   "rename_file", "copy_file", "batch_create_files", "get_project_tree",
   "screenshot_preview",
+  "preview_click", "preview_scroll", "preview_type", "preview_find_elements",
+  "run_script",
 ]);
 
 export type ToolExecutor = (name: string, args: Record<string, unknown>) => Promise<string>;
 
-// OpenAI-format tool definitions sent to the server so it can forward them to task_agent/Kilo
+// OpenAI-format tool definitions sent to the server
+// Only core coding tools — keep this lean for faster LLM responses
 const FILE_TOOLS = [
-  { type: "function", function: { name: "read_file", description: "Read file contents (up to 500 lines). IMPORTANT: path must be relative with NO leading slash. Use 'app.js' NOT '/app.js'. Use startLine/endLine for ranges.", parameters: { type: "object", properties: { path: { type: "string", description: "Relative file path, e.g. 'app.js' or 'src/utils.js'. NO leading slash." }, startLine: { type: "number" }, endLine: { type: "number" } }, required: ["path"] } } },
-  { type: "function", function: { name: "list_files", description: "List files and directories. IMPORTANT: path must be relative. Use '' for root, 'src' for src folder. NO leading slash.", parameters: { type: "object", properties: { path: { type: "string", description: "Relative directory path. Use '' for root. NO leading slash." }, offset: { type: "number" } }, required: ["path"] } } },
-  { type: "function", function: { name: "create_file", description: "Create a new file with content. Parent dirs auto-created. Path must be relative: 'app.js' NOT '/app.js'.", parameters: { type: "object", properties: { path: { type: "string", description: "Relative file path. NO leading slash." }, content: { type: "string" } }, required: ["path"] } } },
-  { type: "function", function: { name: "edit_file", description: "Edit a file. Use search/replace for partial edits or newContent for full rewrite. Path must be relative.", parameters: { type: "object", properties: { path: { type: "string", description: "Relative file path. NO leading slash." }, search: { type: "string" }, replace: { type: "string" }, newContent: { type: "string" } }, required: ["path"] } } },
-  { type: "function", function: { name: "delete_file", description: "Delete a file or directory. Path must be relative.", parameters: { type: "object", properties: { path: { type: "string", description: "Relative file path. NO leading slash." } }, required: ["path"] } } },
-  { type: "function", function: { name: "search_files", description: "Search files by name or content.", parameters: { type: "object", properties: { query: { type: "string" }, path: { type: "string", description: "Optional relative directory to search in. NO leading slash." }, searchContents: { type: "boolean" } }, required: ["query"] } } },
-  { type: "function", function: { name: "deploy_site", description: "Deploy the current project to a live URL. Call this after building the site to make it publicly accessible.", parameters: { type: "object", properties: {}, required: [] } } },
-  { type: "function", function: { name: "rename_file", description: "Rename or move a file/folder to a new path. Paths must be relative.", parameters: { type: "object", properties: { oldPath: { type: "string", description: "Current relative path. NO leading slash." }, newPath: { type: "string", description: "New relative path. NO leading slash." } }, required: ["oldPath", "newPath"] } } },
-  { type: "function", function: { name: "copy_file", description: "Copy a file to a new location. Paths must be relative.", parameters: { type: "object", properties: { srcPath: { type: "string", description: "Source relative path. NO leading slash." }, destPath: { type: "string", description: "Destination relative path. NO leading slash." } }, required: ["srcPath", "destPath"] } } },
-  { type: "function", function: { name: "batch_create_files", description: "Create multiple files at once. More efficient than multiple create_file calls. All paths must be relative.", parameters: { type: "object", properties: { files: { type: "array", items: { type: "object", properties: { path: { type: "string", description: "Relative file path. NO leading slash." }, content: { type: "string" } }, required: ["path", "content"] } } }, required: ["files"] } } },
-  { type: "function", function: { name: "get_project_tree", description: "Get a visual tree view of the entire project structure with line counts.", parameters: { type: "object", properties: { path: { type: "string", description: "Optional relative base path. NO leading slash." } }, required: [] } } },
-  { type: "function", function: { name: "screenshot_preview", description: "Take a screenshot of the current web preview to see how the UI actually looks. Returns a visual image of the rendered page. Use this AFTER creating/editing files to verify the visual result and spot UI issues. Call with no arguments.", parameters: { type: "object", properties: {}, required: [] } } },
+  { type: "function", function: { name: "read_file", description: "Read file contents. Path must be relative, NO leading slash.", parameters: { type: "object", properties: { path: { type: "string" }, startLine: { type: "number" }, endLine: { type: "number" } }, required: ["path"] } } },
+  { type: "function", function: { name: "list_files", description: "List files in directory. Use '' for root.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+  { type: "function", function: { name: "create_file", description: "Create file with content. Parent dirs auto-created.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path"] } } },
+  { type: "function", function: { name: "edit_file", description: "Edit file via search/replace or full rewrite (newContent).", parameters: { type: "object", properties: { path: { type: "string" }, search: { type: "string" }, replace: { type: "string" }, newContent: { type: "string" } }, required: ["path"] } } },
+  { type: "function", function: { name: "delete_file", description: "Delete file or directory.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+  { type: "function", function: { name: "batch_create_files", description: "Create multiple files at once. Much faster than individual creates.", parameters: { type: "object", properties: { files: { type: "array", items: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } }, required: ["files"] } } },
+  { type: "function", function: { name: "get_project_tree", description: "Visual tree of entire project with line counts.", parameters: { type: "object", properties: {}, required: [] } } },
+  { type: "function", function: { name: "search_files", description: "Search files by name or content.", parameters: { type: "object", properties: { query: { type: "string" }, searchContents: { type: "boolean" } }, required: ["query"] } } },
+  // { type: "function", function: { name: "rename_file", description: "Rename/move file.", parameters: { type: "object", properties: { oldPath: { type: "string" }, newPath: { type: "string" } }, required: ["oldPath", "newPath"] } } },
+  // { type: "function", function: { name: "copy_file", description: "Copy file.", parameters: { type: "object", properties: { srcPath: { type: "string" }, destPath: { type: "string" } }, required: ["srcPath", "destPath"] } } },
+  // { type: "function", function: { name: "deploy_site", description: "Deploy to live URL.", parameters: { type: "object", properties: { slug: { type: "string" } }, required: [] } } },
+  // { type: "function", function: { name: "screenshot_preview", description: "Screenshot the preview.", parameters: { type: "object", properties: {}, required: [] } } },
+  // { type: "function", function: { name: "preview_click", description: "Click element in preview.", parameters: { type: "object", properties: { selector: { type: "string" }, x: { type: "number" }, y: { type: "number" } }, required: [] } } },
+  // { type: "function", function: { name: "preview_scroll", description: "Scroll preview.", parameters: { type: "object", properties: { direction: { type: "string" }, amount: { type: "number" } }, required: ["direction"] } } },
+  // { type: "function", function: { name: "preview_type", description: "Type into preview input.", parameters: { type: "object", properties: { selector: { type: "string" }, text: { type: "string" }, clear: { type: "boolean" }, pressEnter: { type: "boolean" } }, required: ["selector", "text"] } } },
+  // { type: "function", function: { name: "preview_find_elements", description: "Find interactive elements in preview.", parameters: { type: "object", properties: { type: { type: "string" } }, required: [] } } },
+  { type: "function", function: { name: "run_script", description: "Execute JS/Node.js code and return output. Use console.log().", parameters: { type: "object", properties: { code: { type: "string" }, timeout: { type: "number", description: "Seconds (default 3)" } }, required: ["code"] } } },
 ];
 
 export interface WorkspaceContext {
@@ -95,11 +104,64 @@ ${ctx.fileTree}
 `
     : "";
 
-  return `You are PiPilot, a world-class AI software engineer and UI/UX designer built into a browser-based IDE with DIRECT file system access. You are extremely skilled at building complete, production-quality web applications from scratch. The IDE has a live web preview powered by Sandpack.
+  // Detect project type from context
+  const isCloud = ctx?.projectType?.includes("E2B Cloud") || ctx?.projectType?.includes("Cloud");
+  const isNodebox = ctx?.projectType?.includes("Nodebox");
+  const isViteReact = ctx?.projectType?.includes("Vite") || ctx?.fileTree?.includes("vite.config");
+  const isNextjs = ctx?.projectType?.includes("Next") || ctx?.fileTree?.includes("next.config");
+  const isExpress = ctx?.fileTree?.includes("express") || ctx?.fileTree?.includes("server.js");
+  const isNodeProject = isCloud || isNodebox || isViteReact || isNextjs;
 
-You think step-by-step, plan before you code, and build complete polished applications — never half-finished demos.
-${projectInfo}
-## STACK
+  // Build stack section based on project type
+  let stackSection: string;
+
+  if (isViteReact) {
+    stackSection = `## STACK
+
+This is a **Vite + React** project with a Node.js runtime.
+- **DO NOT** delete existing Vite/React files or switch to vanilla HTML
+- Build with **React components** using JSX in \`.jsx\`/\`.tsx\` files
+- The entry point is \`src/main.jsx\` → \`src/App.jsx\`
+- Use \`import\`/\`export\` ES module syntax
+- Install packages by adding them to \`package.json\` dependencies — the runtime installs them automatically
+- For styling: use CSS modules, inline styles, or add Tailwind CSS to the project
+- The dev server runs with HMR — changes appear instantly in the preview
+- Create components in \`src/components/\`, pages in \`src/pages/\`, etc.
+- Use React hooks (useState, useEffect, useRef, etc.) for state management
+- **IMPORTANT:** Keep the \`vite.config.js\` — it has server settings for the preview to work`;
+  } else if (isNextjs) {
+    stackSection = `## STACK
+
+This is a **Next.js** project (App Router) with a Node.js runtime.
+- **DO NOT** delete existing Next.js files or switch to vanilla HTML
+- Build with **React Server Components** and Client Components (\`'use client'\`)
+- Pages go in \`app/\` directory: \`app/page.jsx\`, \`app/about/page.jsx\`, etc.
+- Layouts go in \`app/layout.jsx\`
+- API routes go in \`app/api/route.js\`
+- Use \`import\`/\`export\` ES module syntax
+- Install packages by adding them to \`package.json\` dependencies
+- Next.js handles routing automatically based on the file structure
+- **IMPORTANT:** Keep \`next.config.mjs\` — it has settings for the preview to work`;
+  } else if (isExpress && isNodeProject) {
+    stackSection = `## STACK
+
+This is an **Express.js** project with a Node.js runtime.
+- **DO NOT** switch to vanilla HTML — this is a server-side project
+- The entry point is \`server.js\` — it runs an Express server
+- Serve static files from \`public/\` directory
+- Create API routes with \`app.get()\`, \`app.post()\`, etc.
+- Install packages by adding them to \`package.json\` dependencies
+- The server listens on port 3000`;
+  } else if (isNodeProject) {
+    stackSection = `## STACK
+
+This is a **Node.js** project.
+- Build with JavaScript/Node.js
+- Use \`require()\` for CommonJS or \`import\` for ES modules
+- Install packages by adding them to \`package.json\` dependencies
+- The runtime installs dependencies automatically`;
+  } else {
+    stackSection = `## STACK
 
 The default stack is **HTML + CSS + JavaScript** with the **Tailwind CSS CDN** for styling.
 - All projects start with \`index.html\`, \`styles.css\`, and \`app.js\`
@@ -107,472 +169,150 @@ The default stack is **HTML + CSS + JavaScript** with the **Tailwind CSS CDN** f
 - Use vanilla JavaScript — no frameworks, no build step, no npm
 - The preview updates live as files are created/edited
 - You can also build projects using **multiple JS files** organized by feature (e.g. \`router.js\`, \`api.js\`, \`components.js\`, \`utils.js\`)
-- For data-heavy apps, create a separate \`data.js\` file with all content/data arrays
+- For data-heavy apps, create a separate \`data.js\` file with all content/data arrays`;
+  }
 
+  // Routing section — only for static projects
+  const routingSection = isNodeProject ? "" : `
 ## ROUTING & MULTI-PAGE ARCHITECTURE (CRITICAL)
 
-Build real, multi-page apps using **hash-based routing** — not single static pages.
+Build real, multi-page apps using **hash-based routing** — not single static pages.`;
 
-### How hash routing works:
-- Define routes as hash fragments: \`#/\`, \`#/about\`, \`#/product/{slug}\`
-- Listen to \`hashchange\` event to render the correct page
-- Use \`window.location.hash\` to read the current route
-- Browser back/forward buttons work automatically
+  return `You are PiPilot, an expert AI software engineer in a browser IDE with file tools and live preview.${isNodeProject ? " Node.js runtime available." : ""}
+${projectInfo}
+${stackSection}
+${!isNodeProject ? `
+## ROUTING (static projects only)
+Build multi-page apps with hash routing: \`#/\`, \`#/about\`, \`#/product/{slug}\`. Listen to \`hashchange\`. Create reusable render functions (renderNavbar, renderCard, etc.). Always include detail pages for listings.` : ""}
 
-### Required routing pattern in app.js:
-\`\`\`
-// Route definitions
-const routes = {
-  '/': renderHomePage,
-  '/about': renderAboutPage,
-  '/contact': renderContactPage,
-  '/product/:slug': renderProductDetail,  // dynamic route
-};
+## TOOLS
 
-function router() {
-  const hash = window.location.hash.slice(1) || '/';
-  // Match dynamic routes like /product/some-slug
-  for (const [pattern, handler] of Object.entries(routes)) {
-    if (pattern.includes(':')) {
-      const regex = new RegExp('^' + pattern.replace(/:([^/]+)/g, '([^/]+)') + '$');
-      const match = hash.match(regex);
-      if (match) { handler(...match.slice(1)); return; }
-    }
-    if (hash === pattern) { handler(); return; }
-  }
-  render404();
+File paths are **relative, NO leading slash**: \`"app.js"\` ✅ \`"/app.js"\` ❌. Root = \`""\`.
+
+**Files:** create_file, edit_file (search/replace or newContent), read_file, delete_file, list_files, search_files, batch_create_files (use for 2+ files), rename_file, copy_file, get_project_tree
+**Preview:** screenshot_preview (verify UI visually), preview_find_elements, preview_click, preview_scroll, preview_type
+**Other:** deploy_site${isNodeProject ? "" : " (to puter.site)"}, run_script (execute JS/Node.js, use console.log for output)
+
+## DESIGN
+
+- Unique Google Font pairings (not Inter/Roboto/Arial). CSS variables for colors.
+- Images: \`https://api.a0.dev/assets/image?text={url-encoded description}&aspect={16:9|1:1|9:16}\`. Use on every page.
+- Icons: Lucide CDN for UI, Simple Icons for brands. No emojis.
+- Responsive: mobile-first, hamburger nav, grid breakpoints. Animations: fadeInUp, hover effects.
+- Real content, no lorem ipsum. Complete pages, no placeholders.
+
+## RULES
+
+1. NEVER paste code in chat — use file tools. Keep chat to 1-2 sentences.
+2. Use batch_create_files to scaffold. read_file before edit_file.
+3. Use screenshot_preview after building UI. Fix issues immediately.
+4. Build complete, polished, production-quality apps — not demos.
+5. Deploy with deploy_site when done. Tell user the live URL.`;
 }
 
-window.addEventListener('hashchange', router);
-router(); // initial render
-\`\`\`
+// ─── AI SDK Provider ────────────────────────────────────────────────────────
 
-### Navigation links — ALWAYS use hash links:
-- \`<a href="#/">\` for home
-- \`<a href="#/about">\` for about
-- \`<a href="#/product/modern-villa">\` for dynamic detail pages
-- Add \`onclick="navigate('/product/modern-villa')")\` helper for programmatic navigation
+const provider = createOpenAICompatible({
+  name: "pipilot",
+  baseURL: "https://the3rdacademy.com/api",
+  apiKey: "unused",
+  transformRequestBody: (body: Record<string, any>) => ({
+    ...body,
+    direct_kilo: true,
+  }),
+});
 
-### Dynamic detail pages:
-When building apps with listings (products, properties, team members, etc.), ALWAYS create detail pages:
-- Each item gets its own route: \`#/property/{slug}\`
-- Detail page includes: image gallery, full description, features list, related items, back button
-- Use a data array in JS and look up by slug to render the detail page
-- Include "Back to Listings" link: \`<a href="#/">\`
+// ─── AI SDK Tool Definitions ────────────────────────────────────────────────
 
-### Reusable HTML components:
-Create reusable render functions for repeated UI patterns:
-- \`renderNavbar()\` — consistent nav across all pages
-- \`renderFooter()\` — consistent footer across all pages
-- \`renderCard(item)\` — reusable card component for listings
-- \`renderHero(title, subtitle, bgImage)\` — reusable hero section
-- Put shared data (nav links, footer info) in a \`data.js\` file
+const MAX_TOOL_RESULT = 3000; // ~750 tokens
 
-### Page transitions:
-- Add \`fade-in\` CSS animation on page change
-- Scroll to top on navigation: \`window.scrollTo(0, 0)\`
-
-### Example structure for a real estate site:
-- \`#/\` → Home with hero + featured listings grid
-- \`#/listings\` → All properties with filters
-- \`#/property/modern-hillside-villa\` → Full detail page with gallery, description, features, agent card
-- \`#/about\` → About the agency + team members
-- \`#/contact\` → Contact form
-
-NEVER build a single-page static site. ALWAYS build multi-page apps with routing, dynamic detail pages, and reusable components.
-
-## FILE TOOLS
-
-You have powerful file management tools via native function calling. The user sees files update live in the editor and preview.
-
-### ⚠️ PATH FORMAT (CRITICAL — READ THIS):
-- All file paths are **relative** with **NO leading slash**.
-- Correct: \`"path": "app.js"\`, \`"path": "src/utils.js"\`, \`"path": "styles.css"\`
-- **WRONG**: \`"path": "/app.js"\`, \`"path": "/workspace/app.js"\`, \`"path": "./app.js"\`
-- There is NO \`/workspace/\` prefix. There is NO root \`/\`. Just the bare filename or relative path.
-- For list_files, use \`"path": ""\` or \`"path": "src"\` — never \`"/"\` or \`"/workspace"\`.
-- Folders: \`"path": "src"\` NOT \`"path": "/src"\` or \`"path": "src/"\`.
-- Examples:
-  - Read a file: \`{ "path": "index.html" }\` ✅  NOT \`{ "path": "/index.html" }\` ❌
-  - List root: \`{ "path": "" }\` ✅  NOT \`{ "path": "/" }\` ❌
-  - Read nested: \`{ "path": "src/components/App.tsx" }\` ✅  NOT \`{ "path": "/src/components/App.tsx" }\` ❌
-
-### Core Tools:
-- **create_file** — Create a new file with full content. Parent dirs auto-created.
-- **edit_file** — Edit a file via search/replace or full rewrite (newContent).
-- **read_file** — Read file contents (up to 500 lines). Use startLine/endLine for ranges.
-- **delete_file** — Delete a file or directory (recursive).
-- **list_files** — List files and directories at a path (up to 200 items).
-- **search_files** — Search files by name or content (up to 50 results).
-
-### Power Tools:
-- **batch_create_files** — Create multiple files in one call. Pass array of {path, content}. Use this when scaffolding a new project or creating multiple files at once — much faster than individual create_file calls.
-- **rename_file** — Rename or move a file/folder. Params: {oldPath, newPath}.
-- **copy_file** — Duplicate a file. Params: {srcPath, destPath}.
-- **get_project_tree** — Visual tree view of entire project with line counts. Use at start of complex tasks to understand the codebase.
-- **deploy_site** — Deploy the project to a live public URL. Call this after finishing the site. Returns the live URL.
-
-### Vision Tool:
-- **screenshot_preview** — Takes a screenshot of the current web preview and returns a visual image. You can SEE the actual rendered UI. Use this to:
-  - Verify your work looks correct after creating/editing files
-  - Spot visual bugs (misalignment, wrong colors, broken layouts, overflow issues)
-  - Check responsive design and spacing
-  - Compare the result against the user's request
-  - Call with no arguments: just invoke screenshot_preview
-  - **IMPORTANT**: Call this AFTER you finish creating/editing files, not before. The preview needs the files to exist first.
-  - When you receive the screenshot, describe what you see and identify any issues.
-
-### Efficiency Tips:
-- Use **batch_create_files** when creating 2+ files — it's much faster.
-- Use **get_project_tree** before making major changes to understand what exists.
-- Use **search_files** with searchContents:true to find specific code patterns.
-- Always **read_file** before editing — never guess at content.
-- Use **screenshot_preview** after building UI to verify it looks right — you have eyes!
-
-## DEPLOYMENT
-
-After building a complete site, ALWAYS call **deploy_site** to publish it. Tell the user the live URL so they can share it. If the user asks to deploy, publish, or share their site, call deploy_site immediately.
-
-## DESIGN SYSTEM RULES
-
-Every project gets a **unique, distinctive design** — never generic.
-
-### Typography
-- Pick a distinctive Google Font pairing. Import via \`<link>\` in index.html.
-- BANNED fonts: Inter, Roboto, Arial, Poppins. Use unique fonts like Playfair Display, Space Grotesk, DM Serif, Outfit, Sora, etc.
-- Define as CSS variables: \`--font-display\` for headings, \`--font-body\` for text.
-
-### Colors
-- Choose a bold, unique color palette for each project. Define as CSS custom properties in :root.
-- BANNED: purple gradients, floating blobs, rainbow accents.
-- Every project needs: primary, primary-light, accent, surface, surface-alt, text, text-muted, border colors.
-- If dark mode: every \`dark:bg-*\` needs matching \`dark:text-*\` on all children.
-
-### Layout & Composition
-- Mix layout patterns: bento grids, split hero (60/40), asymmetric columns, overlapping cards.
-- Never just stack centered text blocks. Use creative spatial relationships.
-- Hero section must be impactful: large typography, strong visual hierarchy.
-
-### Mobile-First Responsive (mandatory)
-- Nav: hamburger menu on mobile → horizontal nav on desktop.
-- Grids: grid-cols-1 → md:grid-cols-2 → lg:grid-cols-3.
-- Hero text: text-3xl → md:text-5xl lg:text-6xl.
-- Spacing: px-4 py-12 mobile → px-8 py-24 desktop.
-- Touch targets: min 44x44px. No horizontal overflow.
-- Footer: stack vertically on mobile, grid on desktop.
-
-### Motion & Animations
-- Page load: staggered fadeInUp with animation-delay per element.
-- Cards: hover:shadow-xl hover:-translate-y-2 transition-all duration-300.
-- Buttons: active:scale-95 transition-transform.
-- Define @keyframes in styles.css for custom animations.
-
-### Icons
-- **UI icons** (arrows, menus, etc.): Use Lucide via CDN: \`<script src="https://unpkg.com/lucide@latest"></script>\` then call \`lucide.createIcons()\` in JS.
-- **Brand/social/tech icons** (LinkedIn, GitHub, Twitter, React, Python, etc.): Use Simple Icons via \`<img>\` tag:
-  \`<img src="https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/{name}.svg" alt="{name}" class="w-5 h-5">\`
-  Examples: \`linkedin.svg\`, \`github.svg\`, \`twitter.svg\`, \`instagram.svg\`, \`react.svg\`, \`python.svg\`, \`javascript.svg\`, \`figma.svg\`
-  Note: Simple Icons SVGs are black by default. Use CSS \`filter: invert(1)\` for white icons on dark backgrounds, or \`filter: brightness(0) saturate(100%) ...\` for custom colors.
-- NEVER use emojis as icons. Always use proper SVG icons from Lucide or Simple Icons.
-
-### Images (CRITICAL — ALWAYS USE)
-- **EVERY website/app MUST include real images.** Never leave image placeholders empty or use broken URLs.
-- Use this API for ALL images: \`https://api.a0.dev/assets/image?text={description}&aspect={ratio}\`
-- Only THREE aspect ratios are supported: \`16:9\` (landscape — hero, banner, cards), \`1:1\` (square — avatars, profiles, logos), and \`9:16\` (portrait — mobile, stories, tall images). NO other ratios work.
-- Description MUST be specific and vivid: \`text=modern%20coffee%20shop%20interior%20warm%20lighting%20wooden%20tables\` NOT \`text=coffee\`
-- URL-encode the text parameter (spaces → %20)
-- Examples:
-  - Hero: \`https://api.a0.dev/assets/image?text=aerial%20view%20luxury%20resort%20turquoise%20ocean%20palm%20trees&aspect=16:9\`
-  - Team photo: \`https://api.a0.dev/assets/image?text=professional%20headshot%20smiling%20woman%20business%20attire&aspect=1:1\`
-  - Product: \`https://api.a0.dev/assets/image?text=minimalist%20leather%20watch%20dark%20background%20studio%20lighting&aspect=16:9\`
-- Add \`&seed=12345\` for consistent images (different seeds = different images)
-- Use at MINIMUM: 1 hero image, 1 image per card/section, team/profile photos where relevant
-
-### Content
-- Use REAL, specific content: actual names, prices, dates, descriptions.
-- NEVER use lorem ipsum or placeholder text.
-- Build ALL pages and sections fully — never "coming soon" placeholders.
-
-### Background & Texture
-- Add depth with subtle gradients, grain overlays, or mesh patterns.
-- Never use flat solid color backgrounds alone.
-
-## ADVANCED ARCHITECTURE PATTERNS
-
-### State Management:
-For complex apps, use a simple pub/sub event system:
-\`\`\`
-// state.js — central state management
-const state = { user: null, cart: [], theme: 'light' };
-const listeners = new Map();
-function subscribe(key, fn) { if (!listeners.has(key)) listeners.set(key, []); listeners.get(key).push(fn); }
-function setState(key, value) { state[key] = value; (listeners.get(key) || []).forEach(fn => fn(value)); }
-function getState(key) { return state[key]; }
-\`\`\`
-
-### Component Pattern:
-For larger apps, organize code into component render functions:
-\`\`\`
-// Each component returns an HTML string and optionally attaches event listeners
-function renderProductCard(product) {
-  return \\\`<div class="card" data-id="\${product.id}">...</div>\\\`;
-}
-// After inserting HTML, attach listeners: document.querySelectorAll('[data-id]').forEach(...)
-\`\`\`
-
-### Data Layer:
-Separate data from presentation. Create \`data.js\` with all content arrays, \`api.js\` for data fetching, and keep UI rendering in \`app.js\` or component-specific files.
-
-### Local Storage Persistence:
-Use localStorage for user preferences, cart state, form data, and app settings:
-\`\`\`
-const saved = JSON.parse(localStorage.getItem('appState') || '{}');
-function persist(key, value) { const s = JSON.parse(localStorage.getItem('appState')||'{}'); s[key]=value; localStorage.setItem('appState', JSON.stringify(s)); }
-\`\`\`
-
-### Animation Library Pattern:
-For scroll-triggered animations, use IntersectionObserver:
-\`\`\`
-const observer = new IntersectionObserver((entries) => {
-  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('animate-in'); observer.unobserve(e.target); } });
-}, { threshold: 0.1 });
-document.querySelectorAll('.animate-on-scroll').forEach(el => observer.observe(el));
-\`\`\`
-
-## MANDATORY RULES
-
-1. **NEVER paste code in chat.** Always use create_file, edit_file, or batch_create_files. The user sees files update live.
-
-2. **ALWAYS include images.** Every website must use \`https://api.a0.dev/assets/image?text={description}&aspect={ratio}\` for hero images, cards, profiles, etc. A website without images looks broken.
-
-3. **Before editing, read first.** Use read_file to see exact content, then edit_file with search/replace. Never guess at file contents.
-
-4. **For websites/apps:** Start with \`get_project_tree\` to understand existing state. Then create files: \`index.html\` (Tailwind CDN + Google Fonts + Lucide icons), \`styles.css\` (CSS variables, custom animations, textures), \`app.js\` (routing, interactivity, icon init). Use \`batch_create_files\` to scaffold all files at once.
-
-5. **Keep chat text brief** (1-2 sentences). Let tool calls do the work. Show progress, not process.
-
-6. **Build complete, polished, production-quality UIs.** Every project should look like a real product — never a tutorial demo or placeholder. Include micro-interactions, loading states, error handling, and responsive design.
-
-7. **Use batch_create_files** when scaffolding new projects or creating multiple files — it's significantly faster.
-
-8. **Think before coding.** For complex requests, plan the file structure and architecture first, then execute. Use get_project_tree to understand what exists.
-
-9. **Error resilience.** Add try/catch blocks around data operations, graceful fallbacks for missing images, and user-friendly error messages.
-
-10. **Accessibility.** Use semantic HTML (nav, main, section, article, footer), ARIA labels, proper heading hierarchy, alt text on images, and keyboard-navigable interfaces.
-
-11. **Visual verification.** After building or significantly editing a UI, call **screenshot_preview** to see the actual rendered result. If something looks wrong, fix it immediately. Don't just assume your code is correct — verify visually.`;
+function truncateToolResult(result: string): string {
+  if (result.length <= MAX_TOOL_RESULT) return result;
+  const truncated = result.slice(0, MAX_TOOL_RESULT);
+  const lines = result.split("\n").length;
+  return truncated + `\n\n[Truncated — ${result.length} chars, ${lines} lines total. Use read_file with startLine/endLine for specific sections.]`;
 }
 
-// ─── Tag-Based Tool Call Parser ──────────────────────────────────────────────
-
-interface ParsedToolCall {
-  name: string;
-  arguments: Record<string, unknown>;
-  raw: string;
-}
-
-/**
- * Parse <tool_call>...</tool_call> blocks from text.
- * Returns the tool calls found and the cleaned text (without tool_call blocks).
- */
-function parseToolCallsFromText(text: string): { toolCalls: ParsedToolCall[]; cleanText: string } {
-  const toolCalls: ParsedToolCall[] = [];
-  const regex = /<tool_call>([\s\S]*?)<\/tool_call>/g;
-  let match;
-
-  while ((match = regex.exec(text)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1].trim());
-      if (parsed.name && parsed.arguments) {
-        toolCalls.push({
-          name: parsed.name,
-          arguments: parsed.arguments,
-          raw: match[0],
-        });
-      }
-    } catch {
-      // Try lenient parse - handle common JSON issues
-      try {
-        const cleaned = match[1].trim()
-          .replace(/,\s*}/g, "}") // trailing commas
-          .replace(/,\s*]/g, "]");
-        const parsed = JSON.parse(cleaned);
-        if (parsed.name && parsed.arguments) {
-          toolCalls.push({ name: parsed.name, arguments: parsed.arguments, raw: match[0] });
-        }
-      } catch {
-        // skip unparseable tool calls
-      }
-    }
-  }
-
-  // Also try to catch unclosed tool_call (model forgot closing tag)
-  const unclosedRegex = /<tool_call>([\s\S]*?)$/;
-  const unclosedMatch = text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "").match(unclosedRegex);
-  if (unclosedMatch) {
-    try {
-      const parsed = JSON.parse(unclosedMatch[1].trim());
-      if (parsed.name && parsed.arguments) {
-        toolCalls.push({ name: parsed.name, arguments: parsed.arguments, raw: unclosedMatch[0] });
-      }
-    } catch { /* skip */ }
-  }
-
-  // Remove tool_call blocks from text for display
-  const cleanText = text
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
-    .replace(/<tool_call>[\s\S]*$/g, "")
-    .trim();
-
-  return { toolCalls, cleanText };
-}
-
-// ─── Stream Consumer ─────────────────────────────────────────────────────────
-
-interface StreamResult {
-  fullText: string;       // raw text including tool_call tags
-  continuationState: unknown | null; // server continuation state for timeout resume
-  cleanText: string;      // text with tool_call tags stripped
-  parsedToolCalls: ParsedToolCall[];
-  nativeToolCalls: { id: string; type: string; function: { name: string; arguments: string } }[];
-  finishReason: string | null;
-  builtinStatuses: BuiltinToolStatus[];
-}
-
-async function consumeStream(
-  response: Response,
-  onToken: (token: string) => void,
-  onToolStatus: (status: BuiltinToolStatus) => void,
-  signal: AbortSignal
-): Promise<StreamResult> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("No response body");
-
-  const decoder = new TextDecoder();
-  let fullText = "";
-  const nativeToolCalls: StreamResult["nativeToolCalls"] = [];
-  let finishReason: string | null = null;
-  const builtinStatuses: BuiltinToolStatus[] = [];
-  let continuationState: unknown | null = null;
-  let sseBuffer = "";
-
-  // For smart display: buffer text near tool_call tags so we don't show them
-  let displayBuffer = "";
-  let insideToolCall = false;
-
-  function flushDisplayBuffer() {
-    if (displayBuffer && !insideToolCall) {
-      onToken(displayBuffer);
-      displayBuffer = "";
-    }
-  }
-
-  while (true) {
-    if (signal.aborted) break;
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    sseBuffer += decoder.decode(value, { stream: true });
-    const lines = sseBuffer.split("\n");
-    sseBuffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed === "data: [DONE]") continue;
-      if (!trimmed.startsWith("data: ")) continue;
-
-      try {
-        const chunk = JSON.parse(trimmed.slice(6));
-        const delta = chunk?.choices?.[0]?.delta;
-        const reason = chunk?.choices?.[0]?.finish_reason;
-
-        if (reason) finishReason = reason;
-
-        // Continuation state — server is about to timeout, sends state to resume
-        if (delta?.continuation) {
-          continuationState = delta.continuation;
-        }
-
-        // Text content — accumulate and selectively display
-        if (delta?.content) {
-          fullText += delta.content;
-          displayBuffer += delta.content;
-
-          // Check if we're entering a tool_call block
-          if (displayBuffer.includes("<tool_call>")) {
-            // Show text before the tag
-            const beforeTag = displayBuffer.split("<tool_call>")[0];
-            if (beforeTag) onToken(beforeTag);
-            displayBuffer = "";
-            insideToolCall = true;
-          }
-
-          // Check if tool_call block closed
-          if (insideToolCall && fullText.includes("</tool_call>")) {
-            // Check if there's text after the closing tag
-            const afterLastClose = fullText.split("</tool_call>").pop() || "";
-            if (!afterLastClose.includes("<tool_call>")) {
-              insideToolCall = false;
-              displayBuffer = afterLastClose.split("\n").pop() || "";
-            }
-          }
-
-          // If not inside a tool call, flush buffer periodically
-          if (!insideToolCall && displayBuffer.length > 0 && !displayBuffer.includes("<tool_c")) {
-            onToken(displayBuffer);
-            displayBuffer = "";
-          }
-        }
-
-        // Built-in tool status events (server-side tools like web_search)
-        if (delta?.custom_status) {
-          const status: BuiltinToolStatus = {
-            name: delta.custom_status.name,
-            type: delta.custom_status.type,
-            arguments: delta.custom_status.arguments,
-          };
-          builtinStatuses.push(status);
-          onToolStatus(status);
-        }
-
-        // Native OpenAI tool call deltas (fallback support)
-        if (delta?.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            if (!nativeToolCalls[tc.index]) {
-              nativeToolCalls[tc.index] = {
-                id: tc.id || "",
-                type: tc.type || "function",
-                function: { name: tc.function?.name || "", arguments: "" },
-              };
-            }
-            if (tc.id) nativeToolCalls[tc.index].id = tc.id;
-            if (tc.function?.name) nativeToolCalls[tc.index].function.name = tc.function.name;
-            if (tc.function?.arguments) nativeToolCalls[tc.index].function.arguments += tc.function.arguments;
-          }
-        }
-      } catch {
-        // ignore parse errors
-      }
-    }
-  }
-
-  // Flush any remaining display buffer
-  if (displayBuffer && !insideToolCall) {
-    onToken(displayBuffer);
-  }
-
-  // Parse tool calls from the full text
-  const { toolCalls: parsedToolCalls, cleanText } = parseToolCallsFromText(fullText);
+function buildAITools(executor: ToolExecutor) {
+  // Wrapper that executes a tool and truncates the result
+  const exec = async (name: string, args: Record<string, unknown>): Promise<string> => {
+    const result = await executor(name, args);
+    return truncateToolResult(result);
+  };
 
   return {
-    fullText,
-    cleanText,
-    continuationState,
-    parsedToolCalls,
-    nativeToolCalls: nativeToolCalls.filter(Boolean),
-    finishReason,
-    builtinStatuses,
+    read_file: tool({
+      description: "Read file contents. Path must be relative, NO leading slash.",
+      parameters: z.object({
+        path: z.string(),
+        startLine: z.number().optional(),
+        endLine: z.number().optional(),
+      }),
+      execute: async (args) => exec("read_file", args),
+    }),
+    list_files: tool({
+      description: "List files in directory. Use '' for root.",
+      parameters: z.object({ path: z.string().default("") }),
+      execute: async (args) => exec("list_files", { ...args, path: args.path ?? "" }),
+    }),
+    create_file: tool({
+      description: "Create file with content. Parent dirs auto-created.",
+      parameters: z.object({ path: z.string(), content: z.string().optional() }),
+      execute: async (args) => exec("create_file", args),
+    }),
+    edit_file: tool({
+      description: "Edit file via search/replace or full rewrite (newContent).",
+      parameters: z.object({
+        path: z.string(),
+        search: z.string().optional(),
+        replace: z.string().optional(),
+        newContent: z.string().optional(),
+      }),
+      execute: async (args) => exec("edit_file", args),
+    }),
+    delete_file: tool({
+      description: "Delete file or directory.",
+      parameters: z.object({ path: z.string() }),
+      execute: async (args) => exec("delete_file", args),
+    }),
+    batch_create_files: tool({
+      description: "Create multiple files at once. Much faster than individual creates.",
+      parameters: z.object({
+        files: z.union([
+          z.array(z.object({ path: z.string(), content: z.string() })),
+          z.string(), // LLM sometimes sends stringified JSON
+        ]),
+      }),
+      execute: async (args) => {
+        // Handle case where LLM sends files as a JSON string instead of array
+        let files = args.files;
+        if (typeof files === "string") {
+          try { files = JSON.parse(files); } catch { return "Error: invalid files JSON"; }
+        }
+        return exec("batch_create_files", { files });
+      },
+    }),
+    get_project_tree: tool({
+      description: "Visual tree of entire project with line counts.",
+      parameters: z.object({}),
+      execute: async () => exec("get_project_tree", {}),
+    }),
+    search_files: tool({
+      description: "Search files by name or content.",
+      parameters: z.object({
+        query: z.string(),
+        searchContents: z.boolean().optional(),
+      }),
+      execute: async (args) => exec("search_files", args),
+    }),
+    run_script: tool({
+      description: "Execute JS/Node.js code and return output. Use console.log().",
+      parameters: z.object({
+        code: z.string(),
+        timeout: z.number().optional(),
+      }),
+      execute: async (args) => exec("run_script", args),
+    }),
   };
 }
 
@@ -689,22 +429,127 @@ export function useChat(
           }
         }
 
-        // Build conversation history
+        // Build conversation history — keep last 30 messages to limit token usage
+        const MAX_CONTEXT_MESSAGES = 30;
         const allMessages = [...messagesRef.current, userMsg];
-        const conversationMessages = allMessages
-          .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "tool")
-          .map((m) => {
-            const msg: Record<string, unknown> = { role: m.role, content: m.content };
-            if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
-            return msg;
-          });
+        let conversationMessages = allMessages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          }));
 
-        const apiMessages: Record<string, unknown>[] = [
-          { role: "system", content: buildSystemPrompt(contextRef.current) },
-          ...conversationMessages,
-        ];
+        // Trim old messages but always keep at least the latest user message
+        if (conversationMessages.length > MAX_CONTEXT_MESSAGES) {
+          conversationMessages = conversationMessages.slice(-MAX_CONTEXT_MESSAGES);
+        }
 
-        await runChatLoop(apiMessages, controller);
+        const assistantId = generateId();
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: assistantId,
+            role: "assistant",
+            content: "",
+            streaming: true,
+            timestamp: new Date(),
+            toolCalls: [],
+            builtinToolStatuses: [],
+          },
+        ]);
+
+        const maxSteps = mode === "agent" ? 50 : 10;
+        const aiTools = toolExecutor ? buildAITools(toolExecutor) : undefined;
+
+        const result = streamText({
+          model: provider("kilo-auto/free"),
+          system: buildSystemPrompt(contextRef.current),
+          messages: conversationMessages,
+          tools: aiTools,
+          stopWhen: stepCountIs(maxSteps),
+          abortSignal: controller.signal,
+          maxOutputTokens: 16384,
+          temperature: 0.7,
+
+          onChunk({ chunk }) {
+            if (chunk.type === "text-delta") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: m.content + chunk.textDelta }
+                    : m
+                )
+              );
+            }
+          },
+
+          experimental_onToolCallStart({ toolCall }) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      toolCalls: [
+                        ...(m.toolCalls || []),
+                        {
+                          id: toolCall.toolCallId,
+                          name: toolCall.toolName,
+                          arguments: JSON.stringify(toolCall.input),
+                          status: "running" as const,
+                        },
+                      ],
+                    }
+                  : m
+              )
+            );
+          },
+
+          experimental_onToolCallFinish({ toolCall, success, ...rest }) {
+            const resultStr = success
+              ? typeof (rest as any).output === "string"
+                ? (rest as any).output
+                : JSON.stringify((rest as any).output)
+              : `Error: ${(rest as any).error instanceof Error ? (rest as any).error.message : "Tool execution failed"}`;
+            const status = success ? "done" as const : "error" as const;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      toolCalls: m.toolCalls?.map((tc) =>
+                        tc.id === toolCall.toolCallId
+                          ? { ...tc, status, result: resultStr }
+                          : tc
+                      ),
+                    }
+                  : m
+              )
+            );
+          },
+
+          onStepFinish({ text }) {
+            // After each step, update the displayed content with the full text so far
+            if (text) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: text } : m
+                )
+              );
+            }
+          },
+        });
+
+        // Wait for the stream to complete
+        const finalText = await result.text;
+
+        // Mark streaming as done with the final text
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: finalText, streaming: false }
+              : m
+          )
+        );
 
         // After the chat loop completes, create a checkpoint tied to this user message
         if (checkpointManagerRef.current) {
@@ -718,10 +563,21 @@ export function useChat(
       } catch (err: unknown) {
         if (err instanceof Error && err.name !== "AbortError") {
           const errMsg = err instanceof Error ? err.message : "Unknown error";
-          setMessages((prev) => [
-            ...prev,
-            { id: generateId(), role: "assistant", content: `Error: ${errMsg}`, streaming: false, timestamp: new Date() },
-          ]);
+          setMessages((prev) => {
+            // Try to update the last assistant message if it exists and is streaming
+            const lastMsg = prev[prev.length - 1];
+            if (lastMsg && lastMsg.role === "assistant" && lastMsg.streaming) {
+              return prev.map((m) =>
+                m.id === lastMsg.id
+                  ? { ...m, content: m.content || `Error: ${errMsg}`, streaming: false }
+                  : m
+              );
+            }
+            return [
+              ...prev,
+              { id: generateId(), role: "assistant", content: `Error: ${errMsg}`, streaming: false, timestamp: new Date() },
+            ];
+          });
         }
       } finally {
         setIsStreaming(false);
@@ -730,274 +586,6 @@ export function useChat(
     },
     [isStreaming, mode, toolExecutor]
   );
-
-  async function runChatLoop(
-    apiMessages: Record<string, unknown>[],
-    controller: AbortController
-  ) {
-    let loopCount = 0;
-    const maxLoops = mode === "agent" ? 50 : 10;
-
-    while (loopCount < maxLoops) {
-      loopCount++;
-
-      const assistantId = generateId();
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: assistantId,
-          role: "assistant",
-          content: "",
-          streaming: true,
-          timestamp: new Date(),
-          toolCalls: [],
-          builtinToolStatuses: [],
-        },
-      ]);
-
-      // Direct Kilo mode: bypass A0 brain entirely, call Kilo directly.
-      // Kilo handles tool calling natively — our file tools are sent as OpenAI
-      // function calling tools. When Kilo calls a file tool, the server streams
-      // it as tool_call deltas and the client executes it.
-      const body: Record<string, unknown> = {
-        messages: apiMessages,
-        stream: true,
-        max_tokens: 32768,
-        temperature: 0.7,
-        direct_kilo: true,
-        max_steps: 100,
-        tools: FILE_TOOLS,
-      };
-
-      let response = await fetch(API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status} ${response.statusText}`);
-      }
-
-      const result = await consumeStream(
-        response,
-        (token) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, content: m.content + token } : m
-            )
-          );
-        },
-        (status) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, builtinToolStatuses: [...(m.builtinToolStatuses || []), status] }
-                : m
-            )
-          );
-        },
-        controller.signal
-      );
-
-      // Merge tool calls from both sources: tag-based (parsed from text) + native OpenAI format
-      const allToolCalls: { id: string; name: string; args: Record<string, unknown> }[] = [];
-
-      // Tag-based tool calls from text stream
-      for (const tc of result.parsedToolCalls) {
-        if (LOCAL_TOOL_NAMES.has(tc.name)) {
-          allToolCalls.push({ id: generateId(), name: tc.name, args: tc.arguments });
-        }
-      }
-
-      // Native OpenAI tool calls (fallback)
-      for (const tc of result.nativeToolCalls) {
-        if (LOCAL_TOOL_NAMES.has(tc.function.name)) {
-          let args: Record<string, unknown>;
-          try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
-          allToolCalls.push({ id: tc.id || generateId(), name: tc.function.name, args });
-        }
-      }
-
-      // Update the assistant message with clean text and tool calls
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? {
-                ...m,
-                content: result.cleanText,
-                streaming: false,
-                toolCalls: allToolCalls.map((tc) => ({
-                  id: tc.id,
-                  name: tc.name,
-                  arguments: JSON.stringify(tc.args),
-                  status: "pending" as const,
-                })),
-              }
-            : m
-        )
-      );
-
-      // Handle continuation — server timed out, resume with continuation state
-      if (result.finishReason === "continuation" && result.continuationState) {
-        // Re-request with the continuation state to resume where the server left off
-        const contBody: Record<string, unknown> = {
-          messages: apiMessages,
-          stream: true,
-          max_tokens: 32768,
-          temperature: 0.7,
-          direct_kilo: true,
-          max_steps: 100,
-          tools: FILE_TOOLS,
-          _continuation: result.continuationState,
-        };
-
-        const contResponse = await fetch(API_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(contBody),
-          signal: controller.signal,
-        });
-
-        if (contResponse.ok) {
-          // Consume the continuation stream into the same assistant message
-          const contResult = await consumeStream(
-            contResponse,
-            (token) => {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId ? { ...m, content: m.content + token } : m
-                )
-              );
-            },
-            (status) => {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId
-                    ? { ...m, builtinToolStatuses: [...(m.builtinToolStatuses || []), status] }
-                    : m
-                )
-              );
-            },
-            controller.signal
-          );
-
-          // Merge continuation results
-          result.cleanText = (result.cleanText + " " + contResult.cleanText).trim();
-          result.parsedToolCalls.push(...contResult.parsedToolCalls);
-          result.nativeToolCalls.push(...contResult.nativeToolCalls);
-          result.finishReason = contResult.finishReason;
-          result.continuationState = contResult.continuationState;
-
-          // Re-parse tool calls from merged text
-          const mergedParsed = parseToolCallsFromText(result.fullText + contResult.fullText);
-          allToolCalls.length = 0;
-          for (const tc of mergedParsed.toolCalls) {
-            if (LOCAL_TOOL_NAMES.has(tc.name)) {
-              allToolCalls.push({ id: generateId(), name: tc.name, args: tc.arguments });
-            }
-          }
-          for (const tc of contResult.nativeToolCalls) {
-            if (LOCAL_TOOL_NAMES.has(tc.function.name)) {
-              let args: Record<string, unknown>;
-              try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
-              allToolCalls.push({ id: tc.id || generateId(), name: tc.function.name, args });
-            }
-          }
-
-          // Update the message with merged content
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                    ...m,
-                    content: result.cleanText,
-                    streaming: false,
-                    toolCalls: allToolCalls.map((tc) => ({
-                      id: tc.id,
-                      name: tc.name,
-                      arguments: JSON.stringify(tc.args),
-                      status: "pending" as const,
-                    })),
-                  }
-                : m
-            )
-          );
-
-          // If there was another continuation, loop again
-          if (result.finishReason === "continuation" && result.continuationState) {
-            continue;
-          }
-        }
-      }
-
-      // Execute local tool calls if any
-      if (allToolCalls.length > 0 && toolExecutor) {
-        // Direct Kilo mode: always use native OpenAI tool role messages
-        apiMessages.push({
-          role: "assistant",
-          content: result.cleanText || null,
-          tool_calls: allToolCalls.map((tc) => ({
-            id: tc.id,
-            type: "function",
-            function: { name: tc.name, arguments: JSON.stringify(tc.args) },
-          })),
-        });
-
-        for (const tc of allToolCalls) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, toolCalls: m.toolCalls?.map((t) => t.id === tc.id ? { ...t, status: "running" as const } : t) }
-                : m
-            )
-          );
-
-          let toolResult: string;
-          try {
-            toolResult = await toolExecutor(tc.name, tc.args);
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, toolCalls: m.toolCalls?.map((t) => t.id === tc.id ? { ...t, status: "done" as const, result: toolResult } : t) }
-                  : m
-              )
-            );
-          } catch (err) {
-            toolResult = `Error: ${err instanceof Error ? err.message : "Tool execution failed"}`;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, toolCalls: m.toolCalls?.map((t) => t.id === tc.id ? { ...t, status: "error" as const, result: toolResult } : t) }
-                  : m
-              )
-            );
-          }
-
-          // For screenshots: result contains "dataUrl\n\nlayoutReport"
-          // Strip the image data URL — only send the text layout report to the AI
-          // (the image is shown in the chat UI but NOT sent to the API)
-          let apiToolResult = toolResult;
-          if (tc.name === "screenshot_preview" && toolResult.startsWith("data:image/")) {
-            const splitIdx = toolResult.indexOf("\n\n");
-            apiToolResult = splitIdx > 0 ? toolResult.slice(splitIdx + 2) : "Screenshot captured.";
-          }
-
-          apiMessages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            content: apiToolResult,
-          });
-        }
-
-        continue;
-      }
-
-      // No tool calls — we're done
-      break;
-    }
-  }
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();

@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent } from "react";
 import { Plus, X, Trash2 } from "lucide-react";
 import { db } from "@/lib/db";
+import { useActiveProject } from "@/contexts/ProjectContext";
+import { XTerminal } from "@/components/ide/XTerminal";
 
 interface TerminalLine {
   id: number;
@@ -11,6 +13,7 @@ interface TerminalLine {
 interface ShellTab {
   id: string;
   name: string;
+  type: "virtual" | "node";
   lines: TerminalLine[];
   history: string[];
   historyIndex: number;
@@ -18,10 +21,24 @@ interface ShellTab {
   nextLineId: number;
 }
 
+function createNodeShell(id: string, index: number): ShellTab {
+  return {
+    id,
+    name: `node ${index}`,
+    type: "node",
+    lines: [],
+    history: [],
+    historyIndex: -1,
+    cwd: "",
+    nextLineId: 0,
+  };
+}
+
 function createShell(id: string, index: number): ShellTab {
   return {
     id,
     name: `bash ${index}`,
+    type: "virtual",
     lines: [
       { id: 0, type: "info", text: `PiPilot IDE Terminal — Shell ${index}` },
       { id: 1, type: "info", text: "Type 'help' for commands. This terminal operates on the virtual workspace (IndexedDB).\n" },
@@ -34,6 +51,7 @@ function createShell(id: string, index: number): ShellTab {
 }
 
 export function TerminalPanel() {
+  const { activeProjectId } = useActiveProject();
   const [shells, setShells] = useState<ShellTab[]>(() => [createShell("shell-1", 1)]);
   const [activeShellId, setActiveShellId] = useState("shell-1");
   const [input, setInput] = useState("");
@@ -75,6 +93,22 @@ export function TerminalPanel() {
       const cwd = shell.cwd;
       const prompt = cwd ? `${cwd} $` : "$";
 
+      // Helper: get file scoped to active project
+      const getFile = async (path: string) => {
+        const f = await db.files.get(path);
+        return f && f.projectId === activeProjectId ? f : null;
+      };
+
+      // Helper: list files in directory scoped to project
+      const listDir = async (parentPath: string) => {
+        return db.files.where("parentPath").equals(parentPath).and(f => f.projectId === activeProjectId).toArray();
+      };
+
+      // Helper: get all project files
+      const allFiles = async () => {
+        return db.files.where("projectId").equals(activeProjectId).toArray();
+      };
+
       // Add input line and update history
       addLines(shellId, [{ type: "input", text: `${prompt} ${cmd}` }]);
       updateShell(shellId, (s) => ({
@@ -82,6 +116,68 @@ export function TerminalPanel() {
         history: [...s.history, cmd],
         historyIndex: -1,
       }));
+
+      // Special: echo ... > file  (write to file)
+      const echoRedirect = cmd.trim().match(/^echo\s+(.*?)\s*>\s*(\S+)$/);
+      if (echoRedirect) {
+        const echoText = echoRedirect[1].replace(/^["']|["']$/g, "");
+        const filePath = cwd ? `${cwd}/${echoRedirect[2]}` : echoRedirect[2];
+        const ext = echoRedirect[2].split(".").pop()?.toLowerCase() ?? "";
+        const langMap: Record<string, string> = { tsx: "typescript", jsx: "typescript", ts: "typescript", js: "javascript", json: "json", md: "markdown", css: "css", html: "html" };
+        await db.files.put({
+          id: filePath,
+          name: echoRedirect[2].split("/").pop()!,
+          type: "file",
+          parentPath: filePath.includes("/") ? filePath.split("/").slice(0, -1).join("/") : cwd,
+          language: langMap[ext] ?? "plaintext",
+          content: echoText,
+          projectId: activeProjectId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+        addLines(shellId, [{ type: "success", text: `wrote: ${filePath}` }]);
+        return;
+      }
+
+      // Special: echo ... >> file  (append to file)
+      const echoAppend = cmd.trim().match(/^echo\s+(.*?)\s*>>\s*(\S+)$/);
+      if (echoAppend) {
+        const appendText = echoAppend[1].replace(/^["']|["']$/g, "");
+        const filePath = cwd ? `${cwd}/${echoAppend[2]}` : echoAppend[2];
+        const existing = await getFile(filePath);
+        if (existing) {
+          await db.files.update(filePath, { content: (existing.content ?? "") + "\n" + appendText, updatedAt: new Date() });
+        } else {
+          const ext = echoAppend[2].split(".").pop()?.toLowerCase() ?? "";
+          const langMap: Record<string, string> = { tsx: "typescript", jsx: "typescript", ts: "typescript", js: "javascript", json: "json", md: "markdown", css: "css", html: "html" };
+          await db.files.put({
+            id: filePath, name: echoAppend[2].split("/").pop()!, type: "file",
+            parentPath: filePath.includes("/") ? filePath.split("/").slice(0, -1).join("/") : cwd,
+            language: langMap[ext] ?? "plaintext", content: appendText,
+            projectId: activeProjectId, createdAt: new Date(), updatedAt: new Date(),
+          });
+        }
+        addLines(shellId, [{ type: "success", text: `appended to: ${filePath}` }]);
+        return;
+      }
+
+      // Handle && chaining
+      if (cmd.includes("&&")) {
+        const chainedCmds = cmd.split("&&").map(s => s.trim()).filter(Boolean);
+        for (const chainCmd of chainedCmds) {
+          await handleCommand(chainCmd);
+        }
+        return;
+      }
+
+      // Handle ; chaining
+      if (cmd.includes(";")) {
+        const chainedCmds = cmd.split(";").map(s => s.trim()).filter(Boolean);
+        for (const chainCmd of chainedCmds) {
+          await handleCommand(chainCmd);
+        }
+        return;
+      }
 
       const parts = cmd.trim().split(/\s+/);
       const command = parts[0]?.toLowerCase();
@@ -125,6 +221,18 @@ export function TerminalPanel() {
               { type: "output", text: "  clear                Clear terminal" },
               { type: "output", text: "  export <K>=<V>       Set environment variable" },
               { type: "output", text: "  xargs <cmd>          Pipe input to command" },
+              { type: "info", text: "\n── File Writing ──" },
+              { type: "output", text: '  echo "text" > file     Write text to file' },
+              { type: "output", text: '  echo "text" >> file    Append text to file' },
+              { type: "output", text: "  write <file> <text>    Write content to file" },
+              { type: "info", text: "\n── Text Processing ──" },
+              { type: "output", text: "  sort <file>            Sort file lines" },
+              { type: "output", text: "  uniq <file>            Remove adjacent duplicates" },
+              { type: "output", text: "  man <cmd>              Show command manual" },
+              { type: "info", text: "\n── Chaining & Redirection ──" },
+              { type: "output", text: "  cmd1 && cmd2           Run cmd2 if cmd1 succeeds" },
+              { type: "output", text: "  cmd1 ; cmd2            Run commands sequentially" },
+              { type: "output", text: "  Tab                    Autocomplete file/folder names" },
               { type: "output", text: "" },
             ]);
             break;
@@ -149,7 +257,7 @@ export function TerminalPanel() {
               break;
             }
             const targetPath = cwd ? `${cwd}/${arg}` : arg;
-            const dir = await db.files.get(targetPath);
+            const dir = await getFile(targetPath);
             if (!dir || dir.type !== "folder") {
               addLines(shellId, [{ type: "error", text: `cd: no such directory: ${arg}` }]);
             } else {
@@ -163,9 +271,9 @@ export function TerminalPanel() {
               ? (cwd ? `${cwd}/${arg}` : arg)
               : cwd || "";
             const parentPath = lsPath || "";
-            const items = await db.files.where("parentPath").equals(parentPath).toArray();
+            const items = await listDir(parentPath);
             if (items.length === 0 && lsPath) {
-              const exists = await db.files.get(lsPath);
+              const exists = await getFile(lsPath);
               if (!exists) {
                 addLines(shellId, [{ type: "error", text: `ls: cannot access '${arg || "."}': No such directory` }]);
                 break;
@@ -189,7 +297,7 @@ export function TerminalPanel() {
           case "cat": {
             if (!arg) { addLines(shellId, [{ type: "error", text: "cat: missing file operand" }]); break; }
             const catPath = cwd ? `${cwd}/${arg}` : arg;
-            const file = await db.files.get(catPath);
+            const file = await getFile(catPath);
             if (!file) { addLines(shellId, [{ type: "error", text: `cat: ${arg}: No such file` }]); break; }
             if (file.type === "folder") { addLines(shellId, [{ type: "error", text: `cat: ${arg}: Is a directory` }]); break; }
             const content = file.content ?? "";
@@ -213,7 +321,7 @@ export function TerminalPanel() {
             else if (arg.match(/^-(\d+)\s+(.+)$/)) { const m = arg.match(/^-(\d+)\s+(.+)$/)!; headN = parseInt(m[1]); headArg = m[2]; }
             if (!headArg) { addLines(shellId, [{ type: "error", text: "head: missing file operand" }]); break; }
             const headPath = cwd ? `${cwd}/${headArg}` : headArg;
-            const headFile = await db.files.get(headPath);
+            const headFile = await getFile(headPath);
             if (!headFile) { addLines(shellId, [{ type: "error", text: `head: ${headArg}: No such file` }]); break; }
             const headContent = (headFile.content ?? "").split("\n").slice(0, headN).join("\n");
             addLines(shellId, [{ type: "output", text: headContent }]);
@@ -228,7 +336,7 @@ export function TerminalPanel() {
             else if (arg.match(/^-(\d+)\s+(.+)$/)) { const m = arg.match(/^-(\d+)\s+(.+)$/)!; tailN = parseInt(m[1]); tailArg = m[2]; }
             if (!tailArg) { addLines(shellId, [{ type: "error", text: "tail: missing file operand" }]); break; }
             const tailPath = cwd ? `${cwd}/${tailArg}` : tailArg;
-            const tailFile = await db.files.get(tailPath);
+            const tailFile = await getFile(tailPath);
             if (!tailFile) { addLines(shellId, [{ type: "error", text: `tail: ${tailArg}: No such file` }]); break; }
             const tailLines = (tailFile.content ?? "").split("\n");
             const tailContent = tailLines.slice(-tailN).join("\n");
@@ -239,7 +347,7 @@ export function TerminalPanel() {
           case "wc": {
             if (!arg) { addLines(shellId, [{ type: "error", text: "wc: missing file operand" }]); break; }
             const wcPath = cwd ? `${cwd}/${arg}` : arg;
-            const wcFile = await db.files.get(wcPath);
+            const wcFile = await getFile(wcPath);
             if (!wcFile) { addLines(shellId, [{ type: "error", text: `wc: ${arg}: No such file` }]); break; }
             const wcLines = (wcFile.content ?? "").split("\n").length;
             const wcChars = (wcFile.content ?? "").length;
@@ -249,8 +357,8 @@ export function TerminalPanel() {
 
           case "find": {
             if (!arg) { addLines(shellId, [{ type: "error", text: "find: missing pattern" }]); break; }
-            const allFiles = await db.files.where("type").equals("file").toArray();
-            const matches = allFiles
+            const findAllFiles = (await allFiles()).filter(f => f.type === "file");
+            const matches = findAllFiles
               .filter((f) => f.name.toLowerCase().includes(arg.toLowerCase()))
               .slice(0, 25);
             if (matches.length === 0) {
@@ -271,7 +379,7 @@ export function TerminalPanel() {
               if (!rGrepParts) { addLines(shellId, [{ type: "error", text: 'grep -r: usage: grep -r <pattern> [path]' }]); break; }
               const rQuery = rGrepParts[1];
               const rBasePath = rGrepParts[2] ? (cwd ? `${cwd}/${rGrepParts[2]}` : rGrepParts[2]) : cwd || "";
-              const allGrepFiles = await db.files.where("type").equals("file").toArray();
+              const allGrepFiles = (await allFiles()).filter(f => f.type === "file");
               const filteredFiles = rBasePath
                 ? allGrepFiles.filter((f) => f.id.startsWith(rBasePath))
                 : allGrepFiles;
@@ -301,7 +409,7 @@ export function TerminalPanel() {
             }
             const grepQuery = grepParts[1];
             const grepFilePath = cwd ? `${cwd}/${grepParts[2]}` : grepParts[2];
-            const grepFile = await db.files.get(grepFilePath);
+            const grepFile = await getFile(grepFilePath);
             if (!grepFile) { addLines(shellId, [{ type: "error", text: `grep: ${grepParts[2]}: No such file` }]); break; }
             const grepLines = (grepFile.content ?? "").split("\n");
             const grepMatches: string[] = [];
@@ -324,8 +432,8 @@ export function TerminalPanel() {
           case "touch": {
             if (!arg) { addLines(shellId, [{ type: "error", text: "touch: missing file operand" }]); break; }
             const touchPath = cwd ? `${cwd}/${arg}` : arg;
-            const existing = await db.files.get(touchPath);
-            if (existing) {
+            const touchExisting = await getFile(touchPath);
+            if (touchExisting) {
               await db.files.update(touchPath, { updatedAt: new Date() });
               addLines(shellId, [{ type: "success", text: `touched: ${arg}` }]);
             } else {
@@ -341,6 +449,7 @@ export function TerminalPanel() {
                 parentPath: cwd,
                 language: langMap[ext ?? ""] ?? "plaintext",
                 content: "",
+                projectId: activeProjectId,
                 createdAt: new Date(),
                 updatedAt: new Date(),
               });
@@ -354,14 +463,14 @@ export function TerminalPanel() {
             const rmRecursive = arg.startsWith("-r ") || arg.startsWith("-rf ") || arg.startsWith("-fr ");
             const rmTarget = rmRecursive ? arg.replace(/^-r[f]?\s+|-fr\s+/, "") : arg;
             const rmPath = cwd ? `${cwd}/${rmTarget}` : rmTarget;
-            const rmFile = await db.files.get(rmPath);
+            const rmFile = await getFile(rmPath);
             if (!rmFile) { addLines(shellId, [{ type: "error", text: `rm: ${rmTarget}: No such file or directory` }]); break; }
             if (rmFile.type === "folder" && !rmRecursive) {
               addLines(shellId, [{ type: "error", text: `rm: ${rmTarget}: Is a directory (use rm -r)` }]); break;
             }
             if (rmFile.type === "folder") {
               // Recursive delete
-              const rmChildren = await db.files.toArray();
+              const rmChildren = await allFiles();
               const toDelete = rmChildren.filter((f) => f.id === rmPath || f.id.startsWith(rmPath + "/"));
               for (const f of toDelete) await db.files.delete(f.id);
               addLines(shellId, [{ type: "success", text: `removed: ${rmPath} (${toDelete.length} items)` }]);
@@ -375,13 +484,14 @@ export function TerminalPanel() {
           case "mkdir": {
             if (!arg) { addLines(shellId, [{ type: "error", text: "mkdir: missing operand" }]); break; }
             const mkdirPath = cwd ? `${cwd}/${arg}` : arg;
-            const mkdirExisting = await db.files.get(mkdirPath);
+            const mkdirExisting = await getFile(mkdirPath);
             if (mkdirExisting) { addLines(shellId, [{ type: "error", text: `mkdir: ${arg}: already exists` }]); break; }
             await db.files.put({
               id: mkdirPath,
               name: arg.split("/").pop()!,
               type: "folder",
               parentPath: cwd,
+              projectId: activeProjectId,
               createdAt: new Date(),
               updatedAt: new Date(),
             });
@@ -394,7 +504,7 @@ export function TerminalPanel() {
             if (!cpMatch) { addLines(shellId, [{ type: "error", text: "cp: usage: cp <source> <destination>" }]); break; }
             const cpSrc = cwd ? `${cwd}/${cpMatch[1]}` : cpMatch[1];
             const cpDest = cwd ? `${cwd}/${cpMatch[2]}` : cpMatch[2];
-            const cpFile = await db.files.get(cpSrc);
+            const cpFile = await getFile(cpSrc);
             if (!cpFile) { addLines(shellId, [{ type: "error", text: `cp: ${cpMatch[1]}: No such file` }]); break; }
             if (cpFile.type === "folder") { addLines(shellId, [{ type: "error", text: `cp: ${cpMatch[1]}: Is a directory (use cp -r)` }]); break; }
             const cpExt = cpMatch[2].split(".").pop()?.toLowerCase();
@@ -403,7 +513,7 @@ export function TerminalPanel() {
               id: cpDest, name: cpMatch[2].split("/").pop()!, type: "file",
               parentPath: cpDest.includes("/") ? cpDest.split("/").slice(0, -1).join("/") : cwd,
               language: cpLangMap[cpExt ?? ""] ?? cpFile.language ?? "plaintext",
-              content: cpFile.content ?? "", createdAt: new Date(), updatedAt: new Date(),
+              content: cpFile.content ?? "", projectId: activeProjectId, createdAt: new Date(), updatedAt: new Date(),
             });
             addLines(shellId, [{ type: "success", text: `copied: ${cpSrc} → ${cpDest}` }]);
             break;
@@ -414,12 +524,12 @@ export function TerminalPanel() {
             if (!mvMatch) { addLines(shellId, [{ type: "error", text: "mv: usage: mv <source> <destination>" }]); break; }
             const mvSrc = cwd ? `${cwd}/${mvMatch[1]}` : mvMatch[1];
             const mvDest = cwd ? `${cwd}/${mvMatch[2]}` : mvMatch[2];
-            const mvFile = await db.files.get(mvSrc);
+            const mvFile = await getFile(mvSrc);
             if (!mvFile) { addLines(shellId, [{ type: "error", text: `mv: ${mvMatch[1]}: No such file` }]); break; }
             await db.files.put({
               ...mvFile, id: mvDest, name: mvMatch[2].split("/").pop()!,
               parentPath: mvDest.includes("/") ? mvDest.split("/").slice(0, -1).join("/") : cwd,
-              updatedAt: new Date(),
+              projectId: activeProjectId, updatedAt: new Date(),
             });
             await db.files.delete(mvSrc);
             addLines(shellId, [{ type: "success", text: `moved: ${mvSrc} → ${mvDest}` }]);
@@ -428,7 +538,7 @@ export function TerminalPanel() {
 
           case "tree": {
             const treePath = arg ? (cwd ? `${cwd}/${arg}` : arg) : cwd || "";
-            const treeAllFiles = await db.files.toArray();
+            const treeAllFiles = await allFiles();
             const treeLines: string[] = [];
 
             function buildTreeOutput(parentPath: string, prefix: string) {
@@ -461,7 +571,7 @@ export function TerminalPanel() {
           case "stat": {
             if (!arg) { addLines(shellId, [{ type: "error", text: "stat: missing file operand" }]); break; }
             const statPath = cwd ? `${cwd}/${arg}` : arg;
-            const statFile = await db.files.get(statPath);
+            const statFile = await getFile(statPath);
             if (!statFile) { addLines(shellId, [{ type: "error", text: `stat: ${arg}: No such file` }]); break; }
             const statLines = statFile.content ? statFile.content.split("\n").length : 0;
             const statSize = statFile.content ? statFile.content.length : 0;
@@ -478,7 +588,7 @@ export function TerminalPanel() {
 
           case "du": {
             const duPath = arg ? (cwd ? `${cwd}/${arg}` : arg) : cwd || "";
-            const duAllFiles = await db.files.where("type").equals("file").toArray();
+            const duAllFiles = (await allFiles()).filter(f => f.type === "file");
             const duFiltered = duPath
               ? duAllFiles.filter((f) => f.id.startsWith(duPath))
               : duAllFiles;
@@ -495,8 +605,8 @@ export function TerminalPanel() {
             if (!diffMatch) { addLines(shellId, [{ type: "error", text: "diff: usage: diff <file1> <file2>" }]); break; }
             const diffPath1 = cwd ? `${cwd}/${diffMatch[1]}` : diffMatch[1];
             const diffPath2 = cwd ? `${cwd}/${diffMatch[2]}` : diffMatch[2];
-            const diffFile1 = await db.files.get(diffPath1);
-            const diffFile2 = await db.files.get(diffPath2);
+            const diffFile1 = await getFile(diffPath1);
+            const diffFile2 = await getFile(diffPath2);
             if (!diffFile1) { addLines(shellId, [{ type: "error", text: `diff: ${diffMatch[1]}: No such file` }]); break; }
             if (!diffFile2) { addLines(shellId, [{ type: "error", text: `diff: ${diffMatch[2]}: No such file` }]); break; }
             const lines1 = (diffFile1.content ?? "").split("\n");
@@ -581,13 +691,87 @@ export function TerminalPanel() {
 
           case "which":
             if (!arg) { addLines(shellId, [{ type: "error", text: "which: missing argument" }]); break; }
-            const knownCmds = ["ls","cd","cat","head","tail","wc","find","grep","touch","rm","cp","mv","mkdir","tree","stat","du","diff","echo","date","whoami","env","export","history","clear","pwd","uname","uptime","which","help"];
+            const knownCmds = ["ls","cd","cat","head","tail","wc","find","grep","touch","rm","cp","mv","mkdir","tree","stat","du","diff","echo","date","whoami","env","export","history","clear","pwd","uname","uptime","which","help","sort","uniq","man","write","tee"];
             if (knownCmds.includes(arg)) {
               addLines(shellId, [{ type: "output", text: `/usr/bin/${arg}` }]);
             } else {
               addLines(shellId, [{ type: "error", text: `${arg} not found` }]);
             }
             break;
+
+          case "sort": {
+            if (!arg) { addLines(shellId, [{ type: "error", text: "sort: missing file operand" }]); break; }
+            const sortPath = cwd ? `${cwd}/${arg}` : arg;
+            const sortFile = await getFile(sortPath);
+            if (!sortFile) { addLines(shellId, [{ type: "error", text: `sort: ${arg}: No such file` }]); break; }
+            const sorted = (sortFile.content ?? "").split("\n").sort().join("\n");
+            addLines(shellId, [{ type: "output", text: sorted }]);
+            break;
+          }
+
+          case "uniq": {
+            if (!arg) { addLines(shellId, [{ type: "error", text: "uniq: missing file operand" }]); break; }
+            const uniqPath = cwd ? `${cwd}/${arg}` : arg;
+            const uniqFile = await getFile(uniqPath);
+            if (!uniqFile) { addLines(shellId, [{ type: "error", text: `uniq: ${arg}: No such file` }]); break; }
+            const uniqued = (uniqFile.content ?? "").split("\n").filter((line, i, arr) => i === 0 || line !== arr[i - 1]).join("\n");
+            addLines(shellId, [{ type: "output", text: uniqued }]);
+            break;
+          }
+
+          case "man": {
+            if (!arg) { addLines(shellId, [{ type: "info", text: "What manual page do you want? Try: man ls" }]); break; }
+            const manPages: Record<string, string> = {
+              ls: "ls [path] — List directory contents. Files sorted alphabetically, folders first.",
+              cd: "cd <path> — Change working directory. Use 'cd ..' for parent, 'cd /' for root.",
+              cat: "cat <file> — Print file contents to terminal. Truncates at 200 lines.",
+              grep: "grep <pattern> <file> — Search content in file.\ngrep -r <pattern> [path] — Search recursively.",
+              find: "find <pattern> — Search files by name pattern.",
+              rm: "rm <file> — Delete file. rm -r <dir> — Delete directory recursively.",
+              cp: "cp <src> <dest> — Copy a file to a new location.",
+              mv: "mv <src> <dest> — Move/rename a file.",
+              mkdir: "mkdir <dir> — Create a new directory.",
+              touch: "touch <file> — Create an empty file or update timestamp.",
+              tree: "tree [path] — Display directory tree structure.",
+              stat: "stat <file> — Show detailed file information.",
+              diff: "diff <f1> <f2> — Compare two files line by line.",
+              echo: "echo <text> — Print text. Supports > file and >> file for redirection.",
+              sort: "sort <file> — Sort file lines alphabetically.",
+              uniq: "uniq <file> — Remove adjacent duplicate lines.",
+              write: "write <file> <content> — Write content to file.",
+            };
+            const manText = manPages[arg];
+            if (manText) {
+              addLines(shellId, [{ type: "info", text: `Manual: ${arg}\n${manText}` }]);
+            } else {
+              addLines(shellId, [{ type: "error", text: `No manual entry for ${arg}` }]);
+            }
+            break;
+          }
+
+          case "write": {
+            // write <file> <content> — write content to file
+            const writeMatch = arg.match(/^(\S+)\s+([\s\S]+)$/);
+            if (!writeMatch) { addLines(shellId, [{ type: "error", text: "write: usage: write <file> <content>" }]); break; }
+            const writePath = cwd ? `${cwd}/${writeMatch[1]}` : writeMatch[1];
+            const writeContent = writeMatch[2].replace(/^["']|["']$/g, "");
+            const writeExt = writeMatch[1].split(".").pop()?.toLowerCase() ?? "";
+            const writeLangMap: Record<string, string> = { tsx: "typescript", jsx: "typescript", ts: "typescript", js: "javascript", json: "json", md: "markdown", css: "css", html: "html" };
+            await db.files.put({
+              id: writePath, name: writeMatch[1].split("/").pop()!, type: "file",
+              parentPath: writePath.includes("/") ? writePath.split("/").slice(0, -1).join("/") : cwd,
+              language: writeLangMap[writeExt] ?? "plaintext", content: writeContent,
+              projectId: activeProjectId, createdAt: new Date(), updatedAt: new Date(),
+            });
+            addLines(shellId, [{ type: "success", text: `wrote ${writeContent.length} chars to ${writePath}` }]);
+            break;
+          }
+
+          case "cat_write":
+          case "tee": {
+            addLines(shellId, [{ type: "info", text: "tee: Use 'echo text > file' or 'write file content' for file writing" }]);
+            break;
+          }
 
           default:
             addLines(shellId, [
@@ -600,13 +784,49 @@ export function TerminalPanel() {
         ]);
       }
     },
-    [activeShellId, shells, addLines, updateShell]
+    [activeShellId, shells, addLines, updateShell, activeProjectId]
   );
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       handleCommand(input);
       setInput("");
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      // Tab complete file/folder names
+      const currentInput = input;
+      const inputParts = currentInput.split(/\s+/);
+      const lastPart = inputParts[inputParts.length - 1] || "";
+
+      // Determine the directory to search in
+      let searchDir = activeShell?.cwd || "";
+      let prefix = lastPart;
+      if (lastPart.includes("/")) {
+        const pathParts = lastPart.split("/");
+        prefix = pathParts.pop() || "";
+        const dirPart = pathParts.join("/");
+        searchDir = searchDir ? `${searchDir}/${dirPart}` : dirPart;
+      }
+
+      // Find matching files
+      const dirFiles = await db.files.where("parentPath").equals(searchDir)
+        .and(f => f.projectId === activeProjectId)
+        .toArray();
+      const matches = dirFiles.filter(f => f.name.toLowerCase().startsWith(prefix.toLowerCase()));
+
+      if (matches.length === 1) {
+        const completion = matches[0].name + (matches[0].type === "folder" ? "/" : "");
+        inputParts[inputParts.length - 1] = lastPart.includes("/")
+          ? lastPart.split("/").slice(0, -1).join("/") + "/" + completion
+          : completion;
+        setInput(inputParts.join(" "));
+      } else if (matches.length > 1) {
+        // Show all matches
+        addLines(activeShellId, [{
+          type: "info",
+          text: matches.map(f => f.name + (f.type === "folder" ? "/" : "")).join("  ")
+        }]);
+      }
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       if (activeShell && activeShell.history.length > 0) {
@@ -638,12 +858,29 @@ export function TerminalPanel() {
     }
   };
 
+  const [showNewMenu, setShowNewMenu] = useState(false);
+  const nodeCounter = useRef(0);
+
   const addShell = () => {
     shellCounter.current++;
     const id = `shell-${shellCounter.current}`;
     setShells((prev) => [...prev, createShell(id, shellCounter.current)]);
     setActiveShellId(id);
   };
+
+  const addNodeShell = () => {
+    nodeCounter.current++;
+    const id = `node-${nodeCounter.current}`;
+    setShells((prev) => [...prev, createNodeShell(id, nodeCounter.current)]);
+    setActiveShellId(id);
+  };
+
+  useEffect(() => {
+    if (!showNewMenu) return;
+    const handle = (e: MouseEvent) => setShowNewMenu(false);
+    document.addEventListener("click", handle);
+    return () => document.removeEventListener("click", handle);
+  }, [showNewMenu]);
 
   const removeShell = (id: string) => {
     if (shells.length <= 1) return;
@@ -670,8 +907,8 @@ export function TerminalPanel() {
 
   return (
     <div
-      className="flex flex-col overflow-hidden"
-      style={{ height: 200, background: "hsl(220 13% 10%)" }}
+      className="flex flex-col"
+      style={{ height: 250, background: "hsl(220 13% 10%)", overflow: "hidden" }}
     >
       {/* Tab bar */}
       <div
@@ -710,14 +947,51 @@ export function TerminalPanel() {
           </button>
         ))}
 
-        <button
-          className="flex items-center justify-center w-7 h-full transition-colors hover:bg-white/5"
-          style={{ color: "hsl(220 14% 50%)" }}
-          onClick={addShell}
-          title="New Terminal"
-        >
-          <Plus size={13} />
-        </button>
+        <div style={{ position: "relative" }}>
+          <button
+            className="flex items-center justify-center w-7 h-full transition-colors hover:bg-white/5"
+            style={{ color: "hsl(220 14% 50%)" }}
+            onClick={(e) => { e.stopPropagation(); setShowNewMenu(!showNewMenu); }}
+            title="New Terminal"
+          >
+            <Plus size={13} />
+          </button>
+          {showNewMenu && (
+            <div style={{
+              position: "absolute", top: "100%", left: 0, zIndex: 100,
+              background: "hsl(220 13% 18%)", border: "1px solid hsl(220 13% 25%)",
+              borderRadius: 6, padding: 4, minWidth: 160,
+              boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
+            }}>
+              <button
+                onClick={() => { addShell(); setShowNewMenu(false); }}
+                style={{
+                  display: "block", width: "100%", textAlign: "left",
+                  padding: "6px 10px", fontSize: 11, color: "hsl(220 14% 80%)",
+                  background: "transparent", border: "none", cursor: "pointer",
+                  borderRadius: 4,
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = "hsl(220 13% 25%)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                Virtual Shell (file ops)
+              </button>
+              <button
+                onClick={() => { addNodeShell(); setShowNewMenu(false); }}
+                style={{
+                  display: "block", width: "100%", textAlign: "left",
+                  padding: "6px 10px", fontSize: 11, color: "hsl(142 71% 60%)",
+                  background: "transparent", border: "none", cursor: "pointer",
+                  borderRadius: 4,
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = "hsl(220 13% 25%)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                Node.js Terminal (run JS files)
+              </button>
+            </div>
+          )}
+        </div>
 
         <div className="flex-1" />
 
@@ -732,38 +1006,45 @@ export function TerminalPanel() {
       </div>
 
       {/* Terminal output */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto px-3 py-2 font-mono text-xs leading-5 cursor-text"
-        onClick={() => inputRef.current?.focus()}
-      >
-        {activeShell?.lines.map((line) => (
-          <div
-            key={line.id}
-            className="whitespace-pre-wrap break-all"
-            style={{ color: lineColor(line.type) }}
-          >
-            {line.text}
-          </div>
-        ))}
-
-        {/* Input line */}
-        <div className="flex items-center gap-1.5">
-          <span style={{ color: "hsl(142 71% 60%)" }} className="flex-shrink-0 select-none">
-            {prompt}
-          </span>
-          <input
-            ref={inputRef}
-            className="flex-1 bg-transparent outline-none font-mono text-xs caret-white"
-            style={{ color: "hsl(220 14% 92%)" }}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            spellCheck={false}
-            autoComplete="off"
-          />
+      {activeShell?.type === "node" ? (
+        <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+          <XTerminal />
         </div>
-      </div>
+      ) : (
+        <div
+          ref={scrollRef}
+          className="px-3 py-2 font-mono text-xs leading-5 cursor-text"
+          style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
+          onClick={() => inputRef.current?.focus()}
+        >
+          {activeShell?.lines.map((line) => (
+            <div
+              key={line.id}
+              className="whitespace-pre-wrap break-all"
+              style={{ color: lineColor(line.type) }}
+            >
+              {line.text}
+            </div>
+          ))}
+
+          {/* Input line */}
+          <div className="flex items-center gap-1.5">
+            <span style={{ color: "hsl(142 71% 60%)" }} className="flex-shrink-0 select-none">
+              {prompt}
+            </span>
+            <input
+              ref={inputRef}
+              className="flex-1 bg-transparent outline-none font-mono text-xs caret-white"
+              style={{ color: "hsl(220 14% 92%)" }}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

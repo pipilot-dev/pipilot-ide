@@ -2,64 +2,36 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/lib/db";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { useCallback } from "react";
+import { getSeedFiles, type ProjectTemplate } from "@/lib/project-templates";
 
 export function useProjects() {
   const { activeProjectId, switchProject } = useActiveProject();
 
-  // Live query for all projects
   const projects = useLiveQuery(() => db.projects.toArray(), []) ?? [];
-
-  // Derive the active project from the live list
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
-  const createProject = useCallback(async (name: string): Promise<string> => {
+  const createProject = useCallback(async (
+    name: string,
+    type: "static" | "nodebox" | "cloud" = "static",
+    template?: ProjectTemplate
+  ): Promise<string> => {
     const id = `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const now = new Date();
+
+    // Resolve template from type if not specified
+    const resolvedTemplate: ProjectTemplate = template || (type === "static" ? "static" : type === "nodebox" ? "node" : "vite-react");
 
     await db.projects.put({
       id,
       name,
+      type,
+      template: resolvedTemplate,
       createdAt: now,
       updatedAt: now,
     });
 
-    // Seed with sample files
-    const sampleHtml = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${name}</title>
-  <link rel="stylesheet" href="style.css" />
-</head>
-<body>
-  <h1>Welcome to ${name}</h1>
-  <p>Start building your project here.</p>
-  <script src="script.js"></script>
-</body>
-</html>`;
-
-    const sampleCss = `body {
-  font-family: system-ui, sans-serif;
-  margin: 0;
-  padding: 2rem;
-  background: #1a1a2e;
-  color: #eee;
-}
-
-h1 {
-  color: #e94560;
-}`;
-
-    const sampleJs = `// ${name} - main script
-console.log("Hello from ${name}!");
-`;
-
-    const seedFiles = [
-      { id: "index.html", name: "index.html", type: "file" as const, parentPath: "", language: "html", content: sampleHtml },
-      { id: "style.css", name: "style.css", type: "file" as const, parentPath: "", language: "css", content: sampleCss },
-      { id: "script.js", name: "script.js", type: "file" as const, parentPath: "", language: "javascript", content: sampleJs },
-    ];
+    // Generate seed files from template
+    const seedFiles = getSeedFiles(name, resolvedTemplate);
 
     await db.files.bulkPut(
       seedFiles.map((f) => ({

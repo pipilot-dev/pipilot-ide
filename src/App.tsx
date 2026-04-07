@@ -1,11 +1,20 @@
 import { IDELayout } from "@/components/ide/IDELayout";
 import { ProjectProvider } from "@/contexts/ProjectContext";
+import { NotificationProvider } from "@/contexts/NotificationContext";
+import { ProblemsProvider } from "@/contexts/ProblemsContext";
+import { ExtensionProvider } from "@/contexts/ExtensionContext";
 
 function App() {
   return (
-    <ProjectProvider>
-      <IDELayout />
-    </ProjectProvider>
+    <NotificationProvider>
+      <ProblemsProvider>
+        <ExtensionProvider>
+          <ProjectProvider>
+            <IDELayout />
+          </ProjectProvider>
+        </ExtensionProvider>
+      </ProblemsProvider>
+    </NotificationProvider>
   );
 }
 

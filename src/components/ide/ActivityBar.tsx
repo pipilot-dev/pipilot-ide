@@ -15,6 +15,7 @@ interface ActivityBarProps {
   onViewChange: (view: ActivityBarView) => void;
   chatOpen: boolean;
   onToggleChat: () => void;
+  onOpenSettings?: () => void;
 }
 
 const ACTIVITIES: { id: ActivityBarView; icon: React.ReactNode; label: string }[] = [
@@ -25,7 +26,7 @@ const ACTIVITIES: { id: ActivityBarView; icon: React.ReactNode; label: string }[
   { id: "extensions", icon: <Package size={22} />, label: "Extensions" },
 ];
 
-export function ActivityBar({ activeView, onViewChange, chatOpen, onToggleChat }: ActivityBarProps) {
+export function ActivityBar({ activeView, onViewChange, chatOpen, onToggleChat, onOpenSettings }: ActivityBarProps) {
   return (
     <div className="activity-bar" data-testid="activity-bar">
       {ACTIVITIES.map((item) => (
@@ -57,6 +58,7 @@ export function ActivityBar({ activeView, onViewChange, chatOpen, onToggleChat }
         title="Settings"
         data-testid="activity-btn-settings"
         style={{ marginBottom: 8 }}
+        onClick={() => onOpenSettings?.()}
       >
         <Settings size={22} />
       </button>

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { ActivityBar, ActivityBarView } from "./ActivityBar";
 import { SidebarPanel } from "./SidebarPanel";
 import { EditorArea, EditorTab } from "./EditorArea";
@@ -6,6 +6,7 @@ import { ChatPanel } from "../chat/ChatPanel";
 import { CommandPalette } from "./CommandPalette";
 import { TerminalPanel } from "./TerminalPanel";
 import { CheckpointBar } from "./CheckpointBar";
+import SettingsPanel from "@/components/ide/SettingsPanel";
 import { useFileSystem, FileNode } from "@/hooks/useFileSystem";
 import { useCheckpoints } from "@/hooks/useCheckpoints";
 import { useSidebarResizable, useResizable } from "@/hooks/useResizable";
@@ -14,7 +15,6 @@ import { db } from "@/lib/db";
 import {
   GitBranch,
   AlertCircle,
-  Bell,
   CheckCircle2,
   Wifi,
   Terminal,
@@ -24,9 +24,15 @@ import {
   Rocket,
   ExternalLink,
   Loader2,
+  HelpCircle,
 } from "lucide-react";
 import { deploySite, DeployResult } from "@/lib/deploy";
 import { useProjects } from "@/hooks/useProjects";
+import { HelpDialog } from "@/components/ide/HelpDialog";
+import { NotificationCenter } from "@/components/ide/NotificationCenter";
+import { ProblemsPanel } from "@/components/ide/ProblemsPanel";
+import { useNotifications } from "@/contexts/NotificationContext";
+import { useProblems } from "@/contexts/ProblemsContext";
 
 function findFileById(nodes: FileNode[], id: string): FileNode | null {
   for (const node of nodes) {
@@ -48,6 +54,13 @@ export function IDELayout() {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [lastDeploy, setLastDeploy] = useState<DeployResult | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [problemsOpen, setProblemsOpen] = useState(false);
+
+  const { addNotification } = useNotifications();
+  const { errorCount, warningCount } = useProblems();
+  const bellRef = useRef<HTMLElement>(null);
 
   const sidebar = useSidebarResizable(220, 140, 400);
   const chatPanel = useResizable(360, 260, 600, "horizontal");
@@ -65,9 +78,13 @@ export function IDELayout() {
       setLastDeploy(result);
       if (result.success) {
         window.open(result.url, "_blank");
+        addNotification({ title: "Site Deployed", message: `Live at: ${result.url}`, type: "success" });
+      } else {
+        addNotification({ title: "Deploy Failed", message: result.error || "Unknown error", type: "error" });
       }
     } catch (err) {
       setLastDeploy({ success: false, url: "", slug: "", fileCount: 0, error: String(err) });
+      addNotification({ title: "Deploy Failed", message: String(err), type: "error" });
     } finally {
       setDeploying(false);
     }
@@ -79,11 +96,15 @@ export function IDELayout() {
       // Handle deploy_site tool
       if (name === "deploy_site") {
         if (!activeProject) return "Error: No active project";
-        const result = await deploySite(activeProjectId, activeProject.name);
+        // AI can pass a custom slug; fall back to project name
+        const customSlug = args.slug as string | undefined;
+        const result = await deploySite(activeProjectId, customSlug || activeProject.name);
         setLastDeploy(result);
         if (result.success) {
+          addNotification({ title: "Site Deployed", message: `Live at: ${result.url}`, type: "success" });
           return `✓ Site deployed! Live at: ${result.url} (${result.fileCount} files)`;
         }
+        addNotification({ title: "Deploy Failed", message: result.error || "Unknown error", type: "error" });
         return `Error deploying: ${result.error}`;
       }
 
@@ -229,6 +250,16 @@ export function IDELayout() {
         e.preventDefault();
         setTerminalOpen((p) => !p);
       }
+      // Ctrl+, - toggle settings
+      if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen((p) => !p);
+      }
+      // Ctrl+Shift+/ - toggle help
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "/") {
+        e.preventDefault();
+        setHelpOpen((p) => !p);
+      }
       // Ctrl+B - toggle sidebar
       if ((e.ctrlKey || e.metaKey) && e.key === "b") {
         e.preventDefault();
@@ -299,7 +330,7 @@ export function IDELayout() {
 
     return {
       fileTree,
-      projectType: techs.length > 0 ? techs.join(" + ") : "HTML + CSS + JavaScript",
+      projectType: (activeProject?.type === "cloud" ? "Node.js (E2B Cloud — full npm/Vite/Next.js/SSR) + " : activeProject?.type === "nodebox" ? "Node.js (Nodebox) + " : "") + (techs.length > 0 ? techs.join(" + ") : "HTML + CSS + JavaScript"),
       dependencies: "Tailwind CSS (CDN)",
     };
   }, [files]);
@@ -340,6 +371,7 @@ export function IDELayout() {
           onViewChange={handleViewChange}
           chatOpen={chatOpen}
           onToggleChat={() => setChatOpen((p) => !p)}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
 
         {/* Sidebar */}
@@ -360,6 +392,7 @@ export function IDELayout() {
                 selectedFileId={activeTabId}
                 onSelectFile={handleSelectFile}
                 files={files}
+                onRunPreview={handleOpenPreview}
               />
             </div>
             {/* Sidebar resize handle */}
@@ -382,7 +415,11 @@ export function IDELayout() {
             allFiles={files}
             onSelectFile={handleSelectFile}
             onOpenPreview={handleOpenPreview}
+            projectType={activeProject?.type || "static"}
           />
+
+          {/* Problems panel */}
+          {problemsOpen && <ProblemsPanel onClose={() => setProblemsOpen(false)} />}
 
           {/* Terminal panel */}
           {terminalOpen && (
@@ -438,16 +475,22 @@ export function IDELayout() {
         )}
       </div>
 
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+
       {/* Status bar */}
       <div className="status-bar" data-testid="status-bar">
         <div className="flex items-center gap-1.5">
           <GitBranch size={11} />
           <span>main</span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <CheckCircle2 size={11} style={{ color: "hsl(142 71% 60%)" }} />
-          <span>No Problems</span>
-        </div>
+        <button
+          className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+          onClick={() => setProblemsOpen((p) => !p)}
+        >
+          {errorCount > 0 ? <AlertCircle size={13} style={{ color: "hsl(0 84% 60%)" }} /> : <CheckCircle2 size={11} style={{ color: "hsl(142 71% 60%)" }} />}
+          <span>{errorCount > 0 || warningCount > 0 ? `${errorCount} errors, ${warningCount} warnings` : "No Problems"}</span>
+        </button>
         <button
           className="flex items-center gap-1 hover:opacity-80 transition-opacity"
           onClick={() => setTerminalOpen((p) => !p)}
@@ -495,13 +538,14 @@ export function IDELayout() {
           <Wifi size={11} />
           <span>Connected</span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <Bell size={11} />
-        </div>
-        <div className="flex items-center gap-1.5">
-          <AlertCircle size={11} />
-          <span>0</span>
-        </div>
+        <NotificationCenter anchorRef={bellRef} />
+        <button
+          className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+          onClick={() => setHelpOpen(true)}
+        >
+          <HelpCircle size={13} />
+          <span>Help</span>
+        </button>
       </div>
     </div>
   );

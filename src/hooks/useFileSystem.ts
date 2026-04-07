@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect } from "react";
 import { db, DBFile, fileOps, seedDatabaseIfEmpty } from "@/lib/db";
 import { capturePreviewScreenshot } from "@/lib/screenshot";
+import { previewClick, previewScroll, previewType, previewFindElements } from "@/lib/browser-interact";
+import { runScript } from "@/lib/run-script";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { useLiveQuery } from "dexie-react-hooks";
 
@@ -164,6 +166,62 @@ export function useFileSystem() {
           // Prefix the data URL so the chat hook can detect it for vision API + UI display
           // The layout report is the main content the AI always receives (works without vision API)
           result = screenshot.dataUrl + "\n\n" + screenshot.layoutReport;
+          break;
+        }
+        case "preview_click": {
+          const clickResult = await previewClick(activeProjectId, {
+            selector: args.selector as string | undefined,
+            x: args.x as number | undefined,
+            y: args.y as number | undefined,
+          });
+          result = clickResult.dataUrl + "\n\n" + clickResult.report;
+          break;
+        }
+        case "preview_scroll": {
+          const scrollResult = await previewScroll(activeProjectId, {
+            direction: args.direction as "up" | "down" | "left" | "right",
+            amount: args.amount as number | undefined,
+            selector: args.selector as string | undefined,
+          });
+          result = scrollResult.dataUrl + "\n\n" + scrollResult.report;
+          break;
+        }
+        case "preview_type": {
+          const typeResult = await previewType(activeProjectId, {
+            selector: args.selector as string,
+            text: args.text as string,
+            clear: args.clear as boolean | undefined,
+            pressEnter: args.pressEnter as boolean | undefined,
+          });
+          result = typeResult.dataUrl + "\n\n" + typeResult.report;
+          break;
+        }
+        case "preview_find_elements": {
+          const findResult = await previewFindElements(activeProjectId, {
+            type: args.type as "clickable" | "input" | "text" | "all" | undefined,
+            selector: args.selector as string | undefined,
+          });
+          result = findResult.dataUrl + "\n\n" + findResult.report;
+          break;
+        }
+        case "run_script": {
+          const scriptResult = await runScript(
+            args.code as string,
+            activeProjectId,
+            {
+              filename: args.filename as string | undefined,
+              timeout: args.timeout as number | undefined,
+            }
+          );
+          const parts: string[] = [];
+          if (scriptResult.stdout) parts.push(`=== STDOUT ===\n${scriptResult.stdout}`);
+          if (scriptResult.stderr) parts.push(`=== STDERR ===\n${scriptResult.stderr}`);
+          if (scriptResult.error) parts.push(`=== ERROR ===\n${scriptResult.error}`);
+          if (!scriptResult.stdout && !scriptResult.stderr && !scriptResult.error) {
+            parts.push("(no output)");
+          }
+          parts.push(`\nExit code: ${scriptResult.exitCode}`);
+          result = parts.join("\n\n");
           break;
         }
         default:

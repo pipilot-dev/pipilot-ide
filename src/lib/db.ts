@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from "dexie";
+import type { DBExtension, DBExtensionState } from "@/lib/extensions/types";
 
 // Database schema for the IDE workspace
 export interface DBFile {
@@ -40,6 +41,8 @@ export interface DBSetting {
 export interface DBProject {
   id: string;
   name: string;
+  type: "static" | "nodebox" | "cloud";  // "static" = HTML/CSS/JS, "nodebox" = Node.js (browser), "cloud" = E2B sandbox (full Node/npm)
+  template?: string;  // "vite-react" | "nextjs" | "express" | "node" — for cloud/nodebox projects
   createdAt: Date;
   updatedAt: Date;
 }
@@ -84,6 +87,8 @@ class PiPilotDB extends Dexie {
   settings!: EntityTable<DBSetting, "key">;
   projects!: EntityTable<DBProject, "id">;
   checkpoints!: EntityTable<DBCheckpoint, "id">;
+  extensions!: Dexie.Table<DBExtension, string>;
+  extensionState!: Dexie.Table<DBExtensionState, [string, string]>;
 
   constructor() {
     super("pipilot-ide");
@@ -122,6 +127,37 @@ class PiPilotDB extends Dexie {
       // Update all existing chat sessions to belong to default project
       await tx.table("chatSessions").toCollection().modify((session: DBChatSession) => {
         session.projectId = defaultProjectId;
+      });
+    });
+
+    this.version(3).stores({
+      // Keep ALL existing tables unchanged
+      files: "id, parentPath, name, type, projectId",
+      chatMessages: "id, sessionId, timestamp",
+      chatSessions: "id, updatedAt, projectId",
+      settings: "key",
+      projects: "id",
+      checkpoints: "id, projectId, createdAt",
+      // NEW tables
+      extensions: "id, source, enabled",
+      extensionState: "[extensionId+key], extensionId",
+    });
+
+    this.version(4).stores({
+      files: "id, parentPath, name, type, projectId",
+      chatMessages: "id, sessionId, timestamp",
+      chatSessions: "id, updatedAt, projectId",
+      settings: "key",
+      projects: "id, type",
+      checkpoints: "id, projectId, createdAt",
+      extensions: "id, source, enabled",
+      extensionState: "[extensionId+key], extensionId",
+    }).upgrade(tx => {
+      // Set type="static" on all existing projects
+      return tx.table("projects").toCollection().modify(project => {
+        if (!project.type) {
+          project.type = "static";
+        }
       });
     });
   }

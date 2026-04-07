@@ -28,6 +28,11 @@ import {
   Sparkles,
   Clock,
   Camera,
+  MousePointer,
+  ArrowDownUp,
+  Keyboard,
+  ScanSearch,
+  Play,
 } from "lucide-react";
 
 interface ChatMessageProps {
@@ -52,6 +57,11 @@ function getToolIcon(name: string) {
     get_project_tree: <Network size={12} />,
     deploy_site: <Globe size={12} />,
     screenshot_preview: <Camera size={12} />,
+    preview_click: <MousePointer size={12} />,
+    preview_scroll: <ArrowDownUp size={12} />,
+    preview_type: <Keyboard size={12} />,
+    preview_find_elements: <ScanSearch size={12} />,
+    run_script: <Play size={12} />,
     web_search: <Globe size={12} />,
     web_extract: <Globe size={12} />,
     image_generation: <Image size={12} />,
@@ -74,6 +84,11 @@ function getToolLabel(name: string) {
     get_project_tree: "Project Tree",
     deploy_site: "Deploy Site",
     screenshot_preview: "Screenshot Preview",
+    preview_click: "Click Element",
+    preview_scroll: "Scroll Preview",
+    preview_type: "Type Text",
+    preview_find_elements: "Find Elements",
+    run_script: "Run Script",
     web_search: "Web Search",
     web_extract: "Extract Page",
     image_generation: "Generate Image",
@@ -86,6 +101,7 @@ function getToolAccentColor(name: string): string {
   if (name.includes("edit") || name.includes("rename")) return "hsl(38 92% 55%)";
   if (name.includes("delete")) return "hsl(0 84% 60%)";
   if (name.includes("deploy")) return "hsl(280 65% 60%)";
+  if (name.startsWith("preview_")) return "hsl(170 70% 50%)";
   if (name.includes("search") || name.includes("list") || name.includes("read") || name.includes("info") || name.includes("tree")) return "hsl(207 90% 60%)";
   return "hsl(220 14% 60%)";
 }

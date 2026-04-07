@@ -4,6 +4,7 @@ import Editor, { OnMount } from "@monaco-editor/react";
 import { X, Circle, ChevronRight, FileCode2, FileJson, FileText, FileType, Folder, Globe } from "lucide-react";
 import { FileNode } from "@/hooks/useFileSystem";
 import { WebPreview } from "./WebPreview";
+import { useSettings } from "@/hooks/useSettings";
 
 export interface EditorTab {
   node: FileNode;
@@ -20,6 +21,7 @@ interface EditorAreaProps {
   allFiles?: FileNode[];
   onSelectFile?: (node: FileNode) => void;
   onOpenPreview?: () => void;
+  projectType?: "static" | "nodebox";
 }
 
 // ── Breadcrumb with dropdown navigation ──
@@ -240,10 +242,12 @@ export function EditorArea({
   allFiles = [],
   onSelectFile,
   onOpenPreview,
+  projectType = "static",
 }: EditorAreaProps) {
   const editorRef = useRef<unknown>(null);
   const [editorMounted, setEditorMounted] = useState(false);
   const changeTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const { get: getSetting } = useSettings();
 
   const activeTab = tabs.find((t) => t.node.id === activeTabId);
 
@@ -399,7 +403,7 @@ export function EditorArea({
       {isPreviewTab && (
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
           <div style={{ position: "absolute", inset: 0 }}>
-            <WebPreview files={allFiles} />
+            <WebPreview files={allFiles} projectType={projectType} />
           </div>
         </div>
       )}
@@ -417,14 +421,14 @@ export function EditorArea({
               onMount={handleMount}
               onChange={handleEditorChange}
               options={{
-                fontSize: 13,
-                fontFamily: "'Cascadia Code', 'Fira Code', 'Menlo', monospace",
+                fontSize: parseInt(getSetting("editorFontSize")) || 14,
+                fontFamily: getSetting("editorFontFamily") || "'Cascadia Code', 'Fira Code', 'Menlo', monospace",
                 fontLigatures: true,
                 lineNumbers: "on",
-                minimap: { enabled: true, scale: 1 },
+                minimap: { enabled: getSetting("editorMinimap") === "true", scale: 1 },
                 scrollBeyondLastLine: false,
-                wordWrap: "on",
-                tabSize: 2,
+                wordWrap: getSetting("editorWordWrap") === "on" ? "on" : "off",
+                tabSize: parseInt(getSetting("editorTabSize")) || 2,
                 insertSpaces: true,
                 automaticLayout: true,
                 cursorBlinking: "smooth",
