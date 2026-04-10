@@ -73,6 +73,10 @@ export default defineConfig({
         target: "http://localhost:3001",
         changeOrigin: true,
       },
+      "/api/diagnostics": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
       "/api/agent": {
         target: "http://localhost:3001",
         changeOrigin: true,

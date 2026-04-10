@@ -328,6 +328,36 @@ export function IDELayout() {
     });
   }, []);
 
+  const handleNavigateToFile = useCallback(
+    (filePath: string, line?: number, column?: number) => {
+      // Find the file node in the tree
+      const node = findFileById(files, filePath);
+      if (!node || node.type !== "file") return;
+      // Open it (or activate existing tab)
+      setTabs((prev) => {
+        const exists = prev.find((t) => t.node.id === filePath);
+        if (!exists) {
+          setActiveTabId(filePath);
+          return [...prev, { node, isDirty: false }];
+        }
+        setActiveTabId(filePath);
+        return prev;
+      });
+      // Dispatch a custom event for the EditorArea to jump the cursor
+      // (the editor instance for this file picks it up after mounting)
+      if (line) {
+        setTimeout(() => {
+          window.dispatchEvent(
+            new CustomEvent("pipilot:goto-line", {
+              detail: { filePath, line, column: column || 1 },
+            }),
+          );
+        }, 100);
+      }
+    },
+    [files],
+  );
+
   const handleOpenSettings = useCallback(() => {
     const tabId = "__settings__";
     setTabs((prev) => {
@@ -635,7 +665,12 @@ export function IDELayout() {
           />
 
           {/* Problems panel */}
-          {problemsOpen && <ProblemsPanel onClose={() => setProblemsOpen(false)} />}
+          {problemsOpen && (
+            <ProblemsPanel
+              onClose={() => setProblemsOpen(false)}
+              onNavigateToFile={handleNavigateToFile}
+            />
+          )}
 
           {/* Terminal panel */}
           {terminalOpen && (

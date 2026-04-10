@@ -8,6 +8,7 @@ import chokidar from "chokidar";
 import { startDevServer, stopDevServer, getDevServerStatus, stopAllDevServers, subscribeToLogs } from "./dev-server";
 import * as pty from "node-pty";
 import * as gitOps from "./git";
+import { runAllChecks, runTypeScriptCheck } from "./diagnostics";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -1603,6 +1604,29 @@ app.post("/api/project/search", async (req, res) => {
 
   walk(workDir, "");
   res.json({ results, truncated: results.length >= limit });
+});
+
+// ── Diagnostics (Problems panel) ────────────────────────────────────
+// GET /api/diagnostics/check?projectId=...&source=all|typescript
+app.get("/api/diagnostics/check", async (req, res) => {
+  const projectId = req.query.projectId as string;
+  const source = (req.query.source as string) || "all";
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+
+  const workDir = path.join(WORKSPACE_BASE, projectId);
+  if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
+
+  try {
+    if (source === "typescript") {
+      const diagnostics = await runTypeScriptCheck(workDir);
+      res.json({ diagnostics, ran: { typescript: true } });
+    } else {
+      const result = await runAllChecks(workDir);
+      res.json(result);
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Project Scripts (for Run/Debug panel) ───────────────────────────

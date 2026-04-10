@@ -89,7 +89,9 @@
       "Bash(sed -i '77,135d' src/components/ide/SourceControlPanel.tsx)",
       "Bash(sed -n '74,82p' src/components/ide/SourceControlPanel.tsx)",
       "Bash(find C:/Users/big/Documents/Projects/pipilot-ide/src -path *extensions* -name *.ts*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(echo \"const x: number = \"\"broken\"\"; let y = unknownVar;\")",
+      "Bash(cmd.exe /c \"node_modules\\\\.bin\\\\tsc.cmd --noEmit --pretty false\")"
     ]
   }
 }

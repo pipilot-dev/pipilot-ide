@@ -453,6 +453,30 @@ declare module "*.woff2" { const content: string; export default content; }
     }
   };
 
+  // Listen for "goto-line" events (e.g. from Problems panel) and jump
+  // the active editor's cursor to that location.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail?.filePath || !activeTab) return;
+      // Only jump if the active tab matches the requested file
+      if (activeTab.node.id !== detail.filePath) return;
+      const editor = editorRef.current;
+      if (!editor) return;
+      try {
+        const lineNumber = Math.max(1, detail.line || 1);
+        const column = Math.max(1, detail.column || 1);
+        editor.revealLineInCenterIfOutsideViewport(lineNumber);
+        editor.setPosition({ lineNumber, column });
+        editor.focus();
+      } catch (err) {
+        console.warn("goto-line failed", err);
+      }
+    };
+    window.addEventListener("pipilot:goto-line", handler);
+    return () => window.removeEventListener("pipilot:goto-line", handler);
+  }, [activeTab]);
+
   // Register all project files as Monaco models for Ctrl+Click navigation
   useEffect(() => {
     const monaco = monacoRef.current;
