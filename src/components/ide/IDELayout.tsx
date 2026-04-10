@@ -305,6 +305,27 @@ export function IDELayout() {
     });
   }, []);
 
+  const handleOpenCommit = useCallback((oid: string, shortOid: string) => {
+    const tabId = `__commit__${oid}`;
+    setTabs((prev) => {
+      const exists = prev.find((t) => t.node.id === tabId);
+      if (exists) {
+        setActiveTabId(tabId);
+        return prev;
+      }
+      setActiveTabId(tabId);
+      return [
+        ...prev,
+        {
+          node: { id: tabId, name: `Commit ${shortOid}`, type: "file" as const },
+          isDirty: false,
+          isCommit: true,
+          commitOid: oid,
+        },
+      ];
+    });
+  }, []);
+
   const handleCloseTab = useCallback(
     (id: string) => {
       setTabs((prev) => {
@@ -535,6 +556,7 @@ export function IDELayout() {
                 files={files}
                 onRunPreview={handleOpenPreview}
                 onOpenTerminal={() => setTerminalOpen(true)}
+                onOpenCommit={handleOpenCommit}
                 onCreateFile={handleCreateFile}
                 onCreateFolder={handleCreateFolder}
                 onRenameFile={handleRenameFile}

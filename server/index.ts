@@ -1397,6 +1397,129 @@ app.post("/api/git/discard", async (req, res) => {
   res.json(result);
 });
 
+// GET /api/git/commit-detail?projectId=&oid=
+app.get("/api/git/commit-detail", async (req, res) => {
+  const projectId = req.query.projectId as string;
+  const oid = req.query.oid as string;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  if (!oid) return res.status(400).json({ error: "oid required" });
+  try {
+    const detail = await gitOps.gitCommitDetail(workDir, oid);
+    res.json(detail);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/git/fetch
+app.post("/api/git/fetch", async (req, res) => {
+  const { projectId, remote } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitFetch(workDir, remote || "origin"));
+});
+
+// POST /api/git/stash
+app.post("/api/git/stash", async (req, res) => {
+  const { projectId, message } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitStash(workDir, message));
+});
+
+// GET /api/git/stash-list
+app.get("/api/git/stash-list", async (req, res) => {
+  const projectId = req.query.projectId as string;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const stashes = await gitOps.gitStashList(workDir);
+  res.json({ stashes });
+});
+
+// POST /api/git/stash-pop
+app.post("/api/git/stash-pop", async (req, res) => {
+  const { projectId } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitStashPop(workDir));
+});
+
+// POST /api/git/stash-apply
+app.post("/api/git/stash-apply", async (req, res) => {
+  const { projectId, ref } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitStashApply(workDir, ref));
+});
+
+// POST /api/git/stash-drop
+app.post("/api/git/stash-drop", async (req, res) => {
+  const { projectId, ref } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitStashDrop(workDir, ref));
+});
+
+// POST /api/git/pull-rebase
+app.post("/api/git/pull-rebase", async (req, res) => {
+  const { projectId, remote, branch } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitPullRebase(workDir, remote || "origin", branch));
+});
+
+// POST /api/git/merge
+app.post("/api/git/merge", async (req, res) => {
+  const { projectId, branch } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitMerge(workDir, branch));
+});
+
+// POST /api/git/cherry-pick
+app.post("/api/git/cherry-pick", async (req, res) => {
+  const { projectId, oid } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitCherryPick(workDir, oid));
+});
+
+// POST /api/git/reset
+app.post("/api/git/reset", async (req, res) => {
+  const { projectId, mode, target } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  if (!["soft", "mixed", "hard"].includes(mode)) {
+    return res.status(400).json({ error: "mode must be soft|mixed|hard" });
+  }
+  res.json(await gitOps.gitReset(workDir, mode, target));
+});
+
+// POST /api/git/add-remote
+app.post("/api/git/add-remote", async (req, res) => {
+  const { projectId, name, url } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitAddRemote(workDir, name, url));
+});
+
+// POST /api/git/remove-remote
+app.post("/api/git/remove-remote", async (req, res) => {
+  const { projectId, name } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitRemoveRemote(workDir, name));
+});
+
+// POST /api/git/delete-branch
+app.post("/api/git/delete-branch", async (req, res) => {
+  const { projectId, name, force } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  res.json(await gitOps.gitDeleteBranch(workDir, name, force));
+});
+
 // ── Project Scripts (for Run/Debug panel) ───────────────────────────
 // GET /api/project/scripts — read package.json scripts
 app.get("/api/project/scripts", (req, res) => {

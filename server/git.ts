@@ -401,6 +401,143 @@ export async function gitDiscard(workDir: string, files: string[]): Promise<{ su
   return { success: code === 0, message: stderr || "Discarded" };
 }
 
+/** Fetch from remote */
+export async function gitFetch(workDir: string, remote = "origin"): Promise<{ success: boolean; message: string }> {
+  const { stdout, stderr, code } = await runGit(workDir, ["fetch", remote, "--prune"], { timeout: 60000 });
+  return { success: code === 0, message: (stdout + stderr).trim() || "Fetched" };
+}
+
+/** Stash changes */
+export async function gitStash(workDir: string, message?: string): Promise<{ success: boolean; message: string }> {
+  const args = ["stash", "push"];
+  if (message) args.push("-m", message);
+  const { stdout, stderr, code } = await runGit(workDir, args);
+  return { success: code === 0, message: (stdout + stderr).trim() };
+}
+
+/** List stashes */
+export async function gitStashList(workDir: string): Promise<string[]> {
+  const { stdout, code } = await runGit(workDir, ["stash", "list"]);
+  if (code !== 0) return [];
+  return stdout.split("\n").filter(Boolean);
+}
+
+/** Pop the latest stash */
+export async function gitStashPop(workDir: string): Promise<{ success: boolean; message: string }> {
+  const { stdout, stderr, code } = await runGit(workDir, ["stash", "pop"]);
+  return { success: code === 0, message: (stdout + stderr).trim() };
+}
+
+/** Apply a specific stash without removing it */
+export async function gitStashApply(workDir: string, stashRef: string): Promise<{ success: boolean; message: string }> {
+  const { stdout, stderr, code } = await runGit(workDir, ["stash", "apply", stashRef]);
+  return { success: code === 0, message: (stdout + stderr).trim() };
+}
+
+/** Drop a specific stash */
+export async function gitStashDrop(workDir: string, stashRef: string): Promise<{ success: boolean; message: string }> {
+  const { stdout, stderr, code } = await runGit(workDir, ["stash", "drop", stashRef]);
+  return { success: code === 0, message: (stdout + stderr).trim() };
+}
+
+/** Pull with rebase */
+export async function gitPullRebase(workDir: string, remote = "origin", branch?: string): Promise<{ success: boolean; message: string }> {
+  const args = ["pull", "--rebase", remote];
+  if (branch) args.push(branch);
+  const { stdout, stderr, code } = await runGit(workDir, args, { timeout: 60000 });
+  return { success: code === 0, message: (stdout + stderr).trim() };
+}
+
+/** Merge a branch into the current branch */
+export async function gitMerge(workDir: string, branch: string): Promise<{ success: boolean; message: string }> {
+  const { stdout, stderr, code } = await runGit(workDir, ["merge", "--no-ff", branch]);
+  return { success: code === 0, message: (stdout + stderr).trim() };
+}
+
+/** Cherry-pick a commit */
+export async function gitCherryPick(workDir: string, oid: string): Promise<{ success: boolean; message: string }> {
+  const { stdout, stderr, code } = await runGit(workDir, ["cherry-pick", oid]);
+  return { success: code === 0, message: (stdout + stderr).trim() };
+}
+
+/** Reset (soft, mixed, hard) */
+export async function gitReset(workDir: string, mode: "soft" | "mixed" | "hard", target = "HEAD"): Promise<{ success: boolean; message: string }> {
+  const { stdout, stderr, code } = await runGit(workDir, ["reset", `--${mode}`, target]);
+  return { success: code === 0, message: (stdout + stderr).trim() || "Reset complete" };
+}
+
+/** Add a remote */
+export async function gitAddRemote(workDir: string, name: string, url: string): Promise<{ success: boolean; message: string }> {
+  const { stdout, stderr, code } = await runGit(workDir, ["remote", "add", name, url]);
+  return { success: code === 0, message: (stdout + stderr).trim() || `Remote ${name} added` };
+}
+
+/** Remove a remote */
+export async function gitRemoveRemote(workDir: string, name: string): Promise<{ success: boolean; message: string }> {
+  const { stdout, stderr, code } = await runGit(workDir, ["remote", "remove", name]);
+  return { success: code === 0, message: (stdout + stderr).trim() || `Remote ${name} removed` };
+}
+
+/** Delete a branch */
+export async function gitDeleteBranch(workDir: string, name: string, force = false): Promise<{ success: boolean; message: string }> {
+  const { stdout, stderr, code } = await runGit(workDir, ["branch", force ? "-D" : "-d", name]);
+  return { success: code === 0, message: (stdout + stderr).trim() };
+}
+
+/** Get full diff for a single commit */
+export async function gitCommitDetail(workDir: string, oid: string): Promise<{
+  oid: string;
+  shortOid: string;
+  message: string;
+  author: string;
+  email: string;
+  timestamp: number;
+  parent: string;
+  files: { path: string; status: string; additions: number; deletions: number; diff: string }[];
+}> {
+  // Metadata
+  const fmt = "%H%x1f%h%x1f%s%x1f%b%x1f%an%x1f%ae%x1f%at%x1f%P";
+  const { stdout: meta } = await runGit(workDir, ["show", `--format=${fmt}`, "--no-patch", oid]);
+  const [hash, shortHash, subject, body, author, email, ts, parent] = meta.trim().split("\x1f");
+  const message = body && body.trim() ? `${subject}\n\n${body.trim()}` : subject;
+
+  // File list with stats
+  const { stdout: nameStat } = await runGit(workDir, ["show", "--format=", "--name-status", oid]);
+  const { stdout: numStat } = await runGit(workDir, ["show", "--format=", "--numstat", oid]);
+
+  const statusMap = new Map<string, string>();
+  for (const line of nameStat.split("\n").filter(Boolean)) {
+    const parts = line.split("\t");
+    if (parts.length >= 2) statusMap.set(parts[parts.length - 1], parts[0][0]);
+  }
+
+  const files: { path: string; status: string; additions: number; deletions: number; diff: string }[] = [];
+  for (const line of numStat.split("\n").filter(Boolean)) {
+    const parts = line.split("\t");
+    if (parts.length < 3) continue;
+    const additions = parts[0] === "-" ? 0 : parseInt(parts[0]) || 0;
+    const deletions = parts[1] === "-" ? 0 : parseInt(parts[1]) || 0;
+    const filePath = parts[parts.length - 1];
+    const status = statusMap.get(filePath) || "M";
+
+    // Get diff for this file
+    const { stdout: diff } = await runGit(workDir, ["show", "--format=", oid, "--", filePath]);
+
+    files.push({ path: filePath, status, additions, deletions, diff });
+  }
+
+  return {
+    oid: hash,
+    shortOid: shortHash,
+    message,
+    author,
+    email,
+    timestamp: parseInt(ts) || 0,
+    parent: parent || "",
+    files,
+  };
+}
+
 /** Get list of remotes */
 export async function gitRemotes(workDir: string): Promise<{ name: string; url: string }[]> {
   const { stdout, code } = await runGit(workDir, ["remote", "-v"]);

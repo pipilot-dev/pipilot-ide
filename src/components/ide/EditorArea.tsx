@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import Editor, { OnMount, loader } from "@monaco-editor/react";
-import { X, Circle, ChevronRight, FileCode2, FileJson, FileText, FileType, Folder, Globe } from "lucide-react";
+import { X, Circle, ChevronRight, FileCode2, FileJson, FileText, FileType, Folder, Globe, GitCommit } from "lucide-react";
 import { FileNode } from "@/hooks/useFileSystem";
 import { WebPreview } from "./WebPreview";
+import { CommitDetailView } from "./CommitDetailView";
 import { useSettings } from "@/hooks/useSettings";
 import { useActiveProject } from "@/contexts/ProjectContext";
 
@@ -11,6 +12,8 @@ export interface EditorTab {
   node: FileNode;
   isDirty: boolean;
   isPreview?: boolean; // special tab for web preview
+  isCommit?: boolean;  // special tab for commit detail view
+  commitOid?: string;  // full commit hash (when isCommit)
 }
 
 interface EditorAreaProps {
@@ -532,6 +535,7 @@ declare module "*.woff2" { const content: string; export default content; }
   }
 
   const isPreviewTab = activeTab?.isPreview;
+  const isCommitTab = activeTab?.isCommit;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden" data-testid="editor-area">
@@ -546,6 +550,8 @@ declare module "*.woff2" { const content: string; export default content; }
           >
             {tab.isPreview ? (
               <Globe size={13} className="text-green-400 flex-shrink-0" />
+            ) : tab.isCommit ? (
+              <GitCommit size={13} style={{ color: "hsl(207 90% 60%)" }} className="flex-shrink-0" />
             ) : (
               getTabIcon(tab.node.name)
             )}
@@ -582,7 +588,7 @@ declare module "*.woff2" { const content: string; export default content; }
       </div>
 
       {/* Breadcrumb — only for file tabs */}
-      {activeTab && !isPreviewTab && (
+      {activeTab && !isPreviewTab && !isCommitTab && (
         <BreadcrumbBar
           filePath={activeTab.node.id}
           allFiles={allFiles}
@@ -599,8 +605,15 @@ declare module "*.woff2" { const content: string; export default content; }
         </div>
       )}
 
+      {/* Commit detail tab */}
+      {isCommitTab && activeTab?.commitOid && activeProjectId && (
+        <div style={{ flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }}>
+          <CommitDetailView projectId={activeProjectId} oid={activeTab.commitOid} />
+        </div>
+      )}
+
       {/* Monaco Editor — for file tabs */}
-      {!isPreviewTab && (
+      {!isPreviewTab && !isCommitTab && (
         <div className="flex-1 overflow-hidden" data-testid="monaco-editor">
           {activeTab && (
             <Editor

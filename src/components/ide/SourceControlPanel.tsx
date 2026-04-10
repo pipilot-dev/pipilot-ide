@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from "react";
 import {
   GitBranch, GitCommit, RefreshCw, Plus, Minus, Check, ChevronDown, ChevronRight,
   Upload, Download, History, AlertTriangle, ExternalLink, Loader2, FileText, X,
-  RotateCcw, MoreHorizontal, Copy, Terminal,
+  RotateCcw, MoreHorizontal, Copy, Terminal, Sparkles, Archive, GitMerge,
+  GitPullRequest, Cloud, Trash2, Server, ListTree, Eye,
 } from "lucide-react";
 import { useRealGit, GitFileStatus } from "@/hooks/useRealGit";
 
@@ -133,7 +134,11 @@ function DiffViewer({ filePath, oldContent, newContent, onClose }: {
   );
 }
 
-export function SourceControlPanel() {
+interface SourceControlPanelProps {
+  onOpenCommit?: (oid: string, shortOid: string) => void;
+}
+
+export function SourceControlPanel({ onOpenCommit }: SourceControlPanelProps = {}) {
   const git = useRealGit();
   const [commitMessage, setCommitMessage] = useState("");
   const [expandStaged, setExpandStaged] = useState(true);
@@ -145,6 +150,8 @@ export function SourceControlPanel() {
   const [diffView, setDiffView] = useState<{ path: string; old: string; new: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [showActionMenu, setShowActionMenu] = useState(false);
+  const [generatingMessage, setGeneratingMessage] = useState(false);
 
   // Auto-refresh on visibility (poll every 5s while panel is mounted)
   useEffect(() => {
@@ -201,6 +208,82 @@ export function SourceControlPanel() {
     await git.createBranch(newBranchName.trim());
     setNewBranchName("");
     setShowNewBranch(false);
+  };
+
+  // ── AI commit message generation via a0 LLM ─────────────────────
+  const handleGenerateMessage = async () => {
+    if (git.stagedFiles.length === 0) {
+      setStatusMessage("Stage some files first");
+      setTimeout(() => setStatusMessage(null), 2500);
+      return;
+    }
+    setGeneratingMessage(true);
+    try {
+      // Collect diffs for staged files (cap to keep prompt small)
+      const diffs: string[] = [];
+      let totalLen = 0;
+      const MAX_DIFF_LEN = 8000;
+      for (const f of git.stagedFiles) {
+        if (totalLen > MAX_DIFF_LEN) break;
+        const d = await git.getDiff(f.path, true);
+        const slice = (d.diff || "").slice(0, 2000);
+        diffs.push(`### ${f.path} (${f.index})\n${slice}`);
+        totalLen += slice.length;
+      }
+
+      const systemPrompt = `You are a commit message generator. Given a git diff, write ONE concise conventional commit message (subject line under 72 chars, optionally followed by a short body separated by a blank line). Use prefixes like feat, fix, refactor, docs, chore, style, test, perf, build, ci. Output ONLY the commit message — no quotes, no markdown, no explanation.`;
+
+      const userPrompt = `Here are the staged changes:\n\n${diffs.join("\n\n")}\n\nGenerate the commit message.`;
+
+      const res = await fetch("https://api.a0.dev/ai/llm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        }),
+      });
+
+      if (!res.ok) throw new Error(`a0 API ${res.status}`);
+      const data = await res.json();
+      const msg = (data.completion || "").trim()
+        .replace(/^["'`]+|["'`]+$/g, "")  // strip surrounding quotes
+        .replace(/^```[a-z]*\n?|\n?```$/g, "");  // strip code fences
+      if (msg) {
+        setCommitMessage(msg);
+      } else {
+        setStatusMessage("AI returned an empty message");
+        setTimeout(() => setStatusMessage(null), 3000);
+      }
+    } catch (err: any) {
+      setStatusMessage(`AI generation failed: ${err.message}`);
+      setTimeout(() => setStatusMessage(null), 4000);
+    } finally {
+      setGeneratingMessage(false);
+    }
+  };
+
+  // ── Three-dot menu actions ───────────────────────────────────────
+  const runAction = async (label: string, fn: () => Promise<{ success: boolean; message: string }>) => {
+    setShowActionMenu(false);
+    setBusy(label);
+    const result = await fn();
+    setBusy(null);
+    setStatusMessage(result.success ? `${label} ✓` : `${label} failed: ${result.message.slice(0, 200)}`);
+    setTimeout(() => setStatusMessage(null), 4000);
+  };
+
+  const promptAndRun = async (label: string, prompt: string, fn: (input: string) => Promise<{ success: boolean; message: string }>) => {
+    setShowActionMenu(false);
+    const input = window.prompt(prompt);
+    if (input === null || !input.trim()) return;
+    await runAction(label, () => fn(input.trim()));
+  };
+
+  const handleClickCommit = async (oid: string, shortOid: string) => {
+    onOpenCommit?.(oid, shortOid);
   };
 
   // ── Git Not Installed State ───────────────────────────────────────
@@ -418,6 +501,94 @@ export function SourceControlPanel() {
         >
           {busy === "push" ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
         </button>
+        <div style={{ position: "relative" }}>
+          <button
+            onClick={() => setShowActionMenu(!showActionMenu)}
+            title="More git actions"
+            style={{ background: "none", border: "none", color: "hsl(220 14% 55%)", cursor: "pointer", padding: 4 }}
+          >
+            <MoreHorizontal size={12} />
+          </button>
+          {showActionMenu && (
+            <>
+              {/* Backdrop to close menu */}
+              <div
+                onClick={() => setShowActionMenu(false)}
+                style={{ position: "fixed", inset: 0, zIndex: 50 }}
+              />
+              <div style={{
+                position: "absolute", top: "100%", right: 0, zIndex: 51,
+                marginTop: 4, minWidth: 200,
+                background: "hsl(220 13% 16%)",
+                border: "1px solid hsl(220 13% 28%)",
+                borderRadius: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+                padding: 4,
+                maxHeight: 400, overflowY: "auto",
+              }}>
+                {[
+                  { label: "Fetch", icon: <Cloud size={11} />, fn: () => git.fetchRemote() },
+                  { label: "Pull", icon: <Download size={11} />, fn: () => git.pull() },
+                  { label: "Pull (Rebase)", icon: <Download size={11} />, fn: () => git.pullRebase() },
+                  { label: "Push", icon: <Upload size={11} />, fn: () => git.push() },
+                  { sep: true },
+                  { label: "Stage All Changes", icon: <Plus size={11} />, fn: async () => { await git.stageAll(); return { success: true, message: "" }; } },
+                  { label: "Unstage All", icon: <Minus size={11} />, fn: async () => { await git.unstage(git.stagedFiles.map(f => f.path)); return { success: true, message: "" }; } },
+                  { label: "Discard All Changes", icon: <RotateCcw size={11} />, danger: true, fn: async () => {
+                    if (!confirm("Discard ALL unstaged changes? This cannot be undone.")) return { success: false, message: "Cancelled" };
+                    await git.discard(git.unstagedFiles.map(f => f.path));
+                    return { success: true, message: "" };
+                  } },
+                  { sep: true },
+                  { label: "Stash Changes", icon: <Archive size={11} />, fn: () => git.stash() },
+                  { label: "Pop Stash", icon: <Archive size={11} />, fn: () => git.stashPop() },
+                  { sep: true },
+                  { label: "Merge Branch...", icon: <GitMerge size={11} />, prompt: "Branch name to merge into current:", fn: (name: string) => git.merge(name) },
+                  { label: "Cherry-pick Commit...", icon: <GitCommit size={11} />, prompt: "Commit hash to cherry-pick:", fn: (oid: string) => git.cherryPick(oid) },
+                  { label: "Delete Branch...", icon: <Trash2 size={11} />, danger: true, prompt: "Branch name to delete:", fn: (name: string) => git.deleteBranch(name, false) },
+                  { sep: true },
+                  { label: "Reset (soft)", icon: <RotateCcw size={11} />, fn: () => git.reset("soft") },
+                  { label: "Reset (mixed)", icon: <RotateCcw size={11} />, fn: () => git.reset("mixed") },
+                  { label: "Reset (hard) HEAD", icon: <RotateCcw size={11} />, danger: true, fn: async () => {
+                    if (!confirm("Hard reset to HEAD will discard ALL changes. Continue?")) return { success: false, message: "Cancelled" };
+                    return git.reset("hard");
+                  } },
+                  { sep: true },
+                  { label: "Add Remote...", icon: <Server size={11} />, prompt: "Remote URL (e.g. https://github.com/user/repo.git):", fn: async (url: string) => {
+                    return git.addRemote("origin", url);
+                  } },
+                  { label: "Refresh Status", icon: <RefreshCw size={11} />, fn: async () => { await git.refreshStatus(); return { success: true, message: "" }; } },
+                ].map((item: any, i) => {
+                  if (item.sep) return <div key={`sep-${i}`} style={{ height: 1, background: "hsl(220 13% 22%)", margin: "4px 0" }} />;
+                  return (
+                    <button
+                      key={item.label}
+                      onClick={() => {
+                        if (item.prompt) {
+                          promptAndRun(item.label, item.prompt, item.fn);
+                        } else {
+                          runAction(item.label, item.fn);
+                        }
+                      }}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 8,
+                        width: "100%", padding: "5px 8px",
+                        fontSize: 11, textAlign: "left",
+                        background: "transparent",
+                        color: item.danger ? "hsl(0 84% 70%)" : "hsl(220 14% 80%)",
+                        border: "none", borderRadius: 4, cursor: "pointer",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "hsl(220 13% 22%)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <span style={{ flexShrink: 0, color: item.danger ? "hsl(0 84% 65%)" : "hsl(220 14% 55%)" }}>{item.icon}</span>
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Branch dropdown menu */}
@@ -501,24 +672,43 @@ export function SourceControlPanel() {
 
       {/* Commit input */}
       <div style={{ padding: "8px 10px", borderBottom: "1px solid hsl(220 13% 22%)" }}>
-        <textarea
-          value={commitMessage}
-          onChange={(e) => setCommitMessage(e.target.value)}
-          placeholder="Message (Ctrl+Enter to commit)"
-          rows={2}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault();
-              handleCommit();
-            }
-          }}
-          style={{
-            width: "100%", padding: "6px 8px", fontSize: 11,
-            background: "hsl(220 13% 12%)", color: "hsl(220 14% 90%)",
-            border: "1px solid hsl(220 13% 25%)", borderRadius: 4,
-            resize: "vertical", outline: "none", fontFamily: "inherit",
-          }}
-        />
+        <div style={{ position: "relative" }}>
+          <textarea
+            value={commitMessage}
+            onChange={(e) => setCommitMessage(e.target.value)}
+            placeholder="Message (Ctrl+Enter to commit)"
+            rows={2}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                handleCommit();
+              }
+            }}
+            style={{
+              width: "100%", padding: "6px 28px 6px 8px", fontSize: 11,
+              background: "hsl(220 13% 12%)", color: "hsl(220 14% 90%)",
+              border: "1px solid hsl(220 13% 25%)", borderRadius: 4,
+              resize: "vertical", outline: "none", fontFamily: "inherit",
+            }}
+          />
+          <button
+            onClick={handleGenerateMessage}
+            disabled={generatingMessage || git.stagedFiles.length === 0}
+            title="Generate commit message with AI"
+            style={{
+              position: "absolute", top: 4, right: 4,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 22, height: 22,
+              background: generatingMessage ? "transparent" : "hsl(280 75% 50% / 0.15)",
+              color: git.stagedFiles.length === 0 ? "hsl(220 14% 35%)" : "hsl(280 75% 70%)",
+              border: "1px solid " + (git.stagedFiles.length === 0 ? "hsl(220 13% 25%)" : "hsl(280 75% 50% / 0.3)"),
+              borderRadius: 4,
+              cursor: git.stagedFiles.length === 0 ? "not-allowed" : "pointer",
+            }}
+          >
+            {generatingMessage ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+          </button>
+        </div>
         <button
           onClick={handleCommit}
           disabled={!commitMessage.trim() || git.stagedFiles.length === 0 || busy === "commit"}
@@ -635,10 +825,20 @@ export function SourceControlPanel() {
             History ({git.log.length})
           </button>
           {expandHistory && git.log.map(c => (
-            <div key={c.oid} style={{
-              padding: "4px 10px", fontSize: 10,
-              borderBottom: "1px solid hsl(220 13% 16%)",
-            }}>
+            <button
+              key={c.oid}
+              onClick={() => handleClickCommit(c.oid, c.shortOid)}
+              title="Open commit details"
+              style={{
+                display: "block", width: "100%", textAlign: "left",
+                padding: "4px 10px", fontSize: 10,
+                borderBottom: "1px solid hsl(220 13% 16%)",
+                background: "transparent", border: "none", borderBottom: "1px solid hsl(220 13% 16%)",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "hsl(220 13% 16%)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
               <div style={{ color: "hsl(220 14% 80%)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {c.message.split("\n")[0]}
               </div>
@@ -646,7 +846,7 @@ export function SourceControlPanel() {
                 <span style={{ fontFamily: "monospace", color: "hsl(207 90% 60%)" }}>{c.shortOid}</span>
                 {" · "}{c.author}{" · "}{new Date(c.timestamp * 1000).toLocaleDateString()}
               </div>
-            </div>
+            </button>
           ))}
         </div>
 

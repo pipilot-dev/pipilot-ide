@@ -246,6 +246,120 @@ export function useRealGit() {
     return res.json();
   }, [activeProjectId]);
 
+  // ── Extended git actions for the three-dot menu ─────────────────
+  const fetchRemote = useCallback(async (remote = "origin") => {
+    if (!activeProjectId) return { success: false, message: "" };
+    const res = await fetch("/api/git/fetch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId, remote }),
+    });
+    const data = await res.json();
+    if (data.success) await refreshStatus();
+    return data;
+  }, [activeProjectId, refreshStatus]);
+
+  const stash = useCallback(async (message?: string) => {
+    if (!activeProjectId) return { success: false, message: "" };
+    const res = await fetch("/api/git/stash", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId, message }),
+    });
+    const data = await res.json();
+    if (data.success) await refreshStatus();
+    return data;
+  }, [activeProjectId, refreshStatus]);
+
+  const stashPop = useCallback(async () => {
+    if (!activeProjectId) return { success: false, message: "" };
+    const res = await fetch("/api/git/stash-pop", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId }),
+    });
+    const data = await res.json();
+    if (data.success) await refreshStatus();
+    return data;
+  }, [activeProjectId, refreshStatus]);
+
+  const stashList = useCallback(async (): Promise<string[]> => {
+    if (!activeProjectId) return [];
+    const res = await fetch(`/api/git/stash-list?projectId=${encodeURIComponent(activeProjectId)}`);
+    const data = await res.json();
+    return data.stashes || [];
+  }, [activeProjectId]);
+
+  const pullRebase = useCallback(async (remote = "origin", branchName?: string) => {
+    if (!activeProjectId) return { success: false, message: "" };
+    const res = await fetch("/api/git/pull-rebase", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId, remote, branch: branchName }),
+    });
+    const data = await res.json();
+    if (data.success) await refreshStatus();
+    return data;
+  }, [activeProjectId, refreshStatus]);
+
+  const merge = useCallback(async (branchName: string) => {
+    if (!activeProjectId) return { success: false, message: "" };
+    const res = await fetch("/api/git/merge", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId, branch: branchName }),
+    });
+    const data = await res.json();
+    if (data.success) await refreshStatus();
+    return data;
+  }, [activeProjectId, refreshStatus]);
+
+  const cherryPick = useCallback(async (oid: string) => {
+    if (!activeProjectId) return { success: false, message: "" };
+    const res = await fetch("/api/git/cherry-pick", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId, oid }),
+    });
+    const data = await res.json();
+    if (data.success) { await refreshStatus(); await refreshLog(); }
+    return data;
+  }, [activeProjectId, refreshStatus, refreshLog]);
+
+  const reset = useCallback(async (mode: "soft" | "mixed" | "hard", target = "HEAD") => {
+    if (!activeProjectId) return { success: false, message: "" };
+    const res = await fetch("/api/git/reset", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId, mode, target }),
+    });
+    const data = await res.json();
+    if (data.success) { await refreshStatus(); await refreshLog(); }
+    return data;
+  }, [activeProjectId, refreshStatus, refreshLog]);
+
+  const addRemote = useCallback(async (name: string, url: string) => {
+    if (!activeProjectId) return { success: false, message: "" };
+    const res = await fetch("/api/git/add-remote", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId, name, url }),
+    });
+    const data = await res.json();
+    if (data.success) await refreshStatus();
+    return data;
+  }, [activeProjectId, refreshStatus]);
+
+  const deleteBranch = useCallback(async (name: string, force = false) => {
+    if (!activeProjectId) return { success: false, message: "" };
+    const res = await fetch("/api/git/delete-branch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId, name, force }),
+    });
+    const data = await res.json();
+    if (data.success) await refreshStatus();
+    return data;
+  }, [activeProjectId, refreshStatus]);
+
+  const getCommitDetail = useCallback(async (oid: string) => {
+    if (!activeProjectId) return null;
+    const res = await fetch(`/api/git/commit-detail?projectId=${encodeURIComponent(activeProjectId)}&oid=${encodeURIComponent(oid)}`);
+    if (!res.ok) return null;
+    return res.json();
+  }, [activeProjectId]);
+
   // Auto-refresh when repo becomes available
   useEffect(() => {
     if (isRepo) {
@@ -284,5 +398,17 @@ export function useRealGit() {
     checkout,
     discard,
     getDiff,
+    // Extended actions
+    fetchRemote,
+    stash,
+    stashPop,
+    stashList,
+    pullRebase,
+    merge,
+    cherryPick,
+    reset,
+    addRemote,
+    deleteBranch,
+    getCommitDetail,
   };
 }
