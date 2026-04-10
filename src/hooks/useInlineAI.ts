@@ -69,8 +69,9 @@ function clipAfter(text: string, maxLines = CONTEXT_LINES_AFTER, maxChars = CONT
 
 function buildSystemPrompt(language: string): string {
   // Kept ultra-short for low latency. Every token in the system prompt
-  // costs latency on every request.
-  return `You are a ${language} code completion engine. Output ONLY the raw code to insert at <|cursor|>. No markdown, no fences, no commentary, no echoing existing text. Keep it short — usually 1-3 lines. Empty response if unsure.`;
+  // costs latency on every request. ASCII-only to avoid UTF-8 issues
+  // with HTTP middleboxes.
+  return `You are a ${language} code completion engine. Output ONLY the raw code to insert at <|cursor|>. No markdown, no fences, no commentary, no echoing existing text. Keep it short, usually 1-3 lines. Empty response if unsure.`;
 }
 
 class CompletionFormatter {
