@@ -1,25 +1,23 @@
 /**
  * Inline AI completion provider for Monaco editor.
  * Powered by the a0 LLM API (no key required).
- *
- * Behavior:
- * - Triggers on cursor movement / typing after a debounce
- * - Sends file context (code before cursor + a bit after) to a0 LLM
- * - Returns ghost-text completion that user accepts with Tab
- * - Cancels in-flight requests when user keeps typing
  */
 
 import type * as Monaco from "monaco-editor";
 import type { IDisposable } from "monaco-editor";
 
 const A0_LLM_URL = "https://api.a0.dev/ai/llm";
+const DEBUG = typeof window !== "undefined" && localStorage.getItem("pipilot:debug-inline-ai") === "1";
 
-// Cache: cursor-context hash → completion (avoids duplicate API calls)
+function dlog(...args: any[]) {
+  if (DEBUG) console.log("[inline-ai]", ...args);
+}
+
+// LRU-ish cache: cursor-context hash → completion
 const completionCache = new Map<string, string>();
 const CACHE_MAX = 100;
 
 function hashContext(language: string, before: string, after: string): string {
-  // Use last 200 chars of before + first 50 of after for cache key
   return `${language}::${before.slice(-200)}::${after.slice(0, 50)}`;
 }
 
@@ -36,62 +34,68 @@ function clipAfterCursor(text: string, maxLines = 30, maxChars = 1500): string {
 }
 
 function buildSystemPrompt(language: string): string {
-  return `You are an expert ${language || "code"} autocomplete engine. The user shows you code with a CURSOR marker. Output ONLY the code that should be inserted at the CURSOR — nothing else.
+  return `You are an expert ${language || "code"} autocomplete engine. The user shows you code with a <CURSOR> marker. Output ONLY the raw text that should be inserted at <CURSOR> — nothing more, nothing less.
 
 Strict rules:
-- Output ONLY raw code, no markdown, no fences, no language tag, no commentary
-- Do NOT repeat code that already exists before or after the cursor
-- Continue naturally from the cursor position — match indentation and style
-- Keep completions short and useful (1-30 lines, prefer shorter)
-- If the surrounding code suggests the next obvious line, complete just that line
-- If a function body or block is being written, you may complete it
-- Never output explanations, just the code to insert`;
-}
-
-function buildUserPrompt(before: string, after: string): string {
-  return `${before}<CURSOR>${after}`;
+- Output ONLY the insertion text, NEVER repeat any text from before or after the cursor
+- No markdown, no code fences, no language tag, no commentary, no explanations
+- Continue naturally from the cursor — match indentation and style
+- Keep completions short and useful (1-15 lines, prefer shorter)
+- If completing the current line, output only the rest of that line
+- Whitespace before the insertion (spaces/tabs) is part of the output if the cursor is at a fresh column`;
 }
 
 function cleanCompletion(raw: string, before: string, after: string): string {
   let text = raw;
 
-  // Strip code fences if model added them
-  text = text.replace(/^```[a-zA-Z0-9]*\n?/, "").replace(/\n?```\s*$/, "");
+  // Strip markdown code fences if model added them
+  text = text.replace(/^```[a-zA-Z0-9]*\r?\n?/, "").replace(/\r?\n?```\s*$/, "");
 
-  // Strip leading/trailing whitespace but preserve internal
-  text = text.replace(/^\n+/, "").replace(/\s+$/, "");
+  // Trim trailing whitespace only (preserve leading whitespace which may be intentional)
+  text = text.replace(/\s+$/, "");
 
-  // Remove the entire "before" if model echoed it
-  if (text.startsWith(before)) {
+  // If model echoed the entire `before` (common failure mode), strip it
+  if (text.length > before.length && text.startsWith(before)) {
     text = text.slice(before.length);
+  } else {
+    // Try a smaller overlap from the end of `before`
+    const tailCheck = before.slice(-50);
+    if (tailCheck && text.startsWith(tailCheck)) {
+      text = text.slice(tailCheck.length);
+    }
   }
 
-  // If completion already starts with the next character that exists in `after`,
-  // it's likely duplicating. Trim the overlap.
-  if (after && text.endsWith(after.slice(0, 20))) {
-    text = text.slice(0, text.length - Math.min(after.length, 20));
+  // If completion ends with text that already exists in `after`, strip the overlap
+  if (after) {
+    const afterHead = after.slice(0, 30);
+    if (afterHead && text.endsWith(afterHead)) {
+      text = text.slice(0, text.length - afterHead.length);
+    }
   }
 
   return text;
 }
 
-let abortController: AbortController | null = null;
-
-async function fetchCompletion(language: string, before: string, after: string, signal: AbortSignal): Promise<string> {
+async function fetchCompletion(
+  language: string,
+  before: string,
+  after: string,
+  signal: AbortSignal,
+): Promise<string> {
   const cacheKey = hashContext(language, before, after);
   const cached = completionCache.get(cacheKey);
-  if (cached !== undefined) return cached;
-
-  const systemPrompt = buildSystemPrompt(language);
-  const userPrompt = buildUserPrompt(before, after);
+  if (cached !== undefined) {
+    dlog("cache hit", cached.slice(0, 60));
+    return cached;
+  }
 
   const res = await fetch(A0_LLM_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
+        { role: "system", content: buildSystemPrompt(language) },
+        { role: "user", content: `${before}<CURSOR>${after}` },
       ],
     }),
     signal,
@@ -101,67 +105,88 @@ async function fetchCompletion(language: string, before: string, after: string, 
   const data = await res.json();
   const completion = cleanCompletion(data.completion || "", before, after);
 
-  // Cache result (LRU-ish — drop oldest when full)
+  // Update cache
   if (completionCache.size >= CACHE_MAX) {
     const firstKey = completionCache.keys().next().value;
     if (firstKey) completionCache.delete(firstKey);
   }
   completionCache.set(cacheKey, completion);
 
+  dlog("fetched", completion.slice(0, 60));
   return completion;
 }
 
+// Module-level guard so we only register once globally even if multiple
+// editor instances mount (each tab switch creates a new Monaco editor).
+let globalRegistration: IDisposable | null = null;
+
 /**
  * Register the inline completion provider with Monaco.
- * Call this once after editor mount. Returns a disposable.
+ * Idempotent — safe to call from every editor mount; only the first call
+ * actually registers, subsequent calls are no-ops.
  */
 export function registerInlineAI(monaco: typeof import("monaco-editor")): IDisposable {
-  // Common languages we'll provide completions for
+  if (globalRegistration) {
+    dlog("already registered, skipping");
+    return globalRegistration;
+  }
   const langs = [
     "typescript", "javascript", "typescriptreact", "javascriptreact",
-    "html", "css", "json", "markdown", "python", "go", "rust", "java",
+    "html", "css", "scss", "less", "json", "jsonc",
+    "markdown", "python", "go", "rust", "java", "cpp", "c", "csharp",
+    "php", "ruby", "shell", "yaml", "toml", "sql", "xml", "vue", "svelte",
+    "plaintext",
   ];
 
   const disposables: IDisposable[] = [];
 
-  // Build the provider object with explicit property assignment so the
-  // required disposeInlineCompletions method is guaranteed to exist on the
-  // own-properties of the object passed to Monaco.
   const provider: Monaco.languages.InlineCompletionsProvider = {
-    provideInlineCompletions: async (model, position, _context, token) => {
-      // Cancel any in-flight request
-      if (abortController) {
-        try { abortController.abort(); } catch {}
-      }
-      abortController = new AbortController();
+    // Identifying metadata so we don't conflict with built-in providers
+    groupId: "pipilot.ai",
+    displayName: "PiPilot AI",
+    debounceDelayMs: 350,
 
-      const offset = model.getOffsetAt(position);
-      const fullText = model.getValue();
-      const before = clipBeforeCursor(fullText.slice(0, offset));
-      const after = clipAfterCursor(fullText.slice(offset));
+    provideInlineCompletions: async (model, position, context, token) => {
+      dlog("provideInlineCompletions called", {
+        lang: model.getLanguageId(),
+        line: position.lineNumber,
+        col: position.column,
+        triggerKind: context.triggerKind,
+      });
 
-      // Skip if there's nothing meaningful before cursor
-      if (before.trim().length < 2) {
-        return { items: [] };
-      }
+      // Per-call abort controller (no global state, no race conditions)
+      const ctrl = new AbortController();
 
-      if (token.isCancellationRequested) {
-        return { items: [] };
-      }
+      // Hook up Monaco's cancellation token to our AbortController
+      const cancelSub = token.onCancellationRequested(() => {
+        try { ctrl.abort(); } catch {}
+      });
 
       try {
-        const cancelHandler = () => {
-          try { abortController?.abort(); } catch {}
-        };
-        token.onCancellationRequested(cancelHandler);
+        const offset = model.getOffsetAt(position);
+        const fullText = model.getValue();
+        const before = clipBeforeCursor(fullText.slice(0, offset));
+        const after = clipAfterCursor(fullText.slice(offset));
 
-        // Use the model's language id for the prompt instead of the registered language key
-        const langId = model.getLanguageId() || "code";
-        const completion = await fetchCompletion(langId, before, after, abortController.signal);
-
-        if (token.isCancellationRequested || !completion) {
+        // Skip if there's nothing meaningful before cursor
+        if (before.trim().length < 2) {
+          dlog("skip — too little context");
           return { items: [] };
         }
+
+        if (token.isCancellationRequested) {
+          return { items: [] };
+        }
+
+        const langId = model.getLanguageId() || "code";
+        const completion = await fetchCompletion(langId, before, after, ctrl.signal);
+
+        if (token.isCancellationRequested || !completion || !completion.trim()) {
+          dlog("empty or cancelled");
+          return { items: [] };
+        }
+
+        dlog("returning completion", completion.slice(0, 80));
 
         return {
           items: [
@@ -171,36 +196,47 @@ export function registerInlineAI(monaco: typeof import("monaco-editor")): IDispo
                 position.lineNumber,
                 position.column,
                 position.lineNumber,
-                position.column
+                position.column,
               ),
             },
           ],
         };
       } catch (err: any) {
-        if (err?.name === "AbortError") return { items: [] };
+        if (err?.name === "AbortError") {
+          dlog("aborted");
+          return { items: [] };
+        }
+        dlog("error", err);
         return { items: [] };
+      } finally {
+        try { cancelSub.dispose(); } catch {}
       }
     },
-    // REQUIRED method (not optional) in monaco-editor 0.55+. Must exist as
-    // an own property on the provider object or Monaco throws TypeError.
-    disposeInlineCompletions: (_completions) => {
-      // No-op: we don't allocate per-completion resources
+
+    // REQUIRED in monaco-editor 0.55+
+    disposeInlineCompletions: () => {
+      // No-op: nothing to clean up per-completion
     },
   };
 
   for (const lang of langs) {
-    const d = monaco.languages.registerInlineCompletionsProvider(lang, provider);
-    disposables.push(d);
+    try {
+      const d = monaco.languages.registerInlineCompletionsProvider(lang, provider);
+      disposables.push(d);
+    } catch (err) {
+      dlog(`failed to register for ${lang}`, err);
+    }
   }
 
-  return {
+  dlog(`registered for ${disposables.length} languages`);
+
+  globalRegistration = {
     dispose() {
       for (const d of disposables) {
         try { d.dispose(); } catch {}
       }
-      if (abortController) {
-        try { abortController.abort(); } catch {}
-      }
+      globalRegistration = null;
     },
   };
+  return globalRegistration;
 }
