@@ -28,13 +28,24 @@ const LLM_MODEL = "kilo-auto/free";
 const DEBUG = typeof window !== "undefined" && localStorage.getItem("pipilot:debug-inline-ai") === "1";
 const CACHE_SIZE = 10;
 // Aggressive Cursor-like timings
-const KEYSTROKE_DEBOUNCE = 80;   // Trigger after 80ms of no typing (was 500ms interval)
-const STOP_AFTER_IDLE = 800;     // Stop background work after 800ms idle (was 1500)
-const MAX_OUTPUT_TOKENS = 100;   // Short snippets = faster generation
-const CONTEXT_LINES_BEFORE = 30; // Smaller prompt = faster (was 80)
-const CONTEXT_LINES_AFTER = 10;  // (was 30)
-const CONTEXT_CHARS_BEFORE = 1500; // (was 4000)
-const CONTEXT_CHARS_AFTER = 600;   // (was 1500)
+const KEYSTROKE_DEBOUNCE = 80;   // Trigger after 80ms of no typing
+const STOP_AFTER_IDLE = 800;     // Stop background work after 800ms idle
+
+// Tiered context strategy:
+// - Small files (≤200 lines, ≤8000 chars): send the WHOLE file with a
+//   cursor marker. The model gets awareness of all functions, imports,
+//   types, etc. and can implement entire functions.
+// - Large files: send a clipped window for speed.
+const SMALL_FILE_LINE_LIMIT = 200;
+const SMALL_FILE_CHAR_LIMIT = 8000;
+const SMALL_FILE_MAX_TOKENS = 400;   // Allow full function bodies for small files
+const LARGE_FILE_MAX_TOKENS = 100;   // Quick line-level completions for large files
+
+// Clipped windows (used only for large files)
+const CONTEXT_LINES_BEFORE = 30;
+const CONTEXT_LINES_AFTER = 10;
+const CONTEXT_CHARS_BEFORE = 1500;
+const CONTEXT_CHARS_AFTER = 600;
 
 function dlog(...args: any[]) {
   if (DEBUG) console.log("[inline-ai]", ...args);
@@ -72,10 +83,14 @@ function clipAfter(text: string, maxLines = CONTEXT_LINES_AFTER, maxChars = CONT
   return next.length > maxChars ? next.slice(0, maxChars) : next;
 }
 
-function buildSystemPrompt(language: string): string {
-  // Kept ultra-short for low latency. Every token in the system prompt
-  // costs latency on every request. ASCII-only to avoid UTF-8 issues
-  // with HTTP middleboxes.
+function buildSystemPrompt(language: string, isFullFile: boolean): string {
+  // ASCII-only to avoid UTF-8 issues with HTTP middleboxes.
+  if (isFullFile) {
+    // Full-file context: model knows the whole file, can implement full
+    // functions / methods / blocks. Allow longer completions.
+    return `You are a ${language} code completion engine. The user shows you a full source file with a <|cursor|> marker. Output ONLY the raw code to insert at the cursor — nothing more. Use the surrounding code (imports, other functions, types) to write a contextually correct completion. If the cursor is inside an empty function body, implement the whole body. If it's mid-line, complete just that line. No markdown, no code fences, no commentary, no echoing existing text. Empty response if unsure.`;
+  }
+  // Clipped context: keep completions short for speed.
   return `You are a ${language} code completion engine. Output ONLY the raw code to insert at <|cursor|>. No markdown, no fences, no commentary, no echoing existing text. Keep it short, usually 1-3 lines. Empty response if unsure.`;
 }
 
@@ -235,8 +250,22 @@ async function fetchSuggestion(): Promise<void> {
 
   const offset = model.getOffsetAt(position);
   const fullText = model.getValue();
-  const before = clipBefore(fullText.slice(0, offset));
-  const after = clipAfter(fullText.slice(offset));
+  const totalLines = model.getLineCount();
+
+  // Decide: full file or clipped window?
+  const useFullFile =
+    totalLines <= SMALL_FILE_LINE_LIMIT &&
+    fullText.length <= SMALL_FILE_CHAR_LIMIT;
+
+  let before: string;
+  let after: string;
+  if (useFullFile) {
+    before = fullText.slice(0, offset);
+    after = fullText.slice(offset);
+  } else {
+    before = clipBefore(fullText.slice(0, offset));
+    after = clipAfter(fullText.slice(offset));
+  }
 
   if (before.trim().length < 2) {
     dlog("skip - too little context");
@@ -264,7 +293,12 @@ async function fetchSuggestion(): Promise<void> {
   inFlightHashes.add(hash);
 
   try {
-    dlog("fetching", { language, beforeLen: before.length });
+    dlog("fetching", {
+      language,
+      mode: useFullFile ? "full-file" : "clipped",
+      lines: totalLines,
+      chars: fullText.length,
+    });
     const res = await fetch(LLM_URL, {
       method: "POST",
       headers: {
@@ -274,11 +308,11 @@ async function fetchSuggestion(): Promise<void> {
       body: JSON.stringify({
         model: LLM_MODEL,
         messages: [
-          { role: "system", content: buildSystemPrompt(language) },
+          { role: "system", content: buildSystemPrompt(language, useFullFile) },
           { role: "user", content: `${before}<|cursor|>${after}` },
         ],
         temperature: 0,
-        max_tokens: MAX_OUTPUT_TOKENS,
+        max_tokens: useFullFile ? SMALL_FILE_MAX_TOKENS : LARGE_FILE_MAX_TOKENS,
         stream: false,
         direct_kilo: true,
       }),
