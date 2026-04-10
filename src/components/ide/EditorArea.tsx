@@ -7,7 +7,7 @@ import { WebPreview } from "./WebPreview";
 import { CommitDetailView } from "./CommitDetailView";
 import { FileDiffView } from "./FileDiffView";
 import { SettingsTabView } from "./SettingsTabView";
-import { registerInlineAI } from "@/hooks/useInlineAI";
+import { setupInlineAI } from "@/hooks/useInlineAI";
 import { useSettings } from "@/hooks/useSettings";
 import { useActiveProject } from "@/contexts/ProjectContext";
 
@@ -361,12 +361,13 @@ declare module "*.woff2" { const content: string; export default content; }
 `, "file:///global.d.ts");
 
     // Register inline AI completion provider (Copilot-like ghost text)
+    // Uses background-poll architecture: synchronous cache reads in
+    // provideInlineCompletions, async fetcher fills the cache while typing
     try {
-      const aiDisposable = registerInlineAI(monaco);
-      // Store on editor for cleanup if needed
+      const aiDisposable = setupInlineAI(monaco, editor);
       (editor as any).__pipilotInlineAI = aiDisposable;
     } catch (err) {
-      console.warn("Inline AI registration failed:", err);
+      console.warn("Inline AI setup failed:", err);
     }
   };
 

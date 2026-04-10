@@ -87,7 +87,9 @@
       "Bash(find C:/Users/big/Documents/Projects/pipilot-ide/node_modules/monaco-editor -name *.d.ts)",
       "Bash(xargs grep:*)",
       "Bash(sed -i '77,135d' src/components/ide/SourceControlPanel.tsx)",
-      "Bash(sed -n '74,82p' src/components/ide/SourceControlPanel.tsx)"
+      "Bash(sed -n '74,82p' src/components/ide/SourceControlPanel.tsx)",
+      "Bash(find C:/Users/big/Documents/Projects/pipilot-ide/src -path *extensions* -name *.ts*)",
+      "Bash(wc:*)"
     ]
   }
 }
