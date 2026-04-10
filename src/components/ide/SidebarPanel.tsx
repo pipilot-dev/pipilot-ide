@@ -106,6 +106,7 @@ interface SidebarPanelProps {
   onRunPreview?: () => void;
   onOpenTerminal?: () => void;
   onOpenCommit?: (oid: string, shortOid: string) => void;
+  onOpenDiff?: (filePath: string, staged: boolean) => void;
   onCreateFile?: (filePath: string, content?: string) => Promise<void>;
   onCreateFolder?: (folderPath: string) => Promise<void>;
   onRenameFile?: (oldPath: string, newPath: string) => Promise<void>;
@@ -113,7 +114,7 @@ interface SidebarPanelProps {
   onUpdateFileContent?: (filePath: string, content: string) => Promise<void>;
 }
 
-export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSearchFiles, onRunPreview, onOpenTerminal, onOpenCommit, onCreateFile, onCreateFolder, onRenameFile, onDeleteFile, onUpdateFileContent }: SidebarPanelProps) {
+export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSearchFiles, onRunPreview, onOpenTerminal, onOpenCommit, onOpenDiff, onCreateFile, onCreateFolder, onRenameFile, onDeleteFile, onUpdateFileContent }: SidebarPanelProps) {
   const { activeProjectId } = useActiveProject();
   const { activeProject } = useProjects();
   const [searchQuery, setSearchQuery] = useState("");
@@ -999,7 +1000,7 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
       )}
 
       {view === "source-control" && (
-        <SourceControlPanel onOpenCommit={onOpenCommit} />
+        <SourceControlPanel onOpenCommit={onOpenCommit} onOpenDiff={onOpenDiff} />
       )}
 
       {view === "debug" && (

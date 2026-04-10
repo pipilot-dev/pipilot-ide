@@ -74,71 +74,13 @@ function FileRow({ file, staged, onStage, onUnstage, onDiscard, onView }: {
   );
 }
 
-function DiffViewer({ filePath, oldContent, newContent, onClose }: {
-  filePath: string;
-  oldContent: string;
-  newContent: string;
-  onClose: () => void;
-}) {
-  // Simple line-by-line diff
-  const oldLines = oldContent.split("\n");
-  const newLines = newContent.split("\n");
-  const maxLen = Math.max(oldLines.length, newLines.length);
-
-  return (
-    <div style={{
-      position: "absolute", inset: 0, background: "hsl(220 13% 12%)", zIndex: 10,
-      display: "flex", flexDirection: "column",
-    }}>
-      <div style={{
-        display: "flex", alignItems: "center", gap: 6, padding: "6px 10px",
-        borderBottom: "1px solid hsl(220 13% 22%)", background: "hsl(220 13% 16%)",
-      }}>
-        <FileText size={12} style={{ color: "hsl(207 90% 60%)" }} />
-        <span style={{ fontSize: 11, color: "hsl(220 14% 80%)", flex: 1, fontFamily: "monospace" }}>{filePath}</span>
-        <button onClick={onClose} style={{ background: "none", border: "none", color: "hsl(220 14% 55%)", cursor: "pointer", padding: 2 }}>
-          <X size={12} />
-        </button>
-      </div>
-      <div style={{ flex: 1, overflowY: "auto", fontFamily: "monospace", fontSize: 10, lineHeight: "16px" }}>
-        {Array.from({ length: maxLen }).map((_, i) => {
-          const oldLine = oldLines[i];
-          const newLine = newLines[i];
-          if (oldLine === newLine) {
-            return (
-              <div key={i} style={{ display: "flex", color: "hsl(220 14% 50%)", padding: "0 8px" }}>
-                <span style={{ width: 32, textAlign: "right", color: "hsl(220 14% 30%)", marginRight: 8 }}>{i + 1}</span>
-                <span style={{ whiteSpace: "pre", flex: 1 }}>{oldLine}</span>
-              </div>
-            );
-          }
-          return (
-            <div key={i}>
-              {oldLine !== undefined && (
-                <div style={{ display: "flex", background: "hsl(0 84% 50% / 0.12)", padding: "0 8px" }}>
-                  <span style={{ width: 32, textAlign: "right", color: "hsl(0 84% 50%)", marginRight: 8 }}>-</span>
-                  <span style={{ whiteSpace: "pre", color: "hsl(0 84% 75%)", flex: 1 }}>{oldLine}</span>
-                </div>
-              )}
-              {newLine !== undefined && (
-                <div style={{ display: "flex", background: "hsl(142 71% 45% / 0.12)", padding: "0 8px" }}>
-                  <span style={{ width: 32, textAlign: "right", color: "hsl(142 71% 55%)", marginRight: 8 }}>+</span>
-                  <span style={{ whiteSpace: "pre", color: "hsl(142 71% 75%)", flex: 1 }}>{newLine}</span>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 interface SourceControlPanelProps {
   onOpenCommit?: (oid: string, shortOid: string) => void;
+  onOpenDiff?: (filePath: string, staged: boolean) => void;
 }
 
-export function SourceControlPanel({ onOpenCommit }: SourceControlPanelProps = {}) {
+export function SourceControlPanel({ onOpenCommit, onOpenDiff }: SourceControlPanelProps = {}) {
   const git = useRealGit();
   const [commitMessage, setCommitMessage] = useState("");
   const [expandStaged, setExpandStaged] = useState(true);
@@ -147,7 +89,6 @@ export function SourceControlPanel({ onOpenCommit }: SourceControlPanelProps = {
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [showNewBranch, setShowNewBranch] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
-  const [diffView, setDiffView] = useState<{ path: string; old: string; new: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [showActionMenu, setShowActionMenu] = useState(false);
@@ -160,9 +101,8 @@ export function SourceControlPanel({ onOpenCommit }: SourceControlPanelProps = {
     return () => clearInterval(interval);
   }, [git.isRepo, git.refreshStatus]);
 
-  const handleViewDiff = async (path: string, staged: boolean) => {
-    const data = await git.getDiff(path, staged);
-    setDiffView({ path, old: data.oldContent, new: data.newContent });
+  const handleViewDiff = (path: string, staged: boolean) => {
+    onOpenDiff?.(path, staged);
   };
 
   const handleCommit = async () => {
@@ -858,15 +798,6 @@ export function SourceControlPanel({ onOpenCommit }: SourceControlPanelProps = {
         )}
       </div>
 
-      {/* Diff viewer overlay */}
-      {diffView && (
-        <DiffViewer
-          filePath={diffView.path}
-          oldContent={diffView.old}
-          newContent={diffView.new}
-          onClose={() => setDiffView(null)}
-        />
-      )}
     </div>
   );
 }

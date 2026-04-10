@@ -5,6 +5,7 @@ import { X, Circle, ChevronRight, FileCode2, FileJson, FileText, FileType, Folde
 import { FileNode } from "@/hooks/useFileSystem";
 import { WebPreview } from "./WebPreview";
 import { CommitDetailView } from "./CommitDetailView";
+import { FileDiffView } from "./FileDiffView";
 import { registerInlineAI } from "@/hooks/useInlineAI";
 import { useSettings } from "@/hooks/useSettings";
 import { useActiveProject } from "@/contexts/ProjectContext";
@@ -12,9 +13,12 @@ import { useActiveProject } from "@/contexts/ProjectContext";
 export interface EditorTab {
   node: FileNode;
   isDirty: boolean;
-  isPreview?: boolean; // special tab for web preview
-  isCommit?: boolean;  // special tab for commit detail view
-  commitOid?: string;  // full commit hash (when isCommit)
+  isPreview?: boolean;     // special tab for web preview
+  isCommit?: boolean;      // special tab for commit detail view
+  commitOid?: string;      // full commit hash (when isCommit)
+  isDiff?: boolean;        // special tab for file diff view
+  diffPath?: string;       // file path being diffed (when isDiff)
+  diffStaged?: boolean;    // whether to show staged or unstaged diff
 }
 
 interface EditorAreaProps {
@@ -546,6 +550,7 @@ declare module "*.woff2" { const content: string; export default content; }
 
   const isPreviewTab = activeTab?.isPreview;
   const isCommitTab = activeTab?.isCommit;
+  const isDiffTab = activeTab?.isDiff;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden" data-testid="editor-area">
@@ -562,6 +567,8 @@ declare module "*.woff2" { const content: string; export default content; }
               <Globe size={13} className="text-green-400 flex-shrink-0" />
             ) : tab.isCommit ? (
               <GitCommit size={13} style={{ color: "hsl(207 90% 60%)" }} className="flex-shrink-0" />
+            ) : tab.isDiff ? (
+              <FileText size={13} style={{ color: "hsl(38 92% 60%)" }} className="flex-shrink-0" />
             ) : (
               getTabIcon(tab.node.name)
             )}
@@ -598,7 +605,7 @@ declare module "*.woff2" { const content: string; export default content; }
       </div>
 
       {/* Breadcrumb — only for file tabs */}
-      {activeTab && !isPreviewTab && !isCommitTab && (
+      {activeTab && !isPreviewTab && !isCommitTab && !isDiffTab && (
         <BreadcrumbBar
           filePath={activeTab.node.id}
           allFiles={allFiles}
@@ -622,8 +629,19 @@ declare module "*.woff2" { const content: string; export default content; }
         </div>
       )}
 
+      {/* File diff tab */}
+      {isDiffTab && activeTab?.diffPath && activeProjectId && (
+        <div style={{ flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }}>
+          <FileDiffView
+            projectId={activeProjectId}
+            filePath={activeTab.diffPath}
+            staged={activeTab.diffStaged ?? false}
+          />
+        </div>
+      )}
+
       {/* Monaco Editor — for file tabs */}
-      {!isPreviewTab && !isCommitTab && (
+      {!isPreviewTab && !isCommitTab && !isDiffTab && (
         <div className="flex-1 overflow-hidden" data-testid="monaco-editor">
           {activeTab && (
             <Editor

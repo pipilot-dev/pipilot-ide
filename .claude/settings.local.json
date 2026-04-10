@@ -85,7 +85,9 @@
       "Bash(cat EOF node_modules/ .next/ out/ build/ dist/ .env .env.local *.log .DS_Store .claude_history.json EOF git status --porcelain)",
       "WebFetch(domain:microsoft.github.io)",
       "Bash(find C:/Users/big/Documents/Projects/pipilot-ide/node_modules/monaco-editor -name *.d.ts)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(sed -i '77,135d' src/components/ide/SourceControlPanel.tsx)",
+      "Bash(sed -n '74,82p' src/components/ide/SourceControlPanel.tsx)"
     ]
   }
 }

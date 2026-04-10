@@ -326,6 +326,29 @@ export function IDELayout() {
     });
   }, []);
 
+  const handleOpenDiff = useCallback((filePath: string, staged: boolean) => {
+    const tabId = `__diff__${staged ? "s" : "u"}__${filePath}`;
+    const fileName = filePath.split("/").pop() || filePath;
+    setTabs((prev) => {
+      const exists = prev.find((t) => t.node.id === tabId);
+      if (exists) {
+        setActiveTabId(tabId);
+        return prev;
+      }
+      setActiveTabId(tabId);
+      return [
+        ...prev,
+        {
+          node: { id: tabId, name: `${fileName} (diff)`, type: "file" as const },
+          isDirty: false,
+          isDiff: true,
+          diffPath: filePath,
+          diffStaged: staged,
+        },
+      ];
+    });
+  }, []);
+
   const handleCloseTab = useCallback(
     (id: string) => {
       setTabs((prev) => {
@@ -557,6 +580,7 @@ export function IDELayout() {
                 onRunPreview={handleOpenPreview}
                 onOpenTerminal={() => setTerminalOpen(true)}
                 onOpenCommit={handleOpenCommit}
+                onOpenDiff={handleOpenDiff}
                 onCreateFile={handleCreateFile}
                 onCreateFolder={handleCreateFolder}
                 onRenameFile={handleRenameFile}
