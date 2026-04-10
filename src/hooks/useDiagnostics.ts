@@ -14,7 +14,7 @@ export interface ServerDiagnostic {
 
 export interface CheckResult {
   diagnostics: ServerDiagnostic[];
-  ran: { typescript?: boolean; eslint?: boolean; json?: boolean };
+  ran: { typescript?: boolean; eslint?: boolean; json?: boolean; syntax?: boolean };
   durationMs: number;
 }
 
@@ -67,6 +67,7 @@ export function useDiagnostics() {
       if (data.ran.typescript) sourcesRun.push("typescript");
       if (data.ran.eslint) sourcesRun.push("eslint");
       if (data.ran.json) sourcesRun.push("json");
+      if (data.ran.syntax) sourcesRun.push("syntax");
 
       for (const src of sourcesRun) {
         setProblemsForSource(src, bySource.get(src) || []);

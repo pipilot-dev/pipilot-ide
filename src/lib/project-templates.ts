@@ -40,10 +40,100 @@ export function getSeedFiles(name: string, template: ProjectTemplate): SeedFile[
   }
 }
 
+// ─── Shared config snippets ──────────────────────────────────────
+
+const STANDARD_GITIGNORE = `node_modules/
+.next/
+out/
+dist/
+build/
+.cache/
+.vite/
+coverage/
+.DS_Store
+*.log
+.env
+.env.local
+.env.*.local
+.pipilot-tsconfig.json
+`;
+
+function gitignoreFile(): SeedFile {
+  return {
+    id: ".gitignore", name: ".gitignore", type: "file",
+    parentPath: "", language: "plaintext", content: STANDARD_GITIGNORE,
+  };
+}
+
+function jsconfigFile(): SeedFile {
+  // jsconfig.json gives JS projects type-checking + path aliasing in the
+  // editor and server-side diagnostics, without forcing them to be TS.
+  return {
+    id: "jsconfig.json", name: "jsconfig.json", type: "file",
+    parentPath: "", language: "json",
+    content: JSON.stringify({
+      compilerOptions: {
+        target: "esnext",
+        module: "esnext",
+        moduleResolution: "node",
+        jsx: "preserve",
+        allowJs: true,
+        checkJs: false,
+        esModuleInterop: true,
+        resolveJsonModule: true,
+        skipLibCheck: true,
+        baseUrl: ".",
+        paths: { "@/*": ["./*"] },
+      },
+      include: ["**/*.js", "**/*.jsx", "**/*.mjs"],
+      exclude: ["node_modules", "dist", "build", ".next", "out"],
+    }, null, 2),
+  };
+}
+
+function tsconfigFile(): SeedFile {
+  return {
+    id: "tsconfig.json", name: "tsconfig.json", type: "file",
+    parentPath: "", language: "json",
+    content: JSON.stringify({
+      compilerOptions: {
+        target: "esnext",
+        module: "esnext",
+        moduleResolution: "bundler",
+        jsx: "preserve",
+        lib: ["dom", "dom.iterable", "esnext"],
+        allowJs: true,
+        skipLibCheck: true,
+        strict: true,
+        noEmit: true,
+        esModuleInterop: true,
+        resolveJsonModule: true,
+        isolatedModules: true,
+        incremental: true,
+        baseUrl: ".",
+        paths: { "@/*": ["./*"] },
+      },
+      include: ["**/*.ts", "**/*.tsx", "next-env.d.ts"],
+      exclude: ["node_modules", "dist", "build", ".next", "out"],
+    }, null, 2),
+  };
+}
+
+function readmeFile(name: string, template: ProjectTemplate): SeedFile {
+  const cmd = template === "static" ? "Open in preview" : "pnpm install && pnpm dev";
+  return {
+    id: "README.md", name: "README.md", type: "file",
+    parentPath: "", language: "markdown",
+    content: `# ${name}\n\nBuilt with PiPilot IDE.\n\n## Getting started\n\n\`\`\`bash\n${cmd}\n\`\`\`\n`,
+  };
+}
+
 // ─── Static HTML/CSS/JS ─────────────────────────────────────────────
 
 function staticTemplate(name: string): SeedFile[] {
   return [
+    gitignoreFile(),
+    readmeFile(name, "static"),
     { id: "index.html", name: "index.html", type: "file", parentPath: "", language: "html", content: `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -75,6 +165,9 @@ h1 { color: #e94560; }` },
 
 function nodeTemplate(name: string, slug: string): SeedFile[] {
   return [
+    gitignoreFile(),
+    readmeFile(name, "node"),
+    jsconfigFile(),
     { id: "package.json", name: "package.json", type: "file", parentPath: "", language: "json", content: JSON.stringify({
       name: slug, version: "1.0.0", private: true,
       scripts: { dev: "node server.js", start: "node server.js" },
@@ -102,6 +195,9 @@ server.listen(3000, '0.0.0.0', () => {
 
 function viteReactTemplate(name: string, slug: string): SeedFile[] {
   return [
+    gitignoreFile(),
+    readmeFile(name, "vite-react"),
+    jsconfigFile(),
     { id: "package.json", name: "package.json", type: "file", parentPath: "", language: "json", content: JSON.stringify({
       name: slug, version: "1.0.0", private: true, type: "module",
       scripts: {
@@ -185,6 +281,9 @@ body { font-family: system-ui, -apple-system, sans-serif; }
 
 function nextjsTemplate(name: string, slug: string): SeedFile[] {
   return [
+    gitignoreFile(),
+    readmeFile(name, "nextjs"),
+    jsconfigFile(),
     { id: "package.json", name: "package.json", type: "file", parentPath: "", language: "json", content: JSON.stringify({
       name: slug, version: "1.0.0", private: true,
       scripts: {
@@ -252,6 +351,9 @@ export default function Home() {
 
 function expressTemplate(name: string, slug: string): SeedFile[] {
   return [
+    gitignoreFile(),
+    readmeFile(name, "express"),
+    jsconfigFile(),
     { id: "package.json", name: "package.json", type: "file", parentPath: "", language: "json", content: JSON.stringify({
       name: slug, version: "1.0.0", private: true,
       scripts: {

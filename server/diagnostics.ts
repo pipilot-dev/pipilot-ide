@@ -266,6 +266,168 @@ export async function runEslintCheck(workDir: string): Promise<Diagnostic[]> {
   return diagnostics;
 }
 
+// ─── Plain JS/TS syntax check (Acorn-based, no config required) ─
+
+/**
+ * Walk the workspace and run a syntax check on every .js/.mjs/.cjs file
+ * via `node --check`. This is Node's built-in syntax checker and supports
+ * both CommonJS and ES modules natively. Skips .jsx/.tsx (need a JSX parser).
+ */
+export async function runJsSyntaxCheck(workDir: string): Promise<Diagnostic[]> {
+  const diagnostics: Diagnostic[] = [];
+  const skipDirs = new Set([
+    "node_modules", ".git", "dist", "build", ".next", "out",
+    ".cache", ".vite", "coverage", ".turbo", ".vercel",
+  ]);
+  // Only check pure JS files — JSX/TSX need a proper parser
+  const exts = new Set([".js", ".mjs", ".cjs"]);
+  const filesToCheck: string[] = [];
+
+  function walk(dir: string, rel: string) {
+    if (filesToCheck.length > 200) return; // cap
+    let entries: string[];
+    try { entries = fs.readdirSync(dir); } catch { return; }
+    for (const entry of entries) {
+      if (skipDirs.has(entry)) continue;
+      const full = path.join(dir, entry);
+      const relPath = rel ? `${rel}/${entry}` : entry;
+      let stat: fs.Stats;
+      try { stat = fs.statSync(full); } catch { continue; }
+      if (stat.isDirectory()) {
+        walk(full, relPath);
+      } else if (stat.isFile()) {
+        const ext = path.extname(entry).toLowerCase();
+        if (!exts.has(ext)) continue;
+        if (stat.size > 500_000) continue;
+        // Skip files containing JSX-looking syntax
+        try {
+          const peek = fs.readFileSync(full, "utf8").slice(0, 4000);
+          if (/<[A-Z][\w.]*[\s/>]/.test(peek) || /<\/[A-Z][\w.]*>/.test(peek)) continue;
+        } catch { continue; }
+        filesToCheck.push(relPath);
+      }
+    }
+  }
+  walk(workDir, "");
+
+  // Run `node --check` on each file in parallel batches
+  const BATCH = 10;
+  for (let i = 0; i < filesToCheck.length; i += BATCH) {
+    const batch = filesToCheck.slice(i, i + BATCH);
+    const results = await Promise.all(
+      batch.map((relPath) =>
+        runCommand(process.execPath, ["--check", relPath], workDir, 10000),
+      ),
+    );
+    for (let j = 0; j < batch.length; j++) {
+      const res = results[j];
+      const relPath = batch[j];
+      if (res.code === 0) continue;
+      // Parse Node syntax error output. Examples:
+      //   path/file.js:5
+      //   foo bar
+      //       ^^^
+      //   SyntaxError: Unexpected identifier 'bar'
+      const out = res.stderr + res.stdout;
+      // Try to find a line with "SyntaxError: ..."
+      const errMatch = out.match(/SyntaxError:\s*(.+)/);
+      if (!errMatch) continue;
+      const message = errMatch[1].trim();
+      // Try to find the file:line at the start
+      const locMatch = out.match(/[^:\n]+:(\d+)\s*$/m);
+      const line = locMatch ? parseInt(locMatch[1]) : 1;
+      diagnostics.push({
+        file: relPath,
+        line,
+        column: 1,
+        severity: "error",
+        code: "syntax",
+        message,
+        source: "syntax",
+      });
+    }
+  }
+
+  return diagnostics;
+}
+
+/**
+ * Fallback TypeScript check when the project has .ts/.tsx files but no
+ * tsconfig.json. We synthesize a minimal config in a temp file and run
+ * tsc against it.
+ */
+export async function runTypeScriptFallback(workDir: string): Promise<Diagnostic[]> {
+  // Find any .ts/.tsx files in the workspace
+  const skipDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "out"]);
+  const tsFiles: string[] = [];
+
+  function findTs(dir: string, rel: string) {
+    if (tsFiles.length > 100) return; // cap
+    let entries: string[];
+    try { entries = fs.readdirSync(dir); } catch { return; }
+    for (const entry of entries) {
+      if (skipDirs.has(entry)) continue;
+      const full = path.join(dir, entry);
+      const relPath = rel ? `${rel}/${entry}` : entry;
+      let stat: fs.Stats;
+      try { stat = fs.statSync(full); } catch { continue; }
+      if (stat.isDirectory()) {
+        findTs(full, relPath);
+      } else if (stat.isFile()) {
+        const ext = path.extname(entry).toLowerCase();
+        if (ext === ".ts" || ext === ".tsx") tsFiles.push(relPath);
+      }
+    }
+  }
+  findTs(workDir, "");
+
+  if (tsFiles.length === 0) return [];
+
+  // Need tsc — try local first, then global
+  const localTsc = findLocalBin(workDir, "tsc");
+  if (!localTsc) {
+    // No local tsc and no tsconfig — we can't check TS files
+    return [];
+  }
+
+  // Write a synthesized tsconfig to a temp file in the workspace
+  const tempConfig = path.join(workDir, ".pipilot-tsconfig.json");
+  const config = {
+    compilerOptions: {
+      target: "esnext",
+      module: "esnext",
+      moduleResolution: "node",
+      jsx: "preserve",
+      esModuleInterop: true,
+      skipLibCheck: true,
+      allowJs: true,
+      noEmit: true,
+      strict: false,
+      isolatedModules: true,
+      resolveJsonModule: true,
+    },
+    include: tsFiles,
+    exclude: ["node_modules"],
+  };
+  try {
+    fs.writeFileSync(tempConfig, JSON.stringify(config, null, 2));
+  } catch {
+    return [];
+  }
+
+  try {
+    const result = await runCommand(
+      process.execPath,
+      [localTsc, "--noEmit", "--pretty", "false", "-p", ".pipilot-tsconfig.json"],
+      workDir,
+      120000,
+    );
+    return parseTscOutput(result.stdout + "\n" + result.stderr, workDir);
+  } finally {
+    try { fs.unlinkSync(tempConfig); } catch {}
+  }
+}
+
 // ─── JSON syntax ─────────────────────────────────────────────────
 
 export async function runJsonCheck(workDir: string): Promise<Diagnostic[]> {
@@ -328,22 +490,52 @@ export async function runJsonCheck(workDir: string): Promise<Diagnostic[]> {
 
 export async function runAllChecks(workDir: string): Promise<{
   diagnostics: Diagnostic[];
-  ran: { typescript: boolean; eslint: boolean; json: boolean };
+  ran: { typescript: boolean; eslint: boolean; json: boolean; syntax: boolean };
   durationMs: number;
 }> {
   const start = Date.now();
-  const ran = {
-    typescript: hasTsConfig(workDir),
-    eslint: !!findLocalBin(workDir, "eslint") && hasEslintConfig(workDir),
-    json: true,
-  };
 
-  const [tsDiags, eslintDiags, jsonDiags] = await Promise.all([
-    ran.typescript ? runTypeScriptCheck(workDir).catch(() => []) : Promise.resolve([]),
-    ran.eslint ? runEslintCheck(workDir).catch(() => []) : Promise.resolve([]),
-    runJsonCheck(workDir).catch(() => []),
+  const projectHasTsConfig = hasTsConfig(workDir);
+  const localTsc = findLocalBin(workDir, "tsc");
+  const localEslint = findLocalBin(workDir, "eslint");
+  const projectHasEslint = !!localEslint && hasEslintConfig(workDir);
+
+  // TypeScript: use real tsconfig if present, otherwise fallback synthesized config
+  // (only if there are .ts/.tsx files AND tsc is available)
+  const tsCheck = projectHasTsConfig
+    ? runTypeScriptCheck(workDir).catch(() => [])
+    : (localTsc ? runTypeScriptFallback(workDir).catch(() => []) : Promise.resolve([] as Diagnostic[]));
+
+  // Always run JS syntax check (no config needed)
+  const syntaxCheck = runJsSyntaxCheck(workDir).catch(() => []);
+
+  // ESLint: only if installed and configured
+  const eslintCheck = projectHasEslint
+    ? runEslintCheck(workDir).catch(() => [])
+    : Promise.resolve([] as Diagnostic[]);
+
+  // JSON: always
+  const jsonCheck = runJsonCheck(workDir).catch(() => []);
+
+  const [tsDiags, syntaxDiags, eslintDiags, jsonDiags] = await Promise.all([
+    tsCheck, syntaxCheck, eslintCheck, jsonCheck,
   ]);
 
-  const all = [...tsDiags, ...eslintDiags, ...jsonDiags];
-  return { diagnostics: all, ran, durationMs: Date.now() - start };
+  // Dedupe: if a file already has a TS error, don't add a syntax error for it
+  // (TS errors are more informative)
+  const filesWithTsErrors = new Set(tsDiags.map((d) => d.file));
+  const filteredSyntax = syntaxDiags.filter((d) => !filesWithTsErrors.has(d.file));
+
+  const all = [...tsDiags, ...filteredSyntax, ...eslintDiags, ...jsonDiags];
+
+  return {
+    diagnostics: all,
+    ran: {
+      typescript: projectHasTsConfig || (!!localTsc && tsDiags.length > 0),
+      eslint: projectHasEslint,
+      json: true,
+      syntax: true,
+    },
+    durationMs: Date.now() - start,
+  };
 }
