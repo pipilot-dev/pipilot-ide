@@ -149,9 +149,9 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     return () => clearTimeout(timer);
   }, [sidebarSearchQuery]);
 
-  // Perform search when debounced query changes
+  // Perform search when debounced query changes — uses real disk via server
   useEffect(() => {
-    if (!debouncedQuery.trim()) {
+    if (!debouncedQuery.trim() || !activeProjectId) {
       setSearchResults([]);
       return;
     }
@@ -161,85 +161,25 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
 
     async function performSearch() {
       try {
-        let allFiles = await db.files.where("type").equals("file").toArray();
-        if (activeProjectId) {
-          allFiles = allFiles.filter((f) => f.projectId === activeProjectId);
-        }
-
-        let pattern: RegExp;
-        try {
-          if (useRegex) {
-            pattern = new RegExp(debouncedQuery, caseSensitive ? "g" : "gi");
-          } else {
-            pattern = new RegExp(escapeRegExp(debouncedQuery), caseSensitive ? "g" : "gi");
-          }
-        } catch {
-          // Invalid regex - bail out
-          if (!cancelled) {
-            setSearchResults([]);
-            setIsSearching(false);
-          }
-          return;
-        }
-
-        const results: SearchResult[] = [];
-
-        if (searchMode === "filename") {
-          for (const file of allFiles) {
-            if (results.length >= 50) break;
-            if (pattern.test(file.name)) {
-              pattern.lastIndex = 0;
-              results.push({
-                fileId: file.id,
-                fileName: file.name,
-                filePath: file.id,
-                matches: [],
-              });
-            }
-            pattern.lastIndex = 0;
-          }
-        } else {
-          // Content search
-          for (const file of allFiles) {
-            if (results.length >= 50) break;
-            const content = file.content ?? "";
-            if (!content) continue;
-
-            const lines = content.split("\n");
-            const matches: ContentMatch[] = [];
-
-            for (let i = 0; i < lines.length; i++) {
-              if (matches.length >= 10) break;
-              const line = lines[i];
-              pattern.lastIndex = 0;
-              const match = pattern.exec(line);
-              if (match) {
-                matches.push({
-                  lineNumber: i + 1,
-                  lineText: line,
-                  matchStart: match.index,
-                  matchEnd: match.index + match[0].length,
-                });
-              }
-            }
-
-            if (matches.length > 0) {
-              results.push({
-                fileId: file.id,
-                fileName: file.name,
-                filePath: file.id,
-                matches,
-              });
-            }
-          }
-        }
-
-        if (!cancelled) {
-          setSearchResults(results);
-          // Auto-expand all results
-          setExpandedResults(new Set(results.map((r) => r.fileId)));
-          setIsSearching(false);
-        }
+        const res = await fetch("/api/project/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: activeProjectId,
+            query: debouncedQuery,
+            mode: searchMode,
+            caseSensitive,
+            useRegex,
+            maxResults: 200,
+          }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        const results: SearchResult[] = data.results || [];
+        setSearchResults(results);
+        setExpandedResults(new Set(results.map((r) => r.fileId)));
+        setIsSearching(false);
       } catch (err) {
         console.error("Search error:", err);
         if (!cancelled) {

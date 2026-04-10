@@ -34,6 +34,7 @@ import { NotificationCenter } from "@/components/ide/NotificationCenter";
 import { ProblemsPanel } from "@/components/ide/ProblemsPanel";
 import { useNotifications } from "@/contexts/NotificationContext";
 import { useProblems } from "@/contexts/ProblemsContext";
+import { useGitStatusCount } from "@/hooks/useGitStatusCount";
 
 function findFileById(nodes: FileNode[], id: string): FileNode | null {
   for (const node of nodes) {
@@ -74,6 +75,7 @@ export function IDELayout() {
 
   const { addNotification } = useNotifications();
   const { errorCount, warningCount } = useProblems();
+  const gitChangeCount = useGitStatusCount();
   const bellRef = useRef<HTMLElement>(null);
 
   const sidebar = useSidebarResizable(220, 140, 400);
@@ -326,6 +328,26 @@ export function IDELayout() {
     });
   }, []);
 
+  const handleOpenSettings = useCallback(() => {
+    const tabId = "__settings__";
+    setTabs((prev) => {
+      const exists = prev.find((t) => t.node.id === tabId);
+      if (exists) {
+        setActiveTabId(tabId);
+        return prev;
+      }
+      setActiveTabId(tabId);
+      return [
+        ...prev,
+        {
+          node: { id: tabId, name: "Settings", type: "file" as const },
+          isDirty: false,
+          isSettings: true,
+        },
+      ];
+    });
+  }, []);
+
   const handleOpenDiff = useCallback((filePath: string, staged: boolean) => {
     const tabId = `__diff__${staged ? "s" : "u"}__${filePath}`;
     const fileName = filePath.split("/").pop() || filePath;
@@ -556,7 +578,8 @@ export function IDELayout() {
           onViewChange={handleViewChange}
           chatOpen={chatOpen}
           onToggleChat={() => setChatOpen((p) => !p)}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={handleOpenSettings}
+          badges={{ "source-control": gitChangeCount }}
         />
 
         {/* Sidebar */}

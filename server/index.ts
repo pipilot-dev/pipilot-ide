@@ -1520,6 +1520,91 @@ app.post("/api/git/delete-branch", async (req, res) => {
   res.json(await gitOps.gitDeleteBranch(workDir, name, force));
 });
 
+// ── Project file search (real disk, used by Search panel) ──────────
+// POST /api/project/search
+app.post("/api/project/search", async (req, res) => {
+  const { projectId, query, mode, caseSensitive, useRegex, exclude, maxResults } = req.body;
+  if (!projectId || !query) return res.status(400).json({ error: "projectId and query required" });
+
+  const workDir = path.join(WORKSPACE_BASE, projectId);
+  if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
+
+  const excludeSet = new Set(["node_modules", ".git", "dist", "build", ".next", "out", ".cache", ".vite"]);
+  if (Array.isArray(exclude)) {
+    for (const e of exclude) excludeSet.add(e);
+  }
+
+  const limit = Math.min(maxResults || 200, 1000);
+  const results: { fileId: string; fileName: string; filePath: string; matches: { lineNumber: number; lineText: string; matchStart: number; matchEnd: number }[] }[] = [];
+
+  let pattern: RegExp;
+  try {
+    const flags = caseSensitive ? "g" : "gi";
+    if (useRegex) pattern = new RegExp(query, flags);
+    else pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
+  } catch {
+    return res.status(400).json({ error: "Invalid regex" });
+  }
+
+  // Recursive walk
+  function walk(dir: string, relBase: string) {
+    if (results.length >= limit) return;
+    let entries: string[];
+    try { entries = fs.readdirSync(dir); } catch { return; }
+    for (const entry of entries) {
+      if (results.length >= limit) return;
+      if (excludeSet.has(entry)) continue;
+      const full = path.join(dir, entry);
+      const relPath = relBase ? `${relBase}/${entry}` : entry;
+      let stat: fs.Stats;
+      try { stat = fs.statSync(full); } catch { continue; }
+
+      if (stat.isDirectory()) {
+        walk(full, relPath);
+      } else if (stat.isFile()) {
+        // Skip very large files (> 1MB)
+        if (stat.size > 1_000_000) continue;
+
+        if (mode === "filename") {
+          pattern.lastIndex = 0;
+          if (pattern.test(entry)) {
+            results.push({ fileId: relPath, fileName: entry, filePath: relPath, matches: [] });
+          }
+        } else {
+          // Content search
+          let content: string;
+          try { content = fs.readFileSync(full, "utf8"); } catch { continue; }
+          // Skip binary-ish files (heuristic: contains null byte in first 8KB)
+          if (content.slice(0, 8192).includes("\0")) continue;
+
+          const lines = content.split("\n");
+          const matches: { lineNumber: number; lineText: string; matchStart: number; matchEnd: number }[] = [];
+          for (let i = 0; i < lines.length; i++) {
+            if (matches.length >= 20) break;
+            const line = lines[i];
+            pattern.lastIndex = 0;
+            const m = pattern.exec(line);
+            if (m) {
+              matches.push({
+                lineNumber: i + 1,
+                lineText: line.slice(0, 500),  // cap line length
+                matchStart: m.index,
+                matchEnd: m.index + m[0].length,
+              });
+            }
+          }
+          if (matches.length > 0) {
+            results.push({ fileId: relPath, fileName: entry, filePath: relPath, matches });
+          }
+        }
+      }
+    }
+  }
+
+  walk(workDir, "");
+  res.json({ results, truncated: results.length >= limit });
+});
+
 // ── Project Scripts (for Run/Debug panel) ───────────────────────────
 // GET /api/project/scripts — read package.json scripts
 app.get("/api/project/scripts", (req, res) => {

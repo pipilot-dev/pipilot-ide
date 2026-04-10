@@ -1063,23 +1063,30 @@ export function TerminalPanel() {
         </button>
       </div>
 
-      {/* Terminal output */}
-      {activeShell?.type === "real" ? (
-        <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+      {/* Terminal output — render ALL real shells, hide inactive ones, so
+          PTYs persist across tab switches and each shell is its own instance */}
+      {shells.filter(s => s.type === "real").map(s => (
+        <div
+          key={s.id}
+          style={{
+            flex: 1, minHeight: 0, overflow: "hidden",
+            display: activeShellId === s.id ? "block" : "none",
+          }}
+        >
           <RealTerminal
-            sessionId={activeShell.id}
+            sessionId={s.id}
             projectId={activeProjectId}
-            initialCommand={activeShell.initialCommand}
-            onExit={() => {
-              // Mark as exited but keep the tab
-            }}
+            initialCommand={s.initialCommand}
+            onExit={() => { /* keep tab */ }}
           />
         </div>
-      ) : activeShell?.type === "node" ? (
+      ))}
+
+      {activeShell?.type === "node" ? (
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
           <XTerminal />
         </div>
-      ) : (
+      ) : activeShell?.type === "virtual" ? (
         <div
           ref={scrollRef}
           className="px-3 py-2 font-mono text-xs leading-5 cursor-text"
@@ -1113,7 +1120,7 @@ export function TerminalPanel() {
             />
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
