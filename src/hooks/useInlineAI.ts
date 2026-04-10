@@ -201,14 +201,16 @@ class CompletionFormatter {
   }
 
   private buildRange(): IRange {
-    const newlines = (this.completion.match(/\n/g) || []).length;
-    const lines = this.completion.split("\n");
-    const lastLineLen = lines[lines.length - 1].length;
+    // For inline ghost text we want a ZERO-WIDTH range at the cursor.
+    // Monaco interprets non-zero-width ranges as REPLACEMENT, so a span
+    // that goes past the cursor would tell Monaco to overwrite real text.
+    // The insertText itself can contain \n and Monaco renders it as
+    // multi-line ghost text from the insertion point.
     return {
       startLineNumber: this.position.lineNumber,
       startColumn: this.position.column,
-      endLineNumber: this.position.lineNumber + newlines,
-      endColumn: newlines === 0 ? this.position.column + lastLineLen : lastLineLen + 1,
+      endLineNumber: this.position.lineNumber,
+      endColumn: this.position.column,
     };
   }
 

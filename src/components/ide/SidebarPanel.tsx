@@ -20,6 +20,8 @@ import {
   Check,
   RefreshCw,
   History,
+  FilePlus,
+  FolderPlus,
 } from "lucide-react";
 import { exportProjectAsZip } from "@/lib/exportZip";
 import { importFromZip, importFromFolder } from "@/lib/importFiles";
@@ -579,6 +581,23 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
               </span>
             )}
             <div className="flex items-center gap-1">
+              <button
+                className="p-1 rounded hover:bg-white/10 transition-colors"
+                onClick={() => handleCreateFile("")}
+                title="New File (in root)"
+                style={{ color: "hsl(207 90% 65%)" }}
+              >
+                <FilePlus size={13} />
+              </button>
+              <button
+                className="p-1 rounded hover:bg-white/10 transition-colors"
+                onClick={() => handleCreateFolder("")}
+                title="New Folder (in root)"
+                style={{ color: "hsl(38 92% 60%)" }}
+              >
+                <FolderPlus size={13} />
+              </button>
+              <div style={{ width: 1, height: 14, background: "hsl(220 13% 25%)", margin: "0 2px" }} />
               <button
                 className="p-1 rounded hover:bg-white/10 transition-colors"
                 onClick={() => folderInputRef.current?.click()}
