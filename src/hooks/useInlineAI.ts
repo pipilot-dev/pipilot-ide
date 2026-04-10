@@ -118,16 +118,26 @@ class CompletionFormatter {
 
   private removeOverlapWithBefore(): this {
     // If the completion starts with text already present immediately before
-    // the cursor, strip the overlap.
+    // the cursor, strip the overlap. But only if there's meaningful content
+    // left after the strip, otherwise keep the original.
     const beforeRange = new this.monaco.Range(1, 1, this.position.lineNumber, this.position.column);
     const before = this.model.getValueInRange(beforeRange);
-    const compTrimmed = this.completion;
-    const max = Math.min(compTrimmed.length, before.length);
+    const max = Math.min(this.completion.length, before.length);
     let overlap = 0;
     for (let len = 1; len <= max; len++) {
-      if (before.endsWith(compTrimmed.slice(0, len))) overlap = len;
+      if (before.endsWith(this.completion.slice(0, len))) overlap = len;
     }
-    if (overlap > 0) this.completion = this.completion.slice(overlap);
+    if (overlap > 0) {
+      const stripped = this.completion.slice(overlap);
+      // Only apply if there's still substantial content left
+      if (stripped.trim().length >= 2) {
+        this.completion = stripped;
+      }
+      // Otherwise leave the completion as-is — Monaco will handle the
+      // mismatch between range and current text by simply not showing it
+      // OR by using its own diff. Worst case: nothing shows. Best case:
+      // we keep a useful longer suggestion that extends beyond the overlap.
+    }
     return this;
   }
 
@@ -305,9 +315,18 @@ async function fetchSuggestion(): Promise<void> {
 
     dlog("cached", { count: cache.length, preview: raw.slice(0, 60) });
 
-    // Tell Monaco to re-query so the new cached suggestion shows up
+    // Tell Monaco to re-query so the new cached suggestion shows up.
+    // Use both methods for compatibility — different Monaco versions
+    // accept different invocation styles.
     try {
-      editor.trigger("pipilot-ai", "editor.action.inlineSuggest.trigger", {});
+      const action = editor.getAction("editor.action.inlineSuggest.trigger");
+      if (action) {
+        action.run();
+        dlog("triggered via action");
+      } else {
+        editor.trigger("pipilot-ai", "editor.action.inlineSuggest.trigger", {});
+        dlog("triggered via editor.trigger");
+      }
     } catch (err) {
       dlog("trigger error", err);
     }
@@ -374,15 +393,18 @@ function registerProvider(monaco: typeof Monaco) {
         cacheSize: cache.length,
       });
 
-      // Filter cache for entries relevant to current position. With the
-      // debounced fetcher, the user may have typed 1-2 more chars between
-      // when the request was issued and the response arrived, so allow
-      // up to 8 columns of drift on the same line.
-      const relevant = cache.filter((s) => {
-        if (s.range.startLineNumber !== position.lineNumber) return false;
-        if (Math.abs(s.range.startColumn - position.column) > 8) return false;
-        return true;
-      });
+      // Filter cache for entries relevant to current position. Allow up
+      // to 12 columns of drift on the same line (the user may have typed
+      // a few chars while waiting for the response). Prefer the MOST
+      // RECENT cached entries by reversing.
+      const relevant = [...cache]
+        .reverse()
+        .filter((s) => {
+          if (s.range.startLineNumber !== position.lineNumber) return false;
+          if (Math.abs(s.range.startColumn - position.column) > 12) return false;
+          return true;
+        })
+        .slice(0, 3); // Top 3 most-recent matches
 
       // Don't suggest if char before cursor is something weird (only after letters/nums/whitespace)
       const charBeforeIdx = position.column - 2;
