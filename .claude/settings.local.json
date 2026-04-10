@@ -82,7 +82,10 @@
       "Bash(taskkill //F //PID 7444 //T)",
       "Bash(findstr \":44405\")",
       "Bash(cd:*)",
-      "Bash(cat EOF node_modules/ .next/ out/ build/ dist/ .env .env.local *.log .DS_Store .claude_history.json EOF git status --porcelain)"
+      "Bash(cat EOF node_modules/ .next/ out/ build/ dist/ .env .env.local *.log .DS_Store .claude_history.json EOF git status --porcelain)",
+      "WebFetch(domain:microsoft.github.io)",
+      "Bash(find C:/Users/big/Documents/Projects/pipilot-ide/node_modules/monaco-editor -name *.d.ts)",
+      "Bash(xargs grep:*)"
     ]
   }
 }

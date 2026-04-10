@@ -9,7 +9,8 @@
  * - Cancels in-flight requests when user keeps typing
  */
 
-import type { editor, languages, IDisposable } from "monaco-editor";
+import type * as Monaco from "monaco-editor";
+import type { IDisposable } from "monaco-editor";
 
 const A0_LLM_URL = "https://api.a0.dev/ai/llm";
 
@@ -116,80 +117,79 @@ async function fetchCompletion(language: string, before: string, after: string, 
  */
 export function registerInlineAI(monaco: typeof import("monaco-editor")): IDisposable {
   // Common languages we'll provide completions for
-  const languages = [
+  const langs = [
     "typescript", "javascript", "typescriptreact", "javascriptreact",
     "html", "css", "json", "markdown", "python", "go", "rust", "java",
   ];
 
   const disposables: IDisposable[] = [];
 
-  for (const lang of languages) {
-    const d = monaco.languages.registerInlineCompletionsProvider(lang, {
-      async provideInlineCompletions(model, position, _context, token) {
-        // Cancel any in-flight request
-        if (abortController) {
-          try { abortController.abort(); } catch {}
-        }
-        abortController = new AbortController();
+  // Build the provider object with explicit property assignment so the
+  // required disposeInlineCompletions method is guaranteed to exist on the
+  // own-properties of the object passed to Monaco.
+  const provider: Monaco.languages.InlineCompletionsProvider = {
+    provideInlineCompletions: async (model, position, _context, token) => {
+      // Cancel any in-flight request
+      if (abortController) {
+        try { abortController.abort(); } catch {}
+      }
+      abortController = new AbortController();
 
-        const offset = model.getOffsetAt(position);
-        const fullText = model.getValue();
-        const before = clipBeforeCursor(fullText.slice(0, offset));
-        const after = clipAfterCursor(fullText.slice(offset));
+      const offset = model.getOffsetAt(position);
+      const fullText = model.getValue();
+      const before = clipBeforeCursor(fullText.slice(0, offset));
+      const after = clipAfterCursor(fullText.slice(offset));
 
-        // Skip if there's nothing meaningful before cursor
-        if (before.trim().length < 2) {
+      // Skip if there's nothing meaningful before cursor
+      if (before.trim().length < 2) {
+        return { items: [] };
+      }
+
+      if (token.isCancellationRequested) {
+        return { items: [] };
+      }
+
+      try {
+        const cancelHandler = () => {
+          try { abortController?.abort(); } catch {}
+        };
+        token.onCancellationRequested(cancelHandler);
+
+        // Use the model's language id for the prompt instead of the registered language key
+        const langId = model.getLanguageId() || "code";
+        const completion = await fetchCompletion(langId, before, after, abortController.signal);
+
+        if (token.isCancellationRequested || !completion) {
           return { items: [] };
         }
 
-        // Check if cancellation is requested before making the call
-        if (token.isCancellationRequested) {
-          return { items: [] };
-        }
+        return {
+          items: [
+            {
+              insertText: completion,
+              range: new monaco.Range(
+                position.lineNumber,
+                position.column,
+                position.lineNumber,
+                position.column
+              ),
+            },
+          ],
+        };
+      } catch (err: any) {
+        if (err?.name === "AbortError") return { items: [] };
+        return { items: [] };
+      }
+    },
+    // REQUIRED method (not optional) in monaco-editor 0.55+. Must exist as
+    // an own property on the provider object or Monaco throws TypeError.
+    disposeInlineCompletions: (_completions) => {
+      // No-op: we don't allocate per-completion resources
+    },
+  };
 
-        try {
-          // Listen for cancellation from monaco
-          const cancelHandler = () => {
-            try { abortController?.abort(); } catch {}
-          };
-          token.onCancellationRequested(cancelHandler);
-
-          const completion = await fetchCompletion(lang, before, after, abortController.signal);
-
-          if (token.isCancellationRequested || !completion) {
-            return { items: [] };
-          }
-
-          return {
-            items: [
-              {
-                insertText: completion,
-                range: new monaco.Range(
-                  position.lineNumber,
-                  position.column,
-                  position.lineNumber,
-                  position.column
-                ),
-              },
-            ],
-            enableForwardStability: true,
-          };
-        } catch (err: any) {
-          if (err?.name === "AbortError") {
-            return { items: [] };
-          }
-          // Silently fail — don't disrupt typing
-          return { items: [] };
-        }
-      },
-      // Some Monaco versions expect disposeInlineCompletions, others freeInlineCompletions
-      freeInlineCompletions() {
-        // No-op: nothing to clean up per-completion
-      },
-      disposeInlineCompletions() {
-        // No-op: nothing to clean up per-completion
-      },
-    } as any);
+  for (const lang of langs) {
+    const d = monaco.languages.registerInlineCompletionsProvider(lang, provider);
     disposables.push(d);
   }
 
