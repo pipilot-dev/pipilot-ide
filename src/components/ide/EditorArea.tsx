@@ -5,6 +5,7 @@ import { X, Circle, ChevronRight, FileCode2, FileJson, FileText, FileType, Folde
 import { FileNode } from "@/hooks/useFileSystem";
 import { WebPreview } from "./WebPreview";
 import { CommitDetailView } from "./CommitDetailView";
+import { registerInlineAI } from "@/hooks/useInlineAI";
 import { useSettings } from "@/hooks/useSettings";
 import { useActiveProject } from "@/contexts/ProjectContext";
 
@@ -352,6 +353,15 @@ declare module "*.json" { const content: any; export default content; }
 declare module "*.woff" { const content: string; export default content; }
 declare module "*.woff2" { const content: string; export default content; }
 `, "file:///global.d.ts");
+
+    // Register inline AI completion provider (Copilot-like ghost text)
+    try {
+      const aiDisposable = registerInlineAI(monaco);
+      // Store on editor for cleanup if needed
+      (editor as any).__pipilotInlineAI = aiDisposable;
+    } catch (err) {
+      console.warn("Inline AI registration failed:", err);
+    }
   };
 
   // Register all project files as Monaco models for Ctrl+Click navigation
@@ -646,6 +656,16 @@ declare module "*.woff2" { const content: string; export default content; }
                   horizontal: "auto",
                   verticalScrollbarSize: 8,
                   horizontalScrollbarSize: 8,
+                },
+                // AI inline completions (Copilot-like ghost text)
+                inlineSuggest: {
+                  enabled: true,
+                  mode: "subwordSmart",
+                  showToolbar: "onHover",
+                },
+                suggest: {
+                  preview: true,
+                  showInlineDetails: true,
                 },
               }}
             />
