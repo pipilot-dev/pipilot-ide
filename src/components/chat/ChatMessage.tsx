@@ -501,21 +501,20 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
 
   return (
     <div
-      className="group/msg relative flex gap-2.5 mb-5 flex-row"
+      className="group/msg relative flex gap-2 mb-5 flex-row"
       style={{ animation: "fadeInMsg 0.3s ease-out" }}
       data-testid={`chat-message-${message.id}`}
     >
-      {/* User Avatar — editorial-terminal */}
+      {/* User Avatar — bare icon, no chrome */}
       <div
-        className="flex-shrink-0 w-7 h-7 flex items-center justify-center text-xs font-medium mt-0.5"
+        className="flex-shrink-0 flex items-start justify-center"
         style={{
-          background: "#15151b",
-          color: "#c6ff3d",
-          border: "1px solid #28282f",
-          borderRadius: 4,
+          width: 14,
+          paddingTop: 4,
+          color: "#a8a8b3",
         }}
       >
-        <User size={13} strokeWidth={1.6} />
+        <User size={12} strokeWidth={1.8} />
       </div>
 
       {/* User message — full-width editorial block */}
@@ -791,21 +790,20 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
 
   return (
     <div
-      className="group/msg relative flex gap-2.5 mb-5 flex-row"
+      className="group/msg relative flex gap-2 mb-5 flex-row"
       style={{ animation: "fadeInMsg 0.3s ease-out" }}
       data-testid={`chat-turn-${messages[0]?.id}`}
     >
-      {/* AI Avatar — editorial-terminal */}
+      {/* AI Avatar — bare icon, no chrome */}
       <div
-        className="flex-shrink-0 w-7 h-7 flex items-center justify-center text-xs font-medium mt-0.5"
+        className="flex-shrink-0 flex items-start justify-center"
         style={{
-          background: "#15151b",
+          width: 14,
+          paddingTop: 4,
           color: "#c6ff3d",
-          border: "1px solid #c6ff3d55",
-          borderRadius: 4,
         }}
       >
-        <Sparkles size={13} strokeWidth={1.6} />
+        <Sparkles size={12} strokeWidth={1.8} />
       </div>
 
       {/* Assistant turn — transparent container, no bubble */}
