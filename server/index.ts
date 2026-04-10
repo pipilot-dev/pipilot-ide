@@ -9,6 +9,7 @@ import { startDevServer, stopDevServer, getDevServerStatus, stopAllDevServers, s
 import * as pty from "node-pty";
 import * as gitOps from "./git";
 import { runAllChecks, runTypeScriptCheck } from "./diagnostics";
+import { seedMissingConfigs, detectFramework } from "./seed-config";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -1627,6 +1628,34 @@ app.get("/api/diagnostics/check", async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST /api/project/seed-config — write missing config files into a project
+app.post("/api/project/seed-config", (req, res) => {
+  const { projectId } = req.body;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+
+  const workDir = path.join(WORKSPACE_BASE, projectId);
+  if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
+
+  try {
+    const report = seedMissingConfigs(workDir);
+    res.json(report);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/project/detect-framework — return the detected framework type
+app.get("/api/project/detect-framework", (req, res) => {
+  const projectId = req.query.projectId as string;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+
+  const workDir = path.join(WORKSPACE_BASE, projectId);
+  if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
+
+  const framework = detectFramework(workDir);
+  res.json({ framework });
 });
 
 // ── Project Scripts (for Run/Debug panel) ───────────────────────────

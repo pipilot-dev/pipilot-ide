@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, useRef } from "react";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { useProblems, type Problem } from "@/contexts/ProblemsContext";
 
@@ -18,6 +18,12 @@ export interface CheckResult {
   durationMs: number;
 }
 
+export interface SeedReport {
+  framework: string;
+  added: string[];
+  skipped: string[];
+}
+
 /**
  * Run real linter / type-checker against the project on disk via the
  * agent server. Replaces all problems for the relevant sources in the
@@ -28,13 +34,42 @@ export function useDiagnostics() {
   const { setProblemsForSource } = useProblems();
   const [running, setRunning] = useState(false);
   const [lastResult, setLastResult] = useState<CheckResult | null>(null);
+  const [lastSeedReport, setLastSeedReport] = useState<SeedReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Track which projects we've already auto-seeded so we only do it once per session
+  const seededRef = useRef<Set<string>>(new Set());
+
+  /** Auto-seed missing config files (.gitignore, jsconfig.json, env.d.ts) */
+  const seedMissingConfigs = useCallback(async (): Promise<SeedReport | null> => {
+    if (!activeProjectId) return null;
+    if (seededRef.current.has(activeProjectId)) return null;
+    seededRef.current.add(activeProjectId);
+    try {
+      const res = await fetch("/api/project/seed-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: activeProjectId }),
+      });
+      if (!res.ok) return null;
+      const report: SeedReport = await res.json();
+      if (report.added.length > 0) {
+        setLastSeedReport(report);
+      }
+      return report;
+    } catch {
+      return null;
+    }
+  }, [activeProjectId]);
 
   const runChecks = useCallback(async () => {
     if (!activeProjectId) return null;
     setRunning(true);
     setError(null);
     try {
+      // Auto-seed missing config files BEFORE checking, so the very first
+      // check on a fresh project gets meaningful diagnostics.
+      await seedMissingConfigs();
+
       const res = await fetch(
         `/api/diagnostics/check?projectId=${encodeURIComponent(activeProjectId)}&source=all`,
       );
@@ -84,8 +119,10 @@ export function useDiagnostics() {
 
   return {
     runChecks,
+    seedMissingConfigs,
     running,
     lastResult,
+    lastSeedReport,
     error,
   };
 }

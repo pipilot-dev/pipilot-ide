@@ -23,7 +23,7 @@ const SOURCE_COLORS: Record<string, string> = {
 
 export function ProblemsPanel({ onClose, onNavigateToFile }: ProblemsPanelProps) {
   const { problems, clearProblems, errorCount, warningCount } = useProblems();
-  const { runChecks, running, lastResult, error: diagError } = useDiagnostics();
+  const { runChecks, running, lastResult, lastSeedReport, error: diagError } = useDiagnostics();
 
   const [filter, setFilter] = useState<"all" | "error" | "warning" | "info">("all");
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
@@ -168,6 +168,17 @@ export function ProblemsPanel({ onClose, onNavigateToFile }: ProblemsPanelProps)
           borderBottom: "1px solid hsl(0 84% 50% / 0.2)",
         }}>
           Diagnostics error: {diagError}
+        </div>
+      )}
+
+      {/* Seed report — shown briefly when config files were auto-added */}
+      {lastSeedReport && lastSeedReport.added.length > 0 && (
+        <div style={{
+          padding: "4px 12px", fontSize: 10,
+          background: "hsl(142 71% 45% / 0.1)", color: "hsl(142 71% 70%)",
+          borderBottom: "1px solid hsl(142 71% 45% / 0.2)",
+        }}>
+          Detected <strong>{lastSeedReport.framework}</strong> project — added: {lastSeedReport.added.join(", ")}
         </div>
       )}
 

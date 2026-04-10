@@ -149,42 +149,49 @@ function parseTscOutput(output: string, workDir: string): Diagnostic[] {
   return diagnostics;
 }
 
-/** Detect if the project has a tsconfig.json (root or any sub-project) */
+/** Detect if the project has a tsconfig.json or jsconfig.json */
 function hasTsConfig(workDir: string): boolean {
   return fs.existsSync(path.join(workDir, "tsconfig.json"));
 }
 
-/** Run tsc --noEmit on the workspace */
+function hasJsConfig(workDir: string): boolean {
+  return fs.existsSync(path.join(workDir, "jsconfig.json"));
+}
+
+/** Run tsc --noEmit on the workspace, using tsconfig.json or jsconfig.json */
 export async function runTypeScriptCheck(workDir: string): Promise<Diagnostic[]> {
-  // Strategy:
-  // 1. If a local tsc exists in node_modules/.bin, use it
-  // 2. Otherwise try `npx tsc` (slow first time, then cached)
-  // 3. If no tsconfig, infer one quickly with --allowJs and check the workspace
-  if (!hasTsConfig(workDir)) {
+  // tsc accepts jsconfig.json via -p flag, since it's just a tsconfig with
+  // allowJs defaulted on and checkJs defaulted off.
+  const hasTs = hasTsConfig(workDir);
+  const hasJs = hasJsConfig(workDir);
+  if (!hasTs && !hasJs) {
     return [];
   }
 
   const localTsc = findLocalBin(workDir, "tsc");
+  // Build args based on which config we have
+  const args = ["--noEmit", "--pretty", "false"];
+  if (!hasTs && hasJs) {
+    args.push("-p", "jsconfig.json");
+  }
+
   let result;
   if (localTsc) {
-    // Run via node directly to keep PTY clean and exit codes accurate
     result = await runCommand(
       process.execPath,
-      [localTsc, "--noEmit", "--pretty", "false"],
+      [localTsc, ...args],
       workDir,
       120000,
     );
   } else {
-    // Fallback to npx (may need to download if not cached)
     result = await runCommand(
       isWindows ? "npx.cmd" : "npx",
-      ["tsc", "--noEmit", "--pretty", "false"],
+      ["tsc", ...args],
       workDir,
       120000,
     );
   }
 
-  // tsc exits non-zero when there are errors, but we still want to parse
   return parseTscOutput(result.stdout + "\n" + result.stderr, workDir);
 }
 
@@ -496,13 +503,14 @@ export async function runAllChecks(workDir: string): Promise<{
   const start = Date.now();
 
   const projectHasTsConfig = hasTsConfig(workDir);
+  const projectHasJsConfig = hasJsConfig(workDir);
   const localTsc = findLocalBin(workDir, "tsc");
   const localEslint = findLocalBin(workDir, "eslint");
   const projectHasEslint = !!localEslint && hasEslintConfig(workDir);
 
-  // TypeScript: use real tsconfig if present, otherwise fallback synthesized config
-  // (only if there are .ts/.tsx files AND tsc is available)
-  const tsCheck = projectHasTsConfig
+  // TypeScript: use real tsconfig OR jsconfig if present, otherwise fallback
+  // synthesized config (only if there are .ts/.tsx files AND tsc is available)
+  const tsCheck = (projectHasTsConfig || projectHasJsConfig)
     ? runTypeScriptCheck(workDir).catch(() => [])
     : (localTsc ? runTypeScriptFallback(workDir).catch(() => []) : Promise.resolve([] as Diagnostic[]));
 
@@ -531,7 +539,7 @@ export async function runAllChecks(workDir: string): Promise<{
   return {
     diagnostics: all,
     ran: {
-      typescript: projectHasTsConfig || (!!localTsc && tsDiags.length > 0),
+      typescript: projectHasTsConfig || projectHasJsConfig || (!!localTsc && tsDiags.length > 0),
       eslint: projectHasEslint,
       json: true,
       syntax: true,
