@@ -10,6 +10,10 @@ import * as pty from "node-pty";
 import * as gitOps from "./git";
 import { runAllChecks, runTypeScriptCheck } from "./diagnostics";
 import { seedMissingConfigs, detectFramework } from "./seed-config";
+import {
+  initWorkspaces, resolveWorkspaceDir, linkFolder, unlinkFolder,
+  listLinked, touchLinked, isLinked, getLinked,
+} from "./workspaces";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -21,6 +25,19 @@ app.use(express.json({ limit: "50mb" }));
 const PORT = process.env.PORT || 3001;
 // Workspaces live in the project root, not in temp
 const WORKSPACE_BASE = path.join(process.cwd(), "workspaces");
+
+// Initialize the linked-workspaces registry (Open Folder feature)
+initWorkspaces({ workspaceBase: WORKSPACE_BASE });
+
+/**
+ * Resolve a projectId to its absolute working directory.
+ * If the project is a linked folder, returns the linked path; otherwise
+ * returns WORKSPACE_BASE/projectId. Use this everywhere instead of
+ * getWorkDir(projectId).
+ */
+function getWorkDir(projectId: string): string {
+  return resolveWorkspaceDir(projectId);
+}
 
 // ── Persistent V2 sessions — one per project, reused across messages ──
 const activeSessions = new Map<string, { session: any; sessionId: string }>();
@@ -199,7 +216,7 @@ app.post("/api/agent", async (req, res) => {
   const sessionId = existingSessionId || projectWorkspaceId;
 
   // Use persistent project workspace
-  let workDir = path.join(WORKSPACE_BASE, projectWorkspaceId);
+  let workDir = getWorkDir(projectWorkspaceId);
 
   try {
     // If workspace doesn't exist yet, seed it from the provided files
@@ -649,7 +666,7 @@ app.get("/api/agent/sessions", (req, res) => {
 
 // ── Helper: resolve workspace path with traversal protection ──
 function resolveWorkspacePath(projectId: string, relativePath?: string): string {
-  const base = path.join(WORKSPACE_BASE, projectId);
+  const base = getWorkDir(projectId);
   if (!relativePath) return base;
   const resolved = path.resolve(base, relativePath);
   // Prevent path traversal
@@ -848,7 +865,7 @@ app.delete("/api/files/workspace", (req, res) => {
   if (!projectId) return res.status(400).json({ error: "projectId required" });
 
   try {
-    const dir = path.join(WORKSPACE_BASE, projectId);
+    const dir = getWorkDir(projectId);
     if (fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -865,7 +882,7 @@ app.get("/api/files/watch", (req, res) => {
   const projectId = req.query.projectId as string;
   if (!projectId) return res.status(400).json({ error: "projectId required" });
 
-  const dir = path.join(WORKSPACE_BASE, projectId);
+  const dir = getWorkDir(projectId);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -979,7 +996,7 @@ app.get("/api/files/types", (req, res) => {
   const pkg = req.query.package as string; // e.g. "react", "@types/react", "next"
   if (!projectId || !pkg) return res.status(400).json({ error: "projectId and package required" });
 
-  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const workDir = getWorkDir(projectId);
   const nodeModules = path.join(workDir, "node_modules");
 
   if (!fs.existsSync(nodeModules)) return res.json({ files: {} });
@@ -1029,7 +1046,7 @@ app.post("/api/dev-server/start", async (req, res) => {
   const { projectId, force } = req.body;
   if (!projectId) return res.status(400).json({ error: "projectId required" });
 
-  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const workDir = getWorkDir(projectId);
   if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
 
   // Reuse existing dev server if already running (unless force restart requested)
@@ -1120,7 +1137,7 @@ const ptyBuffers = new Map<string, string>();
 const PTY_BUFFER_MAX = 512 * 1024;
 
 function createPtyForProject(projectId: string): pty.IPty {
-  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const workDir = getWorkDir(projectId);
   const shell = process.platform === "win32" ? "cmd.exe" : (process.env.SHELL || "/bin/bash");
   const cwd = fs.existsSync(workDir) ? workDir : WORKSPACE_BASE;
 
@@ -1240,7 +1257,7 @@ app.post("/api/terminal/destroy", (req, res) => {
 
 // ── Git Endpoints ────────────────────────────────────────────────────
 function getGitWorkDir(projectId: string): string | null {
-  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const workDir = getWorkDir(projectId);
   if (!fs.existsSync(workDir)) return null;
   return workDir;
 }
@@ -1528,7 +1545,7 @@ app.post("/api/project/search", async (req, res) => {
   const { projectId, query, mode, caseSensitive, useRegex, exclude, maxResults } = req.body;
   if (!projectId || !query) return res.status(400).json({ error: "projectId and query required" });
 
-  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const workDir = getWorkDir(projectId);
   if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
 
   const excludeSet = new Set(["node_modules", ".git", "dist", "build", ".next", "out", ".cache", ".vite"]);
@@ -1614,7 +1631,7 @@ app.get("/api/diagnostics/check", async (req, res) => {
   const source = (req.query.source as string) || "all";
   if (!projectId) return res.status(400).json({ error: "projectId required" });
 
-  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const workDir = getWorkDir(projectId);
   if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
 
   try {
@@ -1630,12 +1647,164 @@ app.get("/api/diagnostics/check", async (req, res) => {
   }
 });
 
+// ── Filesystem browser (for the Open Folder dialog) ─────────────────
+
+// GET /api/fs/home — return useful starting points (home, drives, etc.)
+app.get("/api/fs/home", (_req, res) => {
+  const home = os.homedir();
+  const candidates: { name: string; path: string }[] = [];
+
+  // Always include home
+  candidates.push({ name: "Home", path: home });
+  candidates.push({ name: "Documents", path: path.join(home, "Documents") });
+  candidates.push({ name: "Desktop", path: path.join(home, "Desktop") });
+  candidates.push({ name: "Downloads", path: path.join(home, "Downloads") });
+
+  // On Windows, also list drives
+  if (process.platform === "win32") {
+    for (const letter of "CDEFGHIJKLMNOPQRSTUVWXYZ") {
+      const drive = `${letter}:\\`;
+      try { if (fs.existsSync(drive)) candidates.push({ name: `${letter}: drive`, path: drive }); }
+      catch {}
+    }
+  } else {
+    candidates.push({ name: "Root", path: "/" });
+  }
+
+  // Filter to existing paths
+  const existing = candidates.filter((c) => {
+    try { return fs.existsSync(c.path); } catch { return false; }
+  });
+
+  res.json({ home, separator: path.sep, entries: existing });
+});
+
+// GET /api/fs/list?path=... — list immediate subdirectories (and a few file
+// hints) at the given path. Used by the folder picker UI.
+app.get("/api/fs/list", (req, res) => {
+  const targetPath = req.query.path as string;
+  if (!targetPath) return res.status(400).json({ error: "path required" });
+
+  let resolved: string;
+  try {
+    resolved = path.resolve(targetPath);
+  } catch {
+    return res.status(400).json({ error: "invalid path" });
+  }
+
+  if (!fs.existsSync(resolved)) {
+    return res.status(404).json({ error: "path does not exist" });
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(resolved);
+  } catch (err: any) {
+    return res.status(403).json({ error: err.message });
+  }
+  if (!stat.isDirectory()) {
+    return res.status(400).json({ error: "path is not a directory" });
+  }
+
+  const folders: { name: string; path: string; hasPackageJson?: boolean }[] = [];
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(resolved);
+  } catch (err: any) {
+    return res.status(403).json({ error: err.message });
+  }
+
+  for (const entry of entries) {
+    // Skip hidden entries on Unix; show .git etc only if user wants them
+    if (entry.startsWith(".") && entry !== ".github") continue;
+    const full = path.join(resolved, entry);
+    let s: fs.Stats;
+    try { s = fs.statSync(full); } catch { continue; }
+    if (!s.isDirectory()) continue;
+    let hasPackageJson = false;
+    try { hasPackageJson = fs.existsSync(path.join(full, "package.json")); } catch {}
+    folders.push({ name: entry, path: full, hasPackageJson });
+  }
+
+  // Sort: folders with package.json first, then alphabetical
+  folders.sort((a, b) => {
+    if (a.hasPackageJson !== b.hasPackageJson) return a.hasPackageJson ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  // Compute parent path
+  const parent = path.dirname(resolved);
+  const hasParent = parent !== resolved;
+
+  res.json({
+    path: resolved,
+    parent: hasParent ? parent : null,
+    folders,
+    separator: path.sep,
+  });
+});
+
+// ── Linked Workspaces (Open Folder feature) ─────────────────────────
+
+// POST /api/workspaces/link — register an external folder as a workspace
+app.post("/api/workspaces/link", (req, res) => {
+  const { absolutePath, name } = req.body;
+  if (!absolutePath || typeof absolutePath !== "string") {
+    return res.status(400).json({ error: "absolutePath required" });
+  }
+  try {
+    const ws = linkFolder(absolutePath, name);
+    res.json({ success: true, workspace: ws });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/workspaces/list — return all linked workspaces
+app.get("/api/workspaces/list", (_req, res) => {
+  res.json({ workspaces: listLinked() });
+});
+
+// POST /api/workspaces/unlink — remove a linked workspace (does NOT delete files)
+app.post("/api/workspaces/unlink", (req, res) => {
+  const { projectId } = req.body;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+  const removed = unlinkFolder(projectId);
+  res.json({ success: removed });
+});
+
+// POST /api/workspaces/touch — bump the lastOpened timestamp
+app.post("/api/workspaces/touch", (req, res) => {
+  const { projectId } = req.body;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+  touchLinked(projectId);
+  res.json({ success: true });
+});
+
+// GET /api/workspaces/info?projectId=... — info about a single workspace
+app.get("/api/workspaces/info", (req, res) => {
+  const projectId = req.query.projectId as string;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+  const linked = getLinked(projectId);
+  if (linked) {
+    res.json({ ...linked, isLinked: true });
+  } else {
+    const dir = getWorkDir(projectId);
+    res.json({
+      id: projectId,
+      name: path.basename(dir),
+      absolutePath: dir,
+      isLinked: false,
+      exists: fs.existsSync(dir),
+    });
+  }
+});
+
 // POST /api/project/seed-config — write missing config files into a project
 app.post("/api/project/seed-config", (req, res) => {
   const { projectId } = req.body;
   if (!projectId) return res.status(400).json({ error: "projectId required" });
 
-  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const workDir = getWorkDir(projectId);
   if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
 
   try {
@@ -1651,7 +1820,7 @@ app.get("/api/project/detect-framework", (req, res) => {
   const projectId = req.query.projectId as string;
   if (!projectId) return res.status(400).json({ error: "projectId required" });
 
-  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const workDir = getWorkDir(projectId);
   if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
 
   const framework = detectFramework(workDir);
@@ -1663,7 +1832,7 @@ app.get("/api/project/detect-framework", (req, res) => {
 app.get("/api/project/scripts", (req, res) => {
   const projectId = req.query.projectId as string;
   if (!projectId) return res.status(400).json({ error: "projectId required" });
-  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const workDir = getWorkDir(projectId);
   const pkgPath = path.join(workDir, "package.json");
   if (!fs.existsSync(pkgPath)) return res.json({ scripts: {}, hasPackageJson: false });
   try {

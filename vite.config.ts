@@ -77,6 +77,14 @@ export default defineConfig({
         target: "http://localhost:3001",
         changeOrigin: true,
       },
+      "/api/workspaces": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+      "/api/fs": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
       "/api/agent": {
         target: "http://localhost:3001",
         changeOrigin: true,

@@ -79,6 +79,58 @@ export function useProjects() {
     await db.projects.update(id, { name, updatedAt: new Date() });
   }, []);
 
+  /**
+   * Open an external folder on disk as a project.
+   * Calls the server to register the linked workspace, then creates a
+   * corresponding project entry in IndexedDB so it shows up in the
+   * project switcher.
+   */
+  const openFolder = useCallback(async (absolutePath: string, displayName?: string): Promise<string | null> => {
+    try {
+      const res = await fetch("/api/workspaces/link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ absolutePath, name: displayName }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || "Failed to open folder");
+      }
+      const ws = data.workspace as { id: string; name: string; absolutePath: string; template?: string };
+
+      // Create or update the matching project record in IndexedDB
+      const existing = await db.projects.get(ws.id);
+      const now = new Date();
+      if (!existing) {
+        await db.projects.put({
+          id: ws.id,
+          name: ws.name,
+          type: "linked",
+          template: ws.template,
+          linkedPath: ws.absolutePath,
+          createdAt: now,
+          updatedAt: now,
+        });
+        // Create a default chat session for the linked project
+        await db.chatSessions.put({
+          id: `chat-${ws.id}`,
+          name: "New Chat",
+          projectId: ws.id,
+          createdAt: now,
+          updatedAt: now,
+        });
+      } else {
+        await db.projects.update(ws.id, { updatedAt: now });
+      }
+
+      await switchProject(ws.id);
+      return ws.id;
+    } catch (err) {
+      console.error("openFolder failed:", err);
+      throw err;
+    }
+  }, [switchProject]);
+
   const deleteProject = useCallback(async (id: string): Promise<void> => {
     // Don't allow deleting the last project
     const allProjects = await db.projects.toArray();
@@ -86,10 +138,22 @@ export function useProjects() {
       throw new Error("Cannot delete the last project");
     }
 
-    // Delete workspace folder on disk
-    try {
-      await fetch(`/api/files/workspace?projectId=${encodeURIComponent(id)}`, { method: "DELETE" });
-    } catch {}
+    // For linked folders: just unlink (do NOT delete the user's files on disk)
+    const target = allProjects.find((p) => p.id === id);
+    if (target?.type === "linked") {
+      try {
+        await fetch("/api/workspaces/unlink", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId: id }),
+        });
+      } catch {}
+    } else {
+      // Delete workspace folder on disk for owned projects
+      try {
+        await fetch(`/api/files/workspace?projectId=${encodeURIComponent(id)}`, { method: "DELETE" });
+      } catch {}
+    }
 
     // Delete all files belonging to this project
     const projectFiles = await db.files.where("projectId").equals(id).toArray();
@@ -124,6 +188,7 @@ export function useProjects() {
     projects,
     activeProject,
     createProject,
+    openFolder,
     renameProject,
     deleteProject,
     switchProject,

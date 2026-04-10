@@ -7,6 +7,7 @@ import { WebPreview } from "./WebPreview";
 import { CommitDetailView } from "./CommitDetailView";
 import { FileDiffView } from "./FileDiffView";
 import { SettingsTabView } from "./SettingsTabView";
+import { WelcomePage } from "./WelcomePage";
 import { setupInlineAI } from "@/hooks/useInlineAI";
 import { useSettings } from "@/hooks/useSettings";
 import { useActiveProject } from "@/contexts/ProjectContext";
@@ -621,40 +622,7 @@ declare module "*.woff2" { const content: string; export default content; }
   };
 
   if (tabs.length === 0) {
-    return (
-      <div
-        className="flex-1 flex flex-col items-center justify-center"
-        style={{ background: "hsl(220 13% 18%)" }}
-        data-testid="editor-empty-state"
-      >
-        <div className="text-center" style={{ color: "hsl(220 14% 40%)" }}>
-          <div className="text-4xl mb-2 font-light" style={{ color: "hsl(207 90% 50% / 0.4)" }}>
-            PiPilot
-          </div>
-          <p className="text-sm mb-1">Open a file from the Explorer</p>
-          <p className="text-xs opacity-70">Ctrl+P to search files</p>
-          {onOpenPreview && (
-            <button
-              className="mt-4 flex items-center gap-2 mx-auto px-4 py-2 rounded-lg text-sm transition-colors"
-              style={{
-                background: "hsl(220 13% 24%)",
-                color: "hsl(142 71% 60%)",
-                border: "1px solid hsl(220 13% 30%)",
-              }}
-              onClick={onOpenPreview}
-            >
-              <Globe size={14} />
-              Open Web Preview
-            </button>
-          )}
-          <div className="mt-4 flex flex-col gap-1 text-xs opacity-50">
-            <span>Ctrl+Shift+I — Toggle AI Chat</span>
-            <span>Ctrl+` — Toggle Terminal</span>
-            <span>Ctrl+B — Toggle Sidebar</span>
-          </div>
-        </div>
-      </div>
-    );
+    return <WelcomePage onOpenPreview={onOpenPreview} />;
   }
 
   const isPreviewTab = activeTab?.isPreview;

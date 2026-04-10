@@ -41,8 +41,9 @@ export interface DBSetting {
 export interface DBProject {
   id: string;
   name: string;
-  type: "static" | "nodebox" | "cloud";  // "static" = HTML/CSS/JS, "nodebox" = Node.js (browser), "cloud" = E2B sandbox (full Node/npm)
+  type: "static" | "nodebox" | "cloud" | "linked";  // "linked" = external folder opened from disk
   template?: string;  // "vite-react" | "nextjs" | "express" | "node" — for cloud/nodebox projects
+  linkedPath?: string;  // absolute path on disk (only for type === "linked")
   createdAt: Date;
   updatedAt: Date;
 }

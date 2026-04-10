@@ -84,8 +84,12 @@ export function IDELayout() {
 
   const localFs = useFileSystem();
   const remoteFs = useFileSystemRemote();
+  // Linked folders ALWAYS use the server-backed filesystem since their
+  // files live on real disk, not in IndexedDB. activeProject is read
+  // below from useProjects(); we need its type here so use a quick read.
+  const isLinkedProject = activeProject?.type === "linked";
   const { files, isReady, executeTool, updateFileContent, getFileContent, activeProjectId } =
-    activeProvider === "claude-agent" ? remoteFs : localFs;
+    (activeProvider === "claude-agent" || isLinkedProject) ? remoteFs : localFs;
   const checkpoints = useCheckpoints();
 
   // File operation callbacks — route to DB or server based on mode
@@ -465,6 +469,13 @@ export function IDELayout() {
   );
 
   // Keyboard shortcuts
+  // Listen for the Welcome Page's "open chat" event
+  useEffect(() => {
+    const openChat = () => setChatOpen(true);
+    window.addEventListener("pipilot:open-chat", openChat);
+    return () => window.removeEventListener("pipilot:open-chat", openChat);
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // Ctrl+Shift+I - toggle chat
