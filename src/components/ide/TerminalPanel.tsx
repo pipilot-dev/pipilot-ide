@@ -20,6 +20,7 @@ interface ShellTab {
   historyIndex: number;
   cwd: string; // current working directory within the virtual workspace
   nextLineId: number;
+  initialCommand?: string; // for real shells: command to run on connect
 }
 
 function createNodeShell(id: string, index: number): ShellTab {
@@ -35,7 +36,7 @@ function createNodeShell(id: string, index: number): ShellTab {
   };
 }
 
-function createRealShell(id: string, index: number): ShellTab {
+function createRealShell(id: string, index: number, initialCommand?: string): ShellTab {
   return {
     id,
     name: `shell ${index}`,
@@ -45,6 +46,7 @@ function createRealShell(id: string, index: number): ShellTab {
     historyIndex: -1,
     cwd: "",
     nextLineId: 0,
+    initialCommand,
   };
 }
 
@@ -893,20 +895,8 @@ export function TerminalPanel() {
   const addRealShell = (initialCommand?: string) => {
     realCounter.current++;
     const id = `real-${Date.now()}-${realCounter.current}`;
-    setShells((prev) => [...prev, createRealShell(id, realCounter.current)]);
+    setShells((prev) => [...prev, createRealShell(id, realCounter.current, initialCommand)]);
     setActiveShellId(id);
-    // If a command is provided, run it after the shell connects
-    if (initialCommand) {
-      setTimeout(async () => {
-        try {
-          await fetch("/api/terminal/write", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sessionId: id, data: initialCommand + "\r" }),
-          });
-        } catch {}
-      }, 800);
-    }
     return id;
   };
 
@@ -1079,6 +1069,7 @@ export function TerminalPanel() {
           <RealTerminal
             sessionId={activeShell.id}
             projectId={activeProjectId}
+            initialCommand={activeShell.initialCommand}
             onExit={() => {
               // Mark as exited but keep the tab
             }}

@@ -164,14 +164,15 @@ export function registerInlineAI(monaco: typeof import("monaco-editor")): IDispo
             items: [
               {
                 insertText: completion,
-                range: {
-                  startLineNumber: position.lineNumber,
-                  startColumn: position.column,
-                  endLineNumber: position.lineNumber,
-                  endColumn: position.column,
-                },
+                range: new monaco.Range(
+                  position.lineNumber,
+                  position.column,
+                  position.lineNumber,
+                  position.column
+                ),
               },
             ],
+            enableForwardStability: true,
           };
         } catch (err: any) {
           if (err?.name === "AbortError") {
@@ -181,10 +182,14 @@ export function registerInlineAI(monaco: typeof import("monaco-editor")): IDispo
           return { items: [] };
         }
       },
+      // Some Monaco versions expect disposeInlineCompletions, others freeInlineCompletions
       freeInlineCompletions() {
         // No-op: nothing to clean up per-completion
       },
-    });
+      disposeInlineCompletions() {
+        // No-op: nothing to clean up per-completion
+      },
+    } as any);
     disposables.push(d);
   }
 

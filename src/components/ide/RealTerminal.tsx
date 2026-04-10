@@ -7,10 +7,11 @@ import "@xterm/xterm/css/xterm.css";
 interface RealTerminalProps {
   sessionId: string;
   projectId: string;
+  initialCommand?: string;
   onExit?: () => void;
 }
 
-export function RealTerminal({ sessionId, projectId, onExit }: RealTerminalProps) {
+export function RealTerminal({ sessionId, projectId, initialCommand, onExit }: RealTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -18,11 +19,13 @@ export function RealTerminal({ sessionId, projectId, onExit }: RealTerminalProps
   const initRef = useRef(false);
   const sessionIdRef = useRef(sessionId);
   const projectIdRef = useRef(projectId);
+  const initialCommandRef = useRef(initialCommand);
   const onExitRef = useRef(onExit);
 
   // Keep refs in sync without triggering re-renders
   sessionIdRef.current = sessionId;
   projectIdRef.current = projectId;
+  initialCommandRef.current = initialCommand;
   onExitRef.current = onExit;
 
   useEffect(() => {
@@ -108,10 +111,28 @@ export function RealTerminal({ sessionId, projectId, onExit }: RealTerminalProps
       const es = new EventSource(`/api/terminal/stream?sessionId=${encodeURIComponent(sid)}`);
       sseRef.current = es;
 
+      // Track when shell is ready (first output received) to send initial command
+      let firstOutputReceived = false;
+      let initialCmdSent = false;
+      const sendInitialCmd = () => {
+        if (initialCmdSent) return;
+        const cmd = initialCommandRef.current;
+        if (!cmd) return;
+        initialCmdSent = true;
+        // Small delay to let the prompt render
+        setTimeout(() => writeToPty(cmd + "\r"), 250);
+      };
+
       es.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
-          if (data.output) term.write(data.output);
+          if (data.output) {
+            term.write(data.output);
+            if (!firstOutputReceived) {
+              firstOutputReceived = true;
+              sendInitialCmd();
+            }
+          }
           if (data.exit) {
             term.writeln("\r\n\x1b[33m[Process exited]\x1b[0m");
             es.close();
@@ -127,6 +148,10 @@ export function RealTerminal({ sessionId, projectId, onExit }: RealTerminalProps
           resizePty(term.cols, term.rows);
         } catch {}
       }, 150);
+
+      // Fallback: if no output arrives within 2s (e.g. very fast empty prompt),
+      // still try to send the initial command
+      setTimeout(sendInitialCmd, 2000);
     }).catch(() => {
       term.writeln("\r\n\x1b[31mFailed to connect to terminal server\x1b[0m");
     });
