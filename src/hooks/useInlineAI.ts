@@ -51,7 +51,12 @@ let activeEditor: MonacoEditor.IStandaloneCodeEditor | null = null;
 const cache: CachedSuggestion[] = [];
 let debouncedFetchTimer: number | undefined;
 let stopIdleTimeoutId: number | undefined;
-let inFlightAbort: AbortController | null = null;
+// Set of input hashes currently in-flight or recently fetched.
+// We do NOT abort in-flight requests — they're allowed to complete and
+// populate the cache. We just dedupe to avoid spamming the same input.
+const inFlightHashes = new Set<string>();
+const recentlyFetched = new Map<string, number>(); // hash → timestamp
+const RECENT_TTL_MS = 4000;
 let activeProjectInfo: { language: string } = { language: "code" };
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -202,6 +207,13 @@ class CompletionFormatter {
   }
 }
 
+// Hash function for deduping fetch inputs
+function hashInput(language: string, before: string, after: string): string {
+  // Use the last 80 chars of before + first 30 of after for a reasonable
+  // dedup window — small typing changes still hit the same hash.
+  return `${language}::${before.slice(-80)}::${after.slice(0, 30)}`;
+}
+
 // ─── LLM fetch ───────────────────────────────────────────────────
 async function fetchSuggestion(): Promise<void> {
   const editor = activeEditor;
@@ -217,19 +229,29 @@ async function fetchSuggestion(): Promise<void> {
   const after = clipAfter(fullText.slice(offset));
 
   if (before.trim().length < 2) {
-    dlog("skip — too little context");
+    dlog("skip - too little context");
     return;
   }
 
-  // Cancel any in-flight request before starting a new one
-  if (inFlightAbort) {
-    try { inFlightAbort.abort(); } catch {}
-  }
-  inFlightAbort = new AbortController();
-  const signal = inFlightAbort.signal;
-
   const language = model.getLanguageId() || "code";
   activeProjectInfo.language = language;
+
+  // Dedupe: skip if this exact input is already in-flight or was fetched recently
+  const hash = hashInput(language, before, after);
+  if (inFlightHashes.has(hash)) {
+    dlog("skip - in-flight");
+    return;
+  }
+  const recent = recentlyFetched.get(hash);
+  if (recent && Date.now() - recent < RECENT_TTL_MS) {
+    dlog("skip - recently fetched");
+    return;
+  }
+
+  // Capture the position the request was issued for, so the cached
+  // suggestion is anchored there even if the cursor moves later.
+  const issuedAt = { line: position.lineNumber, col: position.column };
+  inFlightHashes.add(hash);
 
   try {
     dlog("fetching", { language, beforeLen: before.length });
@@ -245,12 +267,11 @@ async function fetchSuggestion(): Promise<void> {
           { role: "system", content: buildSystemPrompt(language) },
           { role: "user", content: `${before}<|cursor|>${after}` },
         ],
-        temperature: 0,         // deterministic — no random sampling cost
+        temperature: 0,
         max_tokens: MAX_OUTPUT_TOKENS,
         stream: false,
         direct_kilo: true,
       }),
-      signal,
     });
 
     if (!res.ok) {
@@ -269,18 +290,14 @@ async function fetchSuggestion(): Promise<void> {
     // Remove the <|cursor|> marker if model echoed it
     raw = raw.replace(/<\|cursor\|>/g, "");
 
-    // Re-check current position — if user typed since we started, recompute
-    const currentPos = editor.getPosition();
-    if (!currentPos) return;
-
-    // Add to cache with the position the request was made for
+    // Add to cache, anchored at the position the request was issued for
     const newSuggestion: CachedSuggestion = {
       insertText: raw,
       range: {
-        startLineNumber: position.lineNumber,
-        startColumn: position.column,
-        endLineNumber: position.lineNumber + (raw.match(/\n/g) || []).length,
-        endColumn: position.column + raw.length,
+        startLineNumber: issuedAt.line,
+        startColumn: issuedAt.col,
+        endLineNumber: issuedAt.line + (raw.match(/\n/g) || []).length,
+        endColumn: issuedAt.col + raw.length,
       },
     };
     cache.push(newSuggestion);
@@ -295,32 +312,30 @@ async function fetchSuggestion(): Promise<void> {
       dlog("trigger error", err);
     }
   } catch (err: any) {
-    if (err?.name === "AbortError") {
-      dlog("aborted");
-      return;
+    dlog("fetch threw", err?.message || err);
+  } finally {
+    inFlightHashes.delete(hash);
+    recentlyFetched.set(hash, Date.now());
+    // GC stale entries
+    if (recentlyFetched.size > 50) {
+      const cutoff = Date.now() - RECENT_TTL_MS;
+      for (const [k, t] of recentlyFetched.entries()) {
+        if (t < cutoff) recentlyFetched.delete(k);
+      }
     }
-    dlog("fetch threw", err);
   }
 }
 
 function scheduleFetch() {
-  // Debounced — kicks off a fetch KEYSTROKE_DEBOUNCE ms after the last keystroke.
-  // This is what makes Cursor feel instant: no fixed-interval delay, the fetch
-  // starts the moment the user stops typing.
+  // Debounced — kicks off a fetch KEYSTROKE_DEBOUNCE ms after the last
+  // keystroke. The dedup-by-hash inside fetchSuggestion ensures we never
+  // re-fetch the same input, and in-flight requests are NEVER aborted —
+  // they're allowed to complete and populate the cache.
   if (debouncedFetchTimer !== undefined) clearTimeout(debouncedFetchTimer);
   debouncedFetchTimer = window.setTimeout(() => {
     debouncedFetchTimer = undefined;
     fetchSuggestion();
   }, KEYSTROKE_DEBOUNCE);
-
-  // Idle watchdog: cancel pending requests if user stops interacting entirely
-  if (stopIdleTimeoutId !== undefined) clearTimeout(stopIdleTimeoutId);
-  stopIdleTimeoutId = window.setTimeout(() => {
-    if (inFlightAbort) {
-      try { inFlightAbort.abort(); } catch {}
-      inFlightAbort = null;
-    }
-  }, STOP_AFTER_IDLE);
 }
 
 function stopFetching() {
@@ -331,10 +346,6 @@ function stopFetching() {
   if (stopIdleTimeoutId !== undefined) {
     clearTimeout(stopIdleTimeoutId);
     stopIdleTimeoutId = undefined;
-  }
-  if (inFlightAbort) {
-    try { inFlightAbort.abort(); } catch {}
-    inFlightAbort = null;
   }
 }
 
