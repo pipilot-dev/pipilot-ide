@@ -1,112 +1,258 @@
-import { useState } from "react";
-import { Play, Trash2, Bug, Monitor, RefreshCw } from "lucide-react";
-import { useProblems } from "@/contexts/ProblemsContext";
+import { useState, useEffect, useCallback } from "react";
+import {
+  Play, Bug, RefreshCw, Package, Terminal, Loader2, Hammer,
+  Zap, ListChecks, FileCode, Boxes, Globe, ChevronRight,
+} from "lucide-react";
+import { useActiveProject } from "@/contexts/ProjectContext";
 
 interface RunDebugPanelProps {
   onRunPreview?: () => void;
+  onOpenTerminal?: () => void;
 }
 
-export function RunDebugPanel({ onRunPreview }: RunDebugPanelProps) {
-  const { problems, clearProblems } = useProblems();
-  const [running, setRunning] = useState(false);
+interface ProjectScripts {
+  scripts: Record<string, string>;
+  hasPackageJson: boolean;
+  name?: string;
+  version?: string;
+}
 
-  const handleRun = async () => {
-    setRunning(true);
-    clearProblems("preview");
-    onRunPreview?.();
-    setTimeout(() => setRunning(false), 1000);
-  };
+/**
+ * Dispatches a global event for TerminalPanel to pick up and create a
+ * new system-shell tab that runs the given command.
+ */
+function runInNewTerminal(command: string, label?: string) {
+  window.dispatchEvent(new CustomEvent("pipilot:run-in-terminal", {
+    detail: { command, label },
+  }));
+}
 
-  const consoleItems = problems.filter((p) => p.source === "preview" || p.source === "terminal");
+function getScriptIcon(name: string) {
+  if (name === "dev" || name === "start" || name === "serve") return <Play size={11} />;
+  if (name === "build") return <Hammer size={11} />;
+  if (name === "test" || name.startsWith("test:")) return <ListChecks size={11} />;
+  if (name === "lint") return <FileCode size={11} />;
+  return <ChevronRight size={11} />;
+}
+
+function getScriptColor(name: string) {
+  if (name === "dev" || name === "start" || name === "serve") return "hsl(142 71% 50%)";
+  if (name === "build") return "hsl(38 92% 60%)";
+  if (name === "test" || name.startsWith("test:")) return "hsl(207 90% 60%)";
+  if (name === "lint") return "hsl(280 75% 65%)";
+  return "hsl(220 14% 65%)";
+}
+
+export function RunDebugPanel({ onRunPreview, onOpenTerminal }: RunDebugPanelProps) {
+  const { activeProjectId } = useActiveProject();
+  const [scripts, setScripts] = useState<ProjectScripts | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (!activeProjectId) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/project/scripts?projectId=${encodeURIComponent(activeProjectId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setScripts(data);
+      } else {
+        setScripts({ scripts: {}, hasPackageJson: false });
+      }
+    } catch {
+      setScripts({ scripts: {}, hasPackageJson: false });
+    } finally {
+      setLoading(false);
+    }
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const runScript = useCallback((scriptName: string) => {
+    onOpenTerminal?.();
+    runInNewTerminal(`pnpm run ${scriptName}`, scriptName);
+  }, [onOpenTerminal]);
+
+  const runCommand = useCallback((cmd: string, label?: string) => {
+    onOpenTerminal?.();
+    runInNewTerminal(cmd, label);
+  }, [onOpenTerminal]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", color: "hsl(220 14% 75%)" }}>
       {/* Header */}
-      <div style={{ padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid hsl(220 13% 25%)" }}>
-        <Bug size={14} style={{ color: "hsl(207 90% 60%)" }} />
-        <span style={{ fontWeight: 600, fontSize: 12 }}>Run and Debug</span>
-      </div>
-
-      {/* Controls */}
-      <div style={{ padding: "10px 12px", display: "flex", gap: 6, borderBottom: "1px solid hsl(220 13% 25%)" }}>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 6, padding: "8px 10px",
+        borderBottom: "1px solid hsl(220 13% 22%)",
+      }}>
+        <Bug size={12} style={{ color: "hsl(207 90% 60%)" }} />
+        <span style={{ fontSize: 11, fontWeight: 600, color: "hsl(220 14% 75%)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+          Run and Debug
+        </span>
+        <div className="flex-1" />
         <button
-          onClick={handleRun}
-          disabled={running}
-          style={{
-            display: "flex", alignItems: "center", gap: 6,
-            padding: "6px 14px", fontSize: 11, fontWeight: 600,
-            background: running ? "hsl(142 71% 35%)" : "hsl(142 71% 45%)",
-            color: "#fff", border: "none", borderRadius: 4, cursor: "pointer",
-            opacity: running ? 0.7 : 1,
-          }}
+          onClick={refresh}
+          title="Refresh"
+          style={{ background: "none", border: "none", color: "hsl(220 14% 55%)", cursor: "pointer", padding: 2 }}
         >
-          {running ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />}
-          {running ? "Running..." : "Run Preview"}
-        </button>
-        <button
-          onClick={() => clearProblems()}
-          style={{
-            display: "flex", alignItems: "center", gap: 4,
-            padding: "6px 10px", fontSize: 11,
-            background: "hsl(220 13% 22%)", color: "hsl(220 14% 65%)",
-            border: "1px solid hsl(220 13% 28%)", borderRadius: 4, cursor: "pointer",
-          }}
-        >
-          <Trash2 size={11} /> Clear
+          <RefreshCw size={11} className={loading ? "animate-spin" : ""} />
         </button>
       </div>
 
-      {/* Console Output */}
       <div style={{ flex: 1, overflowY: "auto" }}>
-        <div style={{
-          padding: "6px 12px", fontSize: 10, fontWeight: 600, textTransform: "uppercase",
-          color: "hsl(220 14% 45%)", letterSpacing: "0.5px",
-          borderBottom: "1px solid hsl(220 13% 22%)",
-        }}>
-          Console ({consoleItems.length})
+        {/* Quick actions */}
+        <div style={{ padding: "8px 10px", borderBottom: "1px solid hsl(220 13% 22%)" }}>
+          <div style={{
+            fontSize: 10, fontWeight: 600, color: "hsl(220 14% 50%)",
+            textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6,
+          }}>
+            Quick Actions
+          </div>
+
+          {onRunPreview && (
+            <button
+              onClick={onRunPreview}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                width: "100%", padding: "8px 10px", marginBottom: 4,
+                fontSize: 11, fontWeight: 600,
+                background: "linear-gradient(135deg, hsl(142 71% 45%), hsl(142 71% 38%))",
+                color: "#fff", border: "none", borderRadius: 5, cursor: "pointer",
+              }}
+            >
+              <Globe size={12} />
+              Open Web Preview
+            </button>
+          )}
         </div>
 
-        {consoleItems.length === 0 ? (
-          <div style={{ padding: 20, textAlign: "center", color: "hsl(220 14% 40%)", fontSize: 11 }}>
-            <Monitor size={24} style={{ margin: "0 auto 8px", opacity: 0.5, display: "block" }} />
-            No console output yet.<br />Click "Run Preview" to start.
-          </div>
-        ) : (
-          consoleItems.map((item) => (
-            <div key={item.id} style={{
-              padding: "4px 12px", fontSize: 11, fontFamily: "monospace",
-              borderBottom: "1px solid hsl(220 13% 20%)",
-              color: item.type === "error" ? "hsl(0 84% 60%)"
-                : item.type === "warning" ? "hsl(38 92% 50%)"
-                : "hsl(220 14% 65%)",
+        {/* package.json scripts */}
+        {scripts?.hasPackageJson && Object.keys(scripts.scripts).length > 0 && (
+          <div style={{ padding: "8px 10px", borderBottom: "1px solid hsl(220 13% 22%)" }}>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 6,
+              fontSize: 10, fontWeight: 600, color: "hsl(220 14% 50%)",
+              textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6,
             }}>
-              <span style={{ color: "hsl(220 14% 35%)", fontSize: 10, marginRight: 6 }}>
-                {item.timestamp.toLocaleTimeString()}
-              </span>
-              {item.file && (
-                <span style={{ color: "hsl(207 90% 60%)", marginRight: 6 }}>
-                  {item.file}{item.line ? `:${item.line}` : ""}
+              <Package size={10} />
+              <span>package.json</span>
+              {scripts.name && (
+                <span style={{ color: "hsl(220 14% 35%)", textTransform: "none", fontWeight: 400, marginLeft: 4 }}>
+                  · {scripts.name}{scripts.version ? `@${scripts.version}` : ""}
                 </span>
               )}
-              {item.message}
             </div>
-          ))
+
+            {Object.entries(scripts.scripts).map(([name, cmd]) => (
+              <button
+                key={name}
+                onClick={() => runScript(name)}
+                title={cmd}
+                style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  width: "100%", padding: "5px 8px", marginBottom: 2,
+                  fontSize: 11, textAlign: "left",
+                  background: "transparent", color: "hsl(220 14% 80%)",
+                  border: "1px solid transparent", borderRadius: 4, cursor: "pointer",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "hsl(220 13% 18%)";
+                  e.currentTarget.style.borderColor = "hsl(220 13% 25%)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.borderColor = "transparent";
+                }}
+              >
+                <span style={{ color: getScriptColor(name), flexShrink: 0 }}>
+                  {getScriptIcon(name)}
+                </span>
+                <span style={{ fontWeight: 600, color: getScriptColor(name) }}>{name}</span>
+                <span style={{
+                  flex: 1, color: "hsl(220 14% 45%)", fontSize: 10,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  fontFamily: "monospace",
+                }}>
+                  {cmd}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Common commands */}
+        <div style={{ padding: "8px 10px", borderBottom: "1px solid hsl(220 13% 22%)" }}>
+          <div style={{
+            fontSize: 10, fontWeight: 600, color: "hsl(220 14% 50%)",
+            textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6,
+          }}>
+            Common Tasks
+          </div>
+
+          {[
+            { label: "Install dependencies", cmd: "pnpm install", icon: <Boxes size={11} />, color: "hsl(207 90% 60%)" },
+            { label: "Update dependencies", cmd: "pnpm update", icon: <Boxes size={11} />, color: "hsl(38 92% 60%)" },
+            { label: "List installed packages", cmd: "pnpm list", icon: <Package size={11} />, color: "hsl(220 14% 65%)" },
+            { label: "Open shell here", cmd: "", icon: <Terminal size={11} />, color: "hsl(220 14% 70%)" },
+          ].map((task) => (
+            <button
+              key={task.label}
+              onClick={() => task.cmd ? runCommand(task.cmd, task.label) : (onOpenTerminal?.(), runInNewTerminal("", "shell"))}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                width: "100%", padding: "5px 8px", marginBottom: 2,
+                fontSize: 11, textAlign: "left",
+                background: "transparent", color: "hsl(220 14% 80%)",
+                border: "1px solid transparent", borderRadius: 4, cursor: "pointer",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "hsl(220 13% 18%)";
+                e.currentTarget.style.borderColor = "hsl(220 13% 25%)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.borderColor = "transparent";
+              }}
+            >
+              <span style={{ color: task.color, flexShrink: 0 }}>{task.icon}</span>
+              <span>{task.label}</span>
+              {task.cmd && (
+                <span style={{
+                  flex: 1, color: "hsl(220 14% 40%)", fontSize: 10,
+                  textAlign: "right", fontFamily: "monospace",
+                }}>
+                  {task.cmd}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Empty state */}
+        {!loading && (!scripts?.hasPackageJson || Object.keys(scripts.scripts).length === 0) && (
+          <div style={{ padding: 20, textAlign: "center", color: "hsl(220 14% 40%)", fontSize: 11 }}>
+            <Zap size={24} style={{ display: "block", margin: "0 auto 8px", opacity: 0.5 }} />
+            {!scripts?.hasPackageJson
+              ? "No package.json in this project"
+              : "No scripts defined in package.json"}
+          </div>
+        )}
+
+        {loading && (
+          <div style={{ padding: 20, textAlign: "center" }}>
+            <Loader2 size={16} className="animate-spin" style={{ color: "hsl(207 90% 60%)" }} />
+          </div>
         )}
       </div>
 
-      {/* Variables */}
-      <div style={{ borderTop: "1px solid hsl(220 13% 25%)" }}>
-        <div style={{
-          padding: "6px 12px", fontSize: 10, fontWeight: 600, textTransform: "uppercase",
-          color: "hsl(220 14% 45%)", letterSpacing: "0.5px",
-        }}>
-          Environment
-        </div>
-        <div style={{ padding: "4px 12px 8px", fontSize: 11, color: "hsl(220 14% 55%)" }}>
-          <div>Viewport: {typeof window !== "undefined" ? `${window.innerWidth}\u00d7${window.innerHeight}` : "\u2014"}</div>
-          <div>Platform: {typeof navigator !== "undefined" ? navigator.platform : "\u2014"}</div>
-          <div>Runtime: Browser (Sandpack)</div>
-        </div>
+      {/* Footer info */}
+      <div style={{
+        padding: "6px 10px", borderTop: "1px solid hsl(220 13% 22%)",
+        fontSize: 10, color: "hsl(220 14% 45%)",
+      }}>
+        Click any task to run it in a new system shell
       </div>
     </div>
   );

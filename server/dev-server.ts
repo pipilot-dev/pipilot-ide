@@ -6,6 +6,33 @@ import { spawn, execSync, ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
 
+const isWindows = process.platform === "win32";
+
+/**
+ * On Windows, .cmd wrappers exit immediately while the real process runs detached.
+ * This reads the .cmd to find the JS entry point, so we can run via node directly.
+ */
+function resolveNodeBin(workDir: string, binName: string): string | null {
+  const binDir = path.join(workDir, "node_modules", ".bin");
+  if (isWindows) {
+    const cmdFile = path.join(binDir, `${binName}.cmd`);
+    if (fs.existsSync(cmdFile)) {
+      try {
+        const content = fs.readFileSync(cmdFile, "utf8");
+        // .cmd files end with: "%_prog%" "%dp0%\..\next\dist\bin\next" %*
+        // Extract the relative path after %dp0%
+        const match = content.match(/%dp0%\\([^"]+)"/);
+        if (match) {
+          const relPath = match[1].replace(/\\/g, "/");
+          const fullPath = path.join(binDir, relPath);
+          if (fs.existsSync(fullPath)) return fullPath;
+        }
+      } catch {}
+    }
+  }
+  return null;
+}
+
 // Check if pnpm is available, install if not
 let packageManager = "npm";
 try {
@@ -35,6 +62,20 @@ interface RunningApp {
 }
 
 const runningApps = new Map<string, RunningApp>();
+
+// Log subscribers for SSE streaming
+type LogListener = (entry: { text: string; source: "stdout" | "stderr" | "system"; level: "info" | "warn" | "error" }) => void;
+const logListeners = new Map<string, Set<LogListener>>();
+
+export function subscribeToLogs(projectId: string, listener: LogListener): () => void {
+  if (!logListeners.has(projectId)) logListeners.set(projectId, new Set());
+  logListeners.get(projectId)!.add(listener);
+  return () => { logListeners.get(projectId)?.delete(listener); };
+}
+
+function emitLog(projectId: string, text: string, source: "stdout" | "stderr" | "system", level: "info" | "warn" | "error" = "info") {
+  logListeners.get(projectId)?.forEach(fn => fn({ text, source, level }));
+}
 
 const URL_PATTERNS = [
   /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/i,
@@ -105,17 +146,20 @@ export async function startDevServer(
   if (!fs.existsSync(nodeModulesPath) && fs.existsSync(path.join(workDir, "package.json"))) {
     console.log(`[dev-server] Installing dependencies for ${projectId}...`);
     onStatusChange?.("installing");
+    emitLog(projectId, `Installing dependencies with ${packageManager}...`, "system");
 
     await new Promise<void>((resolve) => {
       const install = spawn(packageManager, ["install"], { cwd: workDir, shell: true, stdio: "pipe" });
       install.stdout?.on("data", (d) => {
         const t = d.toString();
         app.logs.push(t);
+        emitLog(projectId, t, "stdout");
         console.log(`[dev-server] [install] ${t.trim()}`);
       });
       install.stderr?.on("data", (d) => {
         const t = d.toString();
         app.logs.push(t);
+        emitLog(projectId, t, "stderr", "warn");
       });
       install.on("exit", (code) => {
         if (code !== 0) {
@@ -140,10 +184,11 @@ export async function startDevServer(
 
   const suggestedPort = 30000 + Math.floor(Math.random() * 20000);
 
-  // Override the port in the command args to avoid conflicts
-  // Read package.json to get the actual script and modify it
+  // Resolve command — on Windows, bypass .cmd wrappers by running the JS
+  // entry point directly via node to keep the process handle alive.
   let finalCommand = cmd.command;
   let finalArgs = [...cmd.args];
+  let useShell = true;
 
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(workDir, "package.json"), "utf8"));
@@ -151,22 +196,34 @@ export async function startDevServer(
     const script = pkg.scripts?.[scriptName] || "";
 
     if (script.includes("next dev") || script.includes("next ")) {
-      // Next.js: run directly with our port
-      finalCommand = "npx";
-      finalArgs = ["next", "dev", "-H", "0.0.0.0", "-p", String(suggestedPort)];
+      const resolved = resolveNodeBin(workDir, "next");
+      if (resolved) {
+        finalCommand = process.execPath; // node
+        finalArgs = [resolved, "dev", "-H", "0.0.0.0", "-p", String(suggestedPort)];
+        useShell = false;
+      } else {
+        finalCommand = "npx";
+        finalArgs = ["next", "dev", "-H", "0.0.0.0", "-p", String(suggestedPort)];
+      }
     } else if (script.includes("vite")) {
-      // Vite: run directly with our port
-      finalCommand = "npx";
-      finalArgs = ["vite", "--host", "0.0.0.0", "--port", String(suggestedPort)];
+      const resolved = resolveNodeBin(workDir, "vite");
+      if (resolved) {
+        finalCommand = process.execPath;
+        finalArgs = [resolved, "--host", "0.0.0.0", "--port", String(suggestedPort)];
+        useShell = false;
+      } else {
+        finalCommand = "npx";
+        finalArgs = ["vite", "--host", "0.0.0.0", "--port", String(suggestedPort)];
+      }
     }
-    // For other commands, PORT env var will be used
   } catch {}
 
   console.log(`[dev-server] Running: ${finalCommand} ${finalArgs.join(" ")} (port ${suggestedPort})`);
+  emitLog(projectId, `Starting dev server on port ${suggestedPort}...`, "system");
 
   const child = spawn(finalCommand, finalArgs, {
     cwd: workDir,
-    shell: true,
+    shell: useShell,
     env: {
       ...process.env,
       PORT: String(suggestedPort),
@@ -184,6 +241,9 @@ export async function startDevServer(
     if (app.logs.length > 500) app.logs.shift();
 
     console.log(`[dev-server] [${projectId}] ${text.trim().slice(0, 120)}`);
+    const hasError = /error|ERR!|EACCES|ENOENT|EADDRINUSE/i.test(text);
+    const hasWarn = /warn|deprecat/i.test(text);
+    emitLog(projectId, text, "stdout", hasError ? "error" : hasWarn ? "warn" : "info");
 
     if (!app.port) {
       const port = extractPort(text);

@@ -178,6 +178,9 @@ export function useAgentChat(
           }
 
           if (replayContent || replayToolCalls.length > 0) {
+            // Mark as interrupted if the agent is no longer active —
+            // user will see a "Continue / Tell PiPilot something else" prompt
+            // instead of auto-resuming.
             setMessages((prev) => [...prev, {
               id: resumeId,
               role: "assistant" as const,
@@ -185,18 +188,21 @@ export function useAgentChat(
               timestamp: new Date(),
               toolCalls: replayToolCalls,
               parts: replayParts,
+              interrupted: !data.isActive,
+            }]);
+          } else if (!data.isActive) {
+            // No partial content but session was interrupted — still show the prompt
+            setMessages((prev) => [...prev, {
+              id: resumeId,
+              role: "assistant" as const,
+              content: "",
+              timestamp: new Date(),
+              interrupted: true,
             }]);
           }
         }
-
-        // Always auto-continue if agent is not currently active
-        // This resumes the most recent session with continue: true on the server
-        if (!data.isActive) {
-          setIsStreaming(true);
-          setTimeout(() => {
-            sendMessage("Continue where you left off. Check what's been done and keep building.");
-          }, 1500);
-        }
+        // Note: removed auto-continue. User must explicitly click Continue
+        // or send a new message via the interruption UI.
       } catch {}
     }
 
@@ -631,6 +637,18 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
     }
   }, [pendingQuestion]);
 
+  // Continue an interrupted session — clears the flag and sends a continuation
+  const continueInterrupted = useCallback((messageId: string) => {
+    setMessages((prev) => prev.map(m => m.id === messageId ? { ...m, interrupted: false } : m));
+    sendMessage("Continue where you left off. Check what's been done and keep building.");
+  }, [sendMessage]);
+
+  // Dismiss the interruption marker (called when user chooses "Tell PiPilot something else")
+  // The user-supplied message is sent normally via sendMessage by the UI.
+  const dismissInterruption = useCallback((messageId: string) => {
+    setMessages((prev) => prev.map(m => m.id === messageId ? { ...m, interrupted: false } : m));
+  }, []);
+
   return {
     messages,
     isStreaming,
@@ -644,5 +662,7 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
     todos,
     pendingQuestion,
     answerQuestion,
+    continueInterrupted,
+    dismissInterruption,
   };
 }

@@ -40,8 +40,36 @@ export default defineConfig({
       "/api/dev-server": {
         target: "http://localhost:3001",
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyRes", (proxyRes) => {
+            if (proxyRes.headers["content-type"]?.includes("text/event-stream")) {
+              proxyRes.headers["cache-control"] = "no-cache";
+              proxyRes.headers["x-accel-buffering"] = "no";
+            }
+          });
+        },
       },
       "/api/dev-preview": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+      "/api/terminal": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyRes", (proxyRes) => {
+            if (proxyRes.headers["content-type"]?.includes("text/event-stream")) {
+              proxyRes.headers["cache-control"] = "no-cache";
+              proxyRes.headers["x-accel-buffering"] = "no";
+            }
+          });
+        },
+      },
+      "/api/git": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+      "/api/project": {
         target: "http://localhost:3001",
         changeOrigin: true,
       },

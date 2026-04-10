@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent } from "react";
-import { Plus, X, Trash2 } from "lucide-react";
+import { Plus, X, Trash2, Monitor } from "lucide-react";
 import { db } from "@/lib/db";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { XTerminal } from "@/components/ide/XTerminal";
+import { RealTerminal } from "@/components/ide/RealTerminal";
 
 interface TerminalLine {
   id: number;
@@ -13,7 +14,7 @@ interface TerminalLine {
 interface ShellTab {
   id: string;
   name: string;
-  type: "virtual" | "node";
+  type: "virtual" | "node" | "real";
   lines: TerminalLine[];
   history: string[];
   historyIndex: number;
@@ -26,6 +27,19 @@ function createNodeShell(id: string, index: number): ShellTab {
     id,
     name: `node ${index}`,
     type: "node",
+    lines: [],
+    history: [],
+    historyIndex: -1,
+    cwd: "",
+    nextLineId: 0,
+  };
+}
+
+function createRealShell(id: string, index: number): ShellTab {
+  return {
+    id,
+    name: `shell ${index}`,
+    type: "real",
     lines: [],
     history: [],
     historyIndex: -1,
@@ -52,8 +66,8 @@ function createShell(id: string, index: number): ShellTab {
 
 export function TerminalPanel() {
   const { activeProjectId } = useActiveProject();
-  const [shells, setShells] = useState<ShellTab[]>(() => [createShell("shell-1", 1)]);
-  const [activeShellId, setActiveShellId] = useState("shell-1");
+  const [shells, setShells] = useState<ShellTab[]>(() => [createRealShell("real-default-1", 1)]);
+  const [activeShellId, setActiveShellId] = useState("real-default-1");
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -860,6 +874,7 @@ export function TerminalPanel() {
 
   const [showNewMenu, setShowNewMenu] = useState(false);
   const nodeCounter = useRef(0);
+  const realCounter = useRef(0);
 
   const addShell = () => {
     shellCounter.current++;
@@ -875,6 +890,37 @@ export function TerminalPanel() {
     setActiveShellId(id);
   };
 
+  const addRealShell = (initialCommand?: string) => {
+    realCounter.current++;
+    const id = `real-${Date.now()}-${realCounter.current}`;
+    setShells((prev) => [...prev, createRealShell(id, realCounter.current)]);
+    setActiveShellId(id);
+    // If a command is provided, run it after the shell connects
+    if (initialCommand) {
+      setTimeout(async () => {
+        try {
+          await fetch("/api/terminal/write", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId: id, data: initialCommand + "\r" }),
+          });
+        } catch {}
+      }, 800);
+    }
+    return id;
+  };
+
+  // Listen for global "run-in-terminal" events from RunDebugPanel
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      addRealShell(detail?.command || undefined);
+    };
+    window.addEventListener("pipilot:run-in-terminal", handler);
+    return () => window.removeEventListener("pipilot:run-in-terminal", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!showNewMenu) return;
     const handle = (e: MouseEvent) => setShowNewMenu(false);
@@ -884,6 +930,15 @@ export function TerminalPanel() {
 
   const removeShell = (id: string) => {
     if (shells.length <= 1) return;
+    // Destroy PTY if it's a real shell
+    const shell = shells.find(s => s.id === id);
+    if (shell?.type === "real") {
+      fetch("/api/terminal/destroy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: id }),
+      }).catch(() => {});
+    }
     setShells((prev) => {
       const next = prev.filter((s) => s.id !== id);
       if (activeShellId === id) {
@@ -908,7 +963,7 @@ export function TerminalPanel() {
   return (
     <div
       className="flex flex-col"
-      style={{ height: 250, background: "hsl(220 13% 10%)", overflow: "hidden" }}
+      style={{ height: "100%", background: "hsl(220 13% 10%)", overflow: "hidden" }}
     >
       {/* Tab bar */}
       <div
@@ -989,6 +1044,19 @@ export function TerminalPanel() {
               >
                 Node.js Terminal (run JS files)
               </button>
+              <button
+                onClick={() => { addRealShell(); setShowNewMenu(false); }}
+                style={{
+                  display: "block", width: "100%", textAlign: "left",
+                  padding: "6px 10px", fontSize: 11, color: "hsl(207 90% 65%)",
+                  background: "transparent", border: "none", cursor: "pointer",
+                  borderRadius: 4,
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = "hsl(220 13% 25%)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+              >
+                System Shell (real terminal)
+              </button>
             </div>
           )}
         </div>
@@ -1006,7 +1074,17 @@ export function TerminalPanel() {
       </div>
 
       {/* Terminal output */}
-      {activeShell?.type === "node" ? (
+      {activeShell?.type === "real" ? (
+        <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+          <RealTerminal
+            sessionId={activeShell.id}
+            projectId={activeProjectId}
+            onExit={() => {
+              // Mark as exited but keep the tab
+            }}
+          />
+        </div>
+      ) : activeShell?.type === "node" ? (
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
           <XTerminal />
         </div>

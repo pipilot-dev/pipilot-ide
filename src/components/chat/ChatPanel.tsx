@@ -180,6 +180,14 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   const agentTodos = activeProvider === "claude-agent" ? (agentSdk as any).todos || [] : [];
   const agentPendingQuestion = activeProvider === "claude-agent" ? (agentSdk as any).pendingQuestion || null : null;
   const agentAnswerQuestion = activeProvider === "claude-agent" ? (agentSdk as any).answerQuestion : null;
+  const agentContinueInterrupted = activeProvider === "claude-agent" ? (agentSdk as any).continueInterrupted : null;
+  const agentDismissInterruption = activeProvider === "claude-agent" ? (agentSdk as any).dismissInterruption : null;
+
+  // Handler when user picks "Tell PiPilot something else" and submits a new message
+  const handleSendNewAfterInterrupt = useCallback((messageId: string, newMessage: string) => {
+    agentDismissInterruption?.(messageId);
+    sendMessage(newMessage);
+  }, [agentDismissInterruption, sendMessage]);
 
   // Sync mode changes to switch providers
   const handleSetMode = useCallback((newMode: ChatMode) => {
@@ -779,6 +787,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                   key={`turn-${firstId}`}
                   messages={turnMsgs}
                   onDelete={handleDeleteMessage}
+                  onContinueInterrupted={agentContinueInterrupted || undefined}
+                  onDismissInterruption={handleSendNewAfterInterrupt}
                 />
               );
               currentTurn = [];

@@ -53,6 +53,18 @@ export function IDELayout() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  // Persist terminal height in localStorage
+  const terminalResize = useResizable(
+    typeof window !== "undefined" ? Number(localStorage.getItem("pipilot-terminal-height")) || 280 : 280,
+    120,
+    700,
+    "vertical"
+  );
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("pipilot-terminal-height", String(terminalResize.size));
+    }
+  }, [terminalResize.size]);
   const [deploying, setDeploying] = useState(false);
   const [lastDeploy, setLastDeploy] = useState<DeployResult | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -522,6 +534,7 @@ export function IDELayout() {
                 onSelectFile={handleSelectFile}
                 files={files}
                 onRunPreview={handleOpenPreview}
+                onOpenTerminal={() => setTerminalOpen(true)}
                 onCreateFile={handleCreateFile}
                 onCreateFolder={handleCreateFolder}
                 onRenameFile={handleRenameFile}
@@ -558,8 +571,25 @@ export function IDELayout() {
           {/* Terminal panel */}
           {terminalOpen && (
             <>
+              {/* Resize handle */}
               <div
-                className="flex items-center justify-between px-3 border-t border-b"
+                onMouseDown={terminalResize.onMouseDown}
+                style={{
+                  height: 4,
+                  cursor: "ns-resize",
+                  background: terminalResize.isDragging ? "hsl(207 90% 50%)" : "hsl(220 13% 22%)",
+                  flexShrink: 0,
+                  transition: terminalResize.isDragging ? "none" : "background 0.15s",
+                }}
+                onMouseEnter={(e) => {
+                  if (!terminalResize.isDragging) e.currentTarget.style.background = "hsl(207 90% 50% / 0.5)";
+                }}
+                onMouseLeave={(e) => {
+                  if (!terminalResize.isDragging) e.currentTarget.style.background = "hsl(220 13% 22%)";
+                }}
+              />
+              <div
+                className="flex items-center justify-between px-3 border-b"
                 style={{
                   height: 30,
                   minHeight: 30,
@@ -581,7 +611,9 @@ export function IDELayout() {
                   <ChevronDown size={14} />
                 </button>
               </div>
-              <TerminalPanel />
+              <div style={{ height: terminalResize.size - 34, minHeight: 86, flexShrink: 0 }}>
+                <TerminalPanel />
+              </div>
             </>
           )}
         </div>

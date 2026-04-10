@@ -73,7 +73,16 @@
       "Bash(taskkill //F //PID 18552 //T)",
       "Bash(findstr \":31234\")",
       "Bash(findstr \"LISTENING\")",
-      "Bash(findstr -E \"3[0-9]{4}\")"
+      "Bash(findstr -E \"3[0-9]{4}\")",
+      "Bash(ls:*)",
+      "Bash(taskkill //F //PID 31380 //T)",
+      "Bash(findstr LISTENING)",
+      "Bash(pnpm approve-builds:*)",
+      "Bash(taskkill //F //PID 18164 //T)",
+      "Bash(taskkill //F //PID 7444 //T)",
+      "Bash(findstr \":44405\")",
+      "Bash(cd:*)",
+      "Bash(cat EOF node_modules/ .next/ out/ build/ dist/ .env .env.local *.log .DS_Store .claude_history.json EOF git status --porcelain)"
     ]
   }
 }

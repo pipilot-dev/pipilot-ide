@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChatMessage as ChatMessageType, ToolCallInfo, BuiltinToolStatus } from "@/hooks/useChat";
@@ -451,8 +451,11 @@ function MessageActions({
 }
 
 /* ─── Single Message Item (used for user messages) ───────────────────── */
+const TRUNCATE_WORD_LIMIT = 35;
+
 export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProps) {
   const isUser = message.role === "user";
+  const [expanded, setExpanded] = useState(false);
 
   // Non-user messages should go through AssistantTurnGroup, but handle gracefully
   if (!isUser) {
@@ -460,6 +463,10 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
       <AssistantTurnGroup messages={[message]} onDelete={onDelete} />
     );
   }
+
+  const words = message.content.split(/\s+/);
+  const needsTruncation = words.length > TRUNCATE_WORD_LIMIT;
+  const truncatedText = needsTruncation ? words.slice(0, TRUNCATE_WORD_LIMIT).join(" ") + "..." : message.content;
 
   return (
     <div
@@ -488,9 +495,52 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
             color: "white",
             padding: "10px 14px",
             boxShadow: "0 2px 8px hsl(207 90% 30% / 0.3)",
+            maxWidth: "100%",
           }}
         >
-          <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+          {needsTruncation && !expanded ? (
+            <>
+              <p className="whitespace-pre-wrap leading-relaxed">{truncatedText}</p>
+              <button
+                onClick={() => setExpanded(true)}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  marginTop: 6, padding: "3px 10px",
+                  fontSize: 10, fontWeight: 600,
+                  background: "hsl(207 90% 50% / 0.2)",
+                  color: "hsl(207 90% 85%)",
+                  border: "1px solid hsl(207 90% 50% / 0.3)",
+                  borderRadius: 12, cursor: "pointer",
+                }}
+              >
+                <ChevronDown size={10} />
+                Show More
+              </button>
+            </>
+          ) : needsTruncation && expanded ? (
+            <>
+              <div style={{ maxHeight: 300, overflowY: "auto", paddingRight: 4 }}>
+                <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+              </div>
+              <button
+                onClick={() => setExpanded(false)}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  marginTop: 6, padding: "3px 10px",
+                  fontSize: 10, fontWeight: 600,
+                  background: "hsl(207 90% 50% / 0.2)",
+                  color: "hsl(207 90% 85%)",
+                  border: "1px solid hsl(207 90% 50% / 0.3)",
+                  borderRadius: 12, cursor: "pointer",
+                }}
+              >
+                <ChevronRight size={10} />
+                Show Less
+              </button>
+            </>
+          ) : (
+            <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+          )}
         </div>
 
         {/* Action buttons */}
@@ -515,6 +565,143 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
   );
 }
 
+/* ─── Interruption Prompt ─────────────────────────────────────────────
+ * Shown when an agent stream was interrupted (e.g. by page refresh).
+ * Lets the user resume the session or send a different message.
+ * ──────────────────────────────────────────────────────────────────── */
+interface InterruptionPromptProps {
+  messageId: string;
+  onContinue: (messageId: string) => void;
+  onSendNew: (messageId: string, text: string) => void;
+}
+
+function InterruptionPrompt({ messageId, onContinue, onSendNew }: InterruptionPromptProps) {
+  const [mode, setMode] = useState<"choice" | "input">("choice");
+  const [text, setText] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (mode === "input") inputRef.current?.focus();
+  }, [mode]);
+
+  const handleSend = () => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    onSendNew(messageId, trimmed);
+  };
+
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        padding: "10px 12px",
+        borderRadius: 10,
+        background: "hsl(38 92% 50% / 0.08)",
+        border: "1px solid hsl(38 92% 50% / 0.25)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "hsl(38 92% 65%)" }}>
+          Agent was interrupted
+        </span>
+      </div>
+
+      {mode === "choice" ? (
+        <>
+          <div style={{ fontSize: 11, color: "hsl(220 14% 65%)", marginBottom: 10, lineHeight: 1.5 }}>
+            The previous session was paused. Click continue below to resume, or send a different message.
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button
+              onClick={() => onContinue(messageId)}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                padding: "5px 12px", fontSize: 11, fontWeight: 600,
+                background: "linear-gradient(135deg, hsl(142 71% 45%) 0%, hsl(142 71% 38%) 100%)",
+                color: "#fff", border: "none", borderRadius: 6, cursor: "pointer",
+                boxShadow: "0 1px 3px hsl(142 71% 30% / 0.4)",
+              }}
+            >
+              <Play size={11} />
+              Continue
+            </button>
+            <button
+              onClick={() => setMode("input")}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                padding: "5px 12px", fontSize: 11, fontWeight: 600,
+                background: "hsl(220 13% 22%)",
+                color: "hsl(220 14% 75%)",
+                border: "1px solid hsl(220 13% 28%)",
+                borderRadius: 6, cursor: "pointer",
+              }}
+            >
+              Tell PiPilot something else
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <textarea
+            ref={inputRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              } else if (e.key === "Escape") {
+                setMode("choice");
+              }
+            }}
+            placeholder="Type a new message for PiPilot..."
+            rows={3}
+            style={{
+              width: "100%", padding: "8px 10px",
+              fontSize: 12, fontFamily: "inherit",
+              background: "hsl(220 13% 12%)",
+              color: "hsl(220 14% 90%)",
+              border: "1px solid hsl(220 13% 28%)",
+              borderRadius: 6,
+              resize: "vertical",
+              outline: "none",
+            }}
+          />
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+            <button
+              onClick={handleSend}
+              disabled={!text.trim()}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                padding: "5px 12px", fontSize: 11, fontWeight: 600,
+                background: text.trim()
+                  ? "linear-gradient(135deg, hsl(207 90% 45%) 0%, hsl(207 90% 38%) 100%)"
+                  : "hsl(220 13% 22%)",
+                color: text.trim() ? "#fff" : "hsl(220 14% 45%)",
+                border: "none", borderRadius: 6,
+                cursor: text.trim() ? "pointer" : "not-allowed",
+              }}
+            >
+              Send
+            </button>
+            <button
+              onClick={() => { setMode("choice"); setText(""); }}
+              style={{
+                padding: "5px 10px", fontSize: 11,
+                background: "transparent", color: "hsl(220 14% 55%)",
+                border: "1px solid hsl(220 13% 28%)",
+                borderRadius: 6, cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ─── Assistant Turn Group ────────────────────────────────────────────
  * Renders all consecutive assistant + tool messages from one agent loop
  * turn inside a SINGLE unified bubble with one avatar and one set of
@@ -523,9 +710,11 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
 interface AssistantTurnGroupProps {
   messages: ChatMessageType[];
   onDelete?: (messageId: string) => void;
+  onContinueInterrupted?: (messageId: string) => void;
+  onDismissInterruption?: (messageId: string, newMessage: string) => void;
 }
 
-export function AssistantTurnGroup({ messages, onDelete }: AssistantTurnGroupProps) {
+export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, onDismissInterruption }: AssistantTurnGroupProps) {
   const [copied, setCopied] = useState(false);
 
   // Aggregate all text content for the copy button
@@ -597,8 +786,8 @@ export function AssistantTurnGroup({ messages, onDelete }: AssistantTurnGroupPro
             const hasBuiltinTools = msg.builtinToolStatuses && msg.builtinToolStatuses.length > 0;
             const isEmpty = !hasContent && !hasTools && !hasBuiltinTools && !msg.streaming;
 
-            // Skip truly empty messages (e.g. tool-only messages with no text)
-            if (isEmpty) return null;
+            // Skip truly empty messages, but keep interrupted ones so the prompt renders
+            if (isEmpty && !msg.interrupted) return null;
 
             // Add a subtle divider between iterations (but not before the first)
             const showDivider = idx > 0 && (hasContent || hasTools || hasBuiltinTools);
@@ -687,6 +876,19 @@ export function AssistantTurnGroup({ messages, onDelete }: AssistantTurnGroupPro
               </div>
             );
           })}
+
+          {/* Interruption prompt — shown when the agent stream was cut off */}
+          {(() => {
+            const interruptedMsg = messages.find(m => m.interrupted);
+            if (!interruptedMsg || !onContinueInterrupted || !onDismissInterruption) return null;
+            return (
+              <InterruptionPrompt
+                messageId={interruptedMsg.id}
+                onContinue={onContinueInterrupted}
+                onSendNew={onDismissInterruption}
+              />
+            );
+          })()}
         </div>
 
         {/* Single set of action buttons for the entire turn */}

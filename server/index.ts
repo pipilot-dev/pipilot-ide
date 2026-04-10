@@ -5,7 +5,9 @@ import express from "express";
 import cors from "cors";
 import { query, unstable_v2_createSession, unstable_v2_resumeSession, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import chokidar from "chokidar";
-import { startDevServer, stopDevServer, getDevServerStatus, stopAllDevServers } from "./dev-server";
+import { startDevServer, stopDevServer, getDevServerStatus, stopAllDevServers, subscribeToLogs } from "./dev-server";
+import * as pty from "node-pty";
+import * as gitOps from "./git";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -1022,18 +1024,32 @@ app.get("/api/files/types", (req, res) => {
 
 // POST /api/dev-server/start — start a dev server for a project
 app.post("/api/dev-server/start", async (req, res) => {
-  const { projectId } = req.body;
+  const { projectId, force } = req.body;
   if (!projectId) return res.status(400).json({ error: "projectId required" });
 
   const workDir = path.join(WORKSPACE_BASE, projectId);
   if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
+
+  // Reuse existing dev server if already running (unless force restart requested)
+  const existing = getDevServerStatus(projectId);
+  if (!force && (existing.status === "running" || existing.status === "starting" || existing.status === "installing")) {
+    console.log(`[dev-server] Reusing ${existing.status} server for ${projectId}${existing.port ? ` on port ${existing.port}` : ""}`);
+    return res.json({
+      success: true,
+      status: existing.status,
+      projectId,
+      port: existing.port,
+      url: existing.url,
+      reused: true,
+    });
+  }
 
   // Start async — don't await, respond immediately
   startDevServer(projectId, workDir, (status, port, url) => {
     console.log(`[dev-server] ${projectId}: ${status}${port ? ` on port ${port}` : ""}`);
   });
 
-  res.json({ success: true, status: "starting", projectId });
+  res.json({ success: true, status: "starting", projectId, reused: false });
 });
 
 // POST /api/dev-server/stop — stop a dev server
@@ -1066,9 +1082,345 @@ app.get("/api/dev-preview", async (req, res) => {
   res.redirect(targetUrl);
 });
 
+// ── SSE: Stream dev server logs in real-time ─────────────────────────
+app.get("/api/dev-server/logs", (req, res) => {
+  const projectId = req.query.projectId as string;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  // Send existing logs as initial batch
+  const status = getDevServerStatus(projectId);
+  if (status.logs.length > 0) {
+    for (const log of status.logs) {
+      res.write(`data: ${JSON.stringify({ text: log, source: "stdout", level: "info" })}\n\n`);
+    }
+  }
+
+  const unsub = subscribeToLogs(projectId, (entry) => {
+    try {
+      res.write(`data: ${JSON.stringify(entry)}\n\n`);
+    } catch {}
+  });
+
+  req.on("close", unsub);
+});
+
+// ── PTY Terminal ─────────────────────────────────────────────────────
+const activePtys = new Map<string, pty.IPty>();
+// Per-session scrollback buffer (raw bytes, capped to ~512KB per session)
+const ptyBuffers = new Map<string, string>();
+const PTY_BUFFER_MAX = 512 * 1024;
+
+function createPtyForProject(projectId: string): pty.IPty {
+  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const shell = process.platform === "win32" ? "cmd.exe" : (process.env.SHELL || "/bin/bash");
+  const cwd = fs.existsSync(workDir) ? workDir : WORKSPACE_BASE;
+
+  const ptyProcess = pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cols: 120,
+    rows: 30,
+    cwd,
+    env: { ...process.env, TERM: "xterm-256color" } as Record<string, string>,
+  });
+
+  return ptyProcess;
+}
+
+// POST /api/terminal/create — create a PTY session
+app.post("/api/terminal/create", (req, res) => {
+  const { projectId, sessionId } = req.body;
+  if (!projectId || !sessionId) return res.status(400).json({ error: "projectId and sessionId required" });
+
+  if (activePtys.has(sessionId)) {
+    return res.json({ success: true, sessionId, existing: true });
+  }
+
+  const ptyProc = createPtyForProject(projectId);
+  activePtys.set(sessionId, ptyProc);
+  ptyBuffers.set(sessionId, "");
+
+  // Always-on listener that captures every byte to the scrollback buffer.
+  // This runs independently of any SSE client being connected.
+  ptyProc.onData((data: string) => {
+    let buf = ptyBuffers.get(sessionId) || "";
+    buf += data;
+    if (buf.length > PTY_BUFFER_MAX) {
+      buf = buf.slice(buf.length - PTY_BUFFER_MAX);
+    }
+    ptyBuffers.set(sessionId, buf);
+  });
+
+  ptyProc.onExit(() => {
+    activePtys.delete(sessionId);
+    ptyBuffers.delete(sessionId);
+    console.log(`[terminal] PTY ${sessionId} exited`);
+  });
+
+  console.log(`[terminal] Created PTY ${sessionId} for ${projectId}`);
+  res.json({ success: true, sessionId });
+});
+
+// POST /api/terminal/write — send input to PTY
+app.post("/api/terminal/write", (req, res) => {
+  const { sessionId, data } = req.body;
+  const ptyProc = activePtys.get(sessionId);
+  if (!ptyProc) return res.status(404).json({ error: "PTY not found" });
+  ptyProc.write(data);
+  res.json({ success: true });
+});
+
+// POST /api/terminal/resize — resize PTY
+app.post("/api/terminal/resize", (req, res) => {
+  const { sessionId, cols, rows } = req.body;
+  const ptyProc = activePtys.get(sessionId);
+  if (!ptyProc) return res.status(404).json({ error: "PTY not found" });
+  try { ptyProc.resize(cols, rows); } catch {}
+  res.json({ success: true });
+});
+
+// GET /api/terminal/stream — SSE output from PTY
+app.get("/api/terminal/stream", (req, res) => {
+  const sessionId = req.query.sessionId as string;
+  if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+
+  const ptyProc = activePtys.get(sessionId);
+  if (!ptyProc) return res.status(404).json({ error: "PTY not found" });
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  // Replay scrollback buffer first so reconnecting clients see history
+  const buffer = ptyBuffers.get(sessionId) || "";
+  if (buffer.length > 0) {
+    try {
+      res.write(`data: ${JSON.stringify({ output: buffer, replay: true })}\n\n`);
+    } catch {}
+  }
+
+  const disposable = ptyProc.onData((data: string) => {
+    try {
+      res.write(`data: ${JSON.stringify({ output: data })}\n\n`);
+    } catch {}
+  });
+
+  const exitDisposable = ptyProc.onExit(() => {
+    try { res.write(`data: ${JSON.stringify({ exit: true })}\n\n`); } catch {}
+    try { res.end(); } catch {}
+  });
+
+  req.on("close", () => {
+    disposable.dispose();
+    exitDisposable.dispose();
+  });
+});
+
+// POST /api/terminal/destroy — kill a PTY session
+app.post("/api/terminal/destroy", (req, res) => {
+  const { sessionId } = req.body;
+  const ptyProc = activePtys.get(sessionId);
+  if (ptyProc) {
+    ptyProc.kill();
+    activePtys.delete(sessionId);
+  }
+  res.json({ success: true });
+});
+
+// ── Git Endpoints ────────────────────────────────────────────────────
+function getGitWorkDir(projectId: string): string | null {
+  const workDir = path.join(WORKSPACE_BASE, projectId);
+  if (!fs.existsSync(workDir)) return null;
+  return workDir;
+}
+
+// GET /api/git/check — check if git is installed
+app.get("/api/git/check", async (_req, res) => {
+  const result = await gitOps.isGitInstalled();
+  res.json(result);
+});
+
+// POST /api/git/install — attempt to install git
+app.post("/api/git/install", async (_req, res) => {
+  const result = await gitOps.installGit();
+  res.json(result);
+});
+
+// GET /api/git/repo-status — check if project is a git repo
+app.get("/api/git/repo-status", async (req, res) => {
+  const projectId = req.query.projectId as string;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const isRepo = await gitOps.isGitRepo(workDir);
+  res.json({ isRepo });
+});
+
+// POST /api/git/init
+app.post("/api/git/init", async (req, res) => {
+  const { projectId } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const result = await gitOps.gitInit(workDir);
+  res.json(result);
+});
+
+// GET /api/git/status
+app.get("/api/git/status", async (req, res) => {
+  const projectId = req.query.projectId as string;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  try {
+    const [files, branch, branches, remotes] = await Promise.all([
+      gitOps.gitStatus(workDir),
+      gitOps.gitCurrentBranch(workDir),
+      gitOps.gitBranches(workDir),
+      gitOps.gitRemotes(workDir),
+    ]);
+    res.json({ files, branch, branches, remotes });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/git/log
+app.get("/api/git/log", async (req, res) => {
+  const projectId = req.query.projectId as string;
+  const limit = parseInt(req.query.limit as string) || 50;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const log = await gitOps.gitLog(workDir, limit);
+  res.json({ log });
+});
+
+// GET /api/git/diff?projectId=&path=&staged=
+app.get("/api/git/diff", async (req, res) => {
+  const projectId = req.query.projectId as string;
+  const filePath = req.query.path as string;
+  const staged = req.query.staged === "true";
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const diff = await gitOps.gitDiff(workDir, filePath, staged);
+  // Also fetch the original (HEAD) and current contents for inline diff view
+  let oldContent = "";
+  let newContent = "";
+  try {
+    oldContent = await gitOps.gitShowFile(workDir, filePath);
+  } catch {}
+  try {
+    const fullPath = path.join(workDir, filePath);
+    if (fs.existsSync(fullPath)) {
+      newContent = fs.readFileSync(fullPath, "utf8");
+    }
+  } catch {}
+  res.json({ diff, oldContent, newContent });
+});
+
+// POST /api/git/add
+app.post("/api/git/add", async (req, res) => {
+  const { projectId, files, all } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const result = all ? await gitOps.gitAddAll(workDir) : await gitOps.gitAdd(workDir, files || []);
+  res.json(result);
+});
+
+// POST /api/git/unstage
+app.post("/api/git/unstage", async (req, res) => {
+  const { projectId, files } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const result = await gitOps.gitUnstage(workDir, files || []);
+  res.json(result);
+});
+
+// POST /api/git/commit
+app.post("/api/git/commit", async (req, res) => {
+  const { projectId, message } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const result = await gitOps.gitCommit(workDir, message);
+  res.json(result);
+});
+
+// POST /api/git/push
+app.post("/api/git/push", async (req, res) => {
+  const { projectId, remote, branch } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const result = await gitOps.gitPush(workDir, remote, branch);
+  res.json(result);
+});
+
+// POST /api/git/pull
+app.post("/api/git/pull", async (req, res) => {
+  const { projectId, remote, branch } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const result = await gitOps.gitPull(workDir, remote, branch);
+  res.json(result);
+});
+
+// POST /api/git/branch — create
+app.post("/api/git/branch", async (req, res) => {
+  const { projectId, name } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const result = await gitOps.gitCreateBranch(workDir, name);
+  res.json(result);
+});
+
+// POST /api/git/checkout
+app.post("/api/git/checkout", async (req, res) => {
+  const { projectId, branch } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const result = await gitOps.gitCheckout(workDir, branch);
+  res.json(result);
+});
+
+// POST /api/git/discard
+app.post("/api/git/discard", async (req, res) => {
+  const { projectId, files } = req.body;
+  const workDir = getGitWorkDir(projectId);
+  if (!workDir) return res.status(404).json({ error: "Workspace not found" });
+  const result = await gitOps.gitDiscard(workDir, files || []);
+  res.json(result);
+});
+
+// ── Project Scripts (for Run/Debug panel) ───────────────────────────
+// GET /api/project/scripts — read package.json scripts
+app.get("/api/project/scripts", (req, res) => {
+  const projectId = req.query.projectId as string;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+  const workDir = path.join(WORKSPACE_BASE, projectId);
+  const pkgPath = path.join(workDir, "package.json");
+  if (!fs.existsSync(pkgPath)) return res.json({ scripts: {}, hasPackageJson: false });
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    res.json({
+      scripts: pkg.scripts || {},
+      hasPackageJson: true,
+      name: pkg.name,
+      version: pkg.version,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Cleanup on shutdown
-process.on("SIGTERM", () => { stopAllDevServers(); process.exit(0); });
-process.on("SIGINT", () => { stopAllDevServers(); process.exit(0); });
+process.on("SIGTERM", () => { stopAllDevServers(); activePtys.forEach(p => p.kill()); process.exit(0); });
+process.on("SIGINT", () => { stopAllDevServers(); activePtys.forEach(p => p.kill()); process.exit(0); });
 
 app.listen(PORT, () => {
   console.log(`[agent-server] Running on http://localhost:${PORT}`);

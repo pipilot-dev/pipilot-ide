@@ -37,6 +37,7 @@ export interface ChatMessage {
   tool_call_id?: string;
   checkpointId?: string;
   parts?: MessagePart[];  // ordered sequence of text chunks and tool calls
+  interrupted?: boolean;  // marks a session that was interrupted (e.g. by page refresh)
 }
 
 function generateId() {
