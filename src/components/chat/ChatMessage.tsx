@@ -852,8 +852,12 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                     {/* Fallback: tool calls first, then content (AI SDK mode) */}
                     {hasTools && (
                       <div className="mb-2">
-                        {msg.toolCalls!.map((tc) => (
-                          <ToolCallCard key={`${msg.id}-fb-${tc.id}`} toolCall={tc} />
+                        {/* Dedupe by id — AI SDK may emit the same tool call
+                            in multiple stream chunks during a step */}
+                        {Array.from(
+                          new Map(msg.toolCalls!.map((tc) => [tc.id, tc])).values()
+                        ).map((tc, idx) => (
+                          <ToolCallCard key={`${msg.id}-fb-${tc.id}-${idx}`} toolCall={tc} />
                         ))}
                       </div>
                     )}
