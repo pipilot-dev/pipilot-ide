@@ -86,8 +86,103 @@ interface BreadcrumbSegmentProps {
   onSelectFile?: (node: FileNode) => void;
 }
 
+/**
+ * Recursive tree row inside the breadcrumb dropdown.
+ * Folders can be expanded to reveal children indented.
+ */
+function DropdownTreeRow({
+  node,
+  depth,
+  expandedSet,
+  toggleExpanded,
+  currentName,
+  onSelectFile,
+  closeDropdown,
+}: {
+  node: FileNode;
+  depth: number;
+  expandedSet: Set<string>;
+  toggleExpanded: (id: string) => void;
+  currentName: string;
+  onSelectFile?: (node: FileNode) => void;
+  closeDropdown: () => void;
+}) {
+  const isCurrent = node.name === currentName;
+  const isFolder = node.type === "folder";
+  const isExpanded = expandedSet.has(node.id);
+  const sortedChildren = isFolder && node.children
+    ? [...node.children].sort((a, b) => {
+        if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      })
+    : [];
+
+  return (
+    <>
+      <button
+        className="w-full flex items-center gap-1 px-2 py-1.5 text-xs text-left transition-colors"
+        style={{
+          color: isCurrent ? "hsl(207 90% 65%)" : "hsl(220 14% 80%)",
+          background: isCurrent ? "hsl(207 90% 40% / 0.15)" : "transparent",
+          paddingLeft: 8 + depth * 14,
+        }}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLElement).style.background = "hsl(220 13% 24%)";
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLElement).style.background =
+            isCurrent ? "hsl(207 90% 40% / 0.15)" : "transparent";
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (isFolder) {
+            toggleExpanded(node.id);
+          } else if (onSelectFile) {
+            onSelectFile(node);
+            closeDropdown();
+          }
+        }}
+      >
+        {isFolder ? (
+          <ChevronRight
+            size={10}
+            style={{
+              color: "hsl(220 14% 50%)",
+              transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+              transition: "transform 0.12s",
+              flexShrink: 0,
+            }}
+          />
+        ) : (
+          <span style={{ width: 10, flexShrink: 0 }} />
+        )}
+        {getSmallIcon(node.name, node.type)}
+        <span className="truncate flex-1">{node.name}</span>
+        {isCurrent && (
+          <span className="text-[10px] ml-1" style={{ color: "hsl(220 14% 45%)" }}>
+            current
+          </span>
+        )}
+      </button>
+      {isFolder && isExpanded && sortedChildren.map((child) => (
+        <DropdownTreeRow
+          key={child.id}
+          node={child}
+          depth={depth + 1}
+          expandedSet={expandedSet}
+          toggleExpanded={toggleExpanded}
+          currentName={currentName}
+          onSelectFile={onSelectFile}
+          closeDropdown={closeDropdown}
+        />
+      ))}
+    </>
+  );
+}
+
 function BreadcrumbSegment({ label, isLast, siblings, onSelectFile }: BreadcrumbSegmentProps) {
   const [open, setOpen] = useState(false);
+  const [expandedSet, setExpandedSet] = useState<Set<string>>(new Set());
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
@@ -125,6 +220,15 @@ function BreadcrumbSegment({ label, isLast, siblings, onSelectFile }: Breadcrumb
     return () => document.removeEventListener("keydown", handler);
   }, [open]);
 
+  const toggleExpanded = (id: string) => {
+    setExpandedSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const sorted = [...siblings].sort((a, b) => {
     if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
     return a.name.localeCompare(b.name);
@@ -153,7 +257,7 @@ function BreadcrumbSegment({ label, isLast, siblings, onSelectFile }: Breadcrumb
         createPortal(
           <div
             ref={dropdownRef}
-            className="fixed rounded border shadow-xl overflow-hidden min-w-[200px] max-h-[300px] overflow-y-auto"
+            className="fixed rounded border shadow-xl overflow-hidden min-w-[240px] max-w-[400px] max-h-[400px] overflow-y-auto"
             style={{
               top: dropdownPos.top,
               left: dropdownPos.left,
@@ -163,40 +267,18 @@ function BreadcrumbSegment({ label, isLast, siblings, onSelectFile }: Breadcrumb
               boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
             }}
           >
-            {sorted.map((node) => {
-              const isCurrent = node.name === label;
-              return (
-                <button
-                  key={node.id}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors"
-                  style={{
-                    color: isCurrent ? "hsl(207 90% 65%)" : "hsl(220 14% 80%)",
-                    background: isCurrent ? "hsl(207 90% 40% / 0.15)" : "transparent",
-                  }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLElement).style.background = "hsl(220 13% 24%)";
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLElement).style.background =
-                      isCurrent ? "hsl(207 90% 40% / 0.15)" : "transparent";
-                  }}
-                  onClick={() => {
-                    setOpen(false);
-                    if (node.type === "file" && onSelectFile) {
-                      onSelectFile(node);
-                    }
-                  }}
-                >
-                  {getSmallIcon(node.name, node.type)}
-                  <span className="truncate">{node.name}</span>
-                  {isCurrent && (
-                    <span className="ml-auto text-[10px]" style={{ color: "hsl(220 14% 45%)" }}>
-                      current
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+            {sorted.map((node) => (
+              <DropdownTreeRow
+                key={node.id}
+                node={node}
+                depth={0}
+                expandedSet={expandedSet}
+                toggleExpanded={toggleExpanded}
+                currentName={label}
+                onSelectFile={onSelectFile}
+                closeDropdown={() => setOpen(false)}
+              />
+            ))}
           </div>,
           document.body
         )}
