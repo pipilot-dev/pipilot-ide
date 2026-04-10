@@ -65,29 +65,82 @@ function gitignoreFile(): SeedFile {
   };
 }
 
-function jsconfigFile(): SeedFile {
-  // jsconfig.json gives JS projects type-checking + path aliasing in the
-  // editor and server-side diagnostics, without forcing them to be TS.
+/**
+ * jsconfig.json gives JS projects type-checking + path aliasing in the
+ * editor and server-side diagnostics, without forcing them to be TS.
+ * Tailored per framework so paths/include match conventions.
+ */
+function jsconfigFile(framework: ProjectTemplate): SeedFile {
+  let paths: Record<string, string[]>;
+  let include: string[];
+  let baseUrl = ".";
+
+  switch (framework) {
+    case "vite-react":
+      // Vite convention: source in src/, alias @/ → ./src/
+      paths = { "@/*": ["./src/*"] };
+      include = ["src/**/*.js", "src/**/*.jsx", "src/**/*.mjs", "vite.config.js"];
+      break;
+    case "nextjs":
+      // Next.js (App Router at root) convention: alias @/ → root
+      paths = { "@/*": ["./*"] };
+      include = ["next-env.d.ts", "**/*.js", "**/*.jsx", "**/*.mjs"];
+      break;
+    case "express":
+      // Express: no aliases, just root
+      paths = {};
+      include = ["**/*.js", "**/*.mjs"];
+      break;
+    case "node":
+    default:
+      paths = {};
+      include = ["**/*.js", "**/*.mjs"];
+      break;
+  }
+
+  const compilerOptions: Record<string, unknown> = {
+    target: "esnext",
+    module: "esnext",
+    moduleResolution: "bundler",
+    jsx: "preserve",
+    lib: ["dom", "dom.iterable", "esnext"],
+    allowJs: true,
+    checkJs: false,
+    esModuleInterop: true,
+    resolveJsonModule: true,
+    skipLibCheck: true,
+    isolatedModules: true,
+    noEmit: true,
+    baseUrl,
+  };
+  if (Object.keys(paths).length > 0) compilerOptions.paths = paths;
+
   return {
     id: "jsconfig.json", name: "jsconfig.json", type: "file",
     parentPath: "", language: "json",
     content: JSON.stringify({
-      compilerOptions: {
-        target: "esnext",
-        module: "esnext",
-        moduleResolution: "node",
-        jsx: "preserve",
-        allowJs: true,
-        checkJs: false,
-        esModuleInterop: true,
-        resolveJsonModule: true,
-        skipLibCheck: true,
-        baseUrl: ".",
-        paths: { "@/*": ["./*"] },
-      },
-      include: ["**/*.js", "**/*.jsx", "**/*.mjs"],
-      exclude: ["node_modules", "dist", "build", ".next", "out"],
+      compilerOptions,
+      include,
+      exclude: ["node_modules", "dist", "build", ".next", "out", ".pipilot-tsconfig.json"],
     }, null, 2),
+  };
+}
+
+/** Next.js specific environment types declaration file */
+function nextEnvDtsFile(): SeedFile {
+  return {
+    id: "next-env.d.ts", name: "next-env.d.ts", type: "file",
+    parentPath: "", language: "typescript",
+    content: `/// <reference types="next" />\n/// <reference types="next/image-types/global" />\n\n// NOTE: This file should not be edited\n// see https://nextjs.org/docs/app/building-your-application/configuring/typescript for more information.\n`,
+  };
+}
+
+/** Vite client environment types declaration file */
+function viteEnvDtsFile(): SeedFile {
+  return {
+    id: "src/vite-env.d.ts", name: "vite-env.d.ts", type: "file",
+    parentPath: "src", language: "typescript",
+    content: `/// <reference types="vite/client" />\n`,
   };
 }
 
@@ -167,7 +220,7 @@ function nodeTemplate(name: string, slug: string): SeedFile[] {
   return [
     gitignoreFile(),
     readmeFile(name, "node"),
-    jsconfigFile(),
+    jsconfigFile("node"),
     { id: "package.json", name: "package.json", type: "file", parentPath: "", language: "json", content: JSON.stringify({
       name: slug, version: "1.0.0", private: true,
       scripts: { dev: "node server.js", start: "node server.js" },
@@ -197,7 +250,8 @@ function viteReactTemplate(name: string, slug: string): SeedFile[] {
   return [
     gitignoreFile(),
     readmeFile(name, "vite-react"),
-    jsconfigFile(),
+    jsconfigFile("vite-react"),
+    viteEnvDtsFile(),
     { id: "package.json", name: "package.json", type: "file", parentPath: "", language: "json", content: JSON.stringify({
       name: slug, version: "1.0.0", private: true, type: "module",
       scripts: {
@@ -283,7 +337,8 @@ function nextjsTemplate(name: string, slug: string): SeedFile[] {
   return [
     gitignoreFile(),
     readmeFile(name, "nextjs"),
-    jsconfigFile(),
+    jsconfigFile("nextjs"),
+    nextEnvDtsFile(),
     { id: "package.json", name: "package.json", type: "file", parentPath: "", language: "json", content: JSON.stringify({
       name: slug, version: "1.0.0", private: true,
       scripts: {
@@ -353,7 +408,7 @@ function expressTemplate(name: string, slug: string): SeedFile[] {
   return [
     gitignoreFile(),
     readmeFile(name, "express"),
-    jsconfigFile(),
+    jsconfigFile("express"),
     { id: "package.json", name: "package.json", type: "file", parentPath: "", language: "json", content: JSON.stringify({
       name: slug, version: "1.0.0", private: true,
       scripts: {
