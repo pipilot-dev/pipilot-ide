@@ -538,7 +538,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
       color: "hsl(207 90% 65%)",
     },
     "claude-agent": {
-      label: "PiPilot AI",
+      label: "PiPilot Agent",
       icon: <Bot size={12} />,
       desc: "Server-side autonomous agent with file tools",
       color: "#c6ff3d",
@@ -715,7 +715,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
               boxShadow: "0 0 6px hsl(142 71% 50% / 0.5)",
             }}
           />
-          <span style={{ fontWeight: 500 }}>{mode === "claude-agent" ? "PiPilot AI" : "Agent mode"}</span>
+          <span style={{ fontWeight: 500 }}>{mode === "claude-agent" ? "PiPilot Agent" : "Agent mode"}</span>
           <span style={{ color: "hsl(220 14% 45%)" }}>— {mode === "claude-agent" ? "server-side autonomous agent" : "autonomous coding with file tools"}</span>
         </div>
       )}

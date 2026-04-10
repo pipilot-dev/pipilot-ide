@@ -33,7 +33,7 @@ interface EditorAreaProps {
   allFiles?: FileNode[];
   onSelectFile?: (node: FileNode) => void;
   onOpenPreview?: () => void;
-  projectType?: "static" | "nodebox";
+  projectType?: "static" | "nodebox" | "cloud" | "linked";
 }
 
 // ── Breadcrumb with dropdown navigation ──

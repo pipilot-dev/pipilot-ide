@@ -10,7 +10,17 @@ import { DevServerPreview } from "./DevServerPreview";
 
 interface WebPreviewProps {
   files: FileNode[];
-  projectType?: "static" | "nodebox" | "cloud";
+  projectType?: "static" | "nodebox" | "cloud" | "linked";
+}
+
+/** Recursively check if any file in the tree is a top-level package.json */
+function hasPackageJson(nodes: FileNode[]): boolean {
+  for (const node of nodes) {
+    if (node.type === "file" && (node.name === "package.json" || node.id === "package.json")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 const WEB_EXTENSIONS = new Set([
@@ -82,8 +92,17 @@ function FileSyncer({ files }: { files: FileNode[] }) {
 }
 
 export function WebPreview({ files, projectType = "static" }: WebPreviewProps) {
-  // For cloud/nodebox projects, use the local dev server preview
-  if (projectType === "cloud" || projectType === "nodebox") {
+  // Use the local dev server preview for any project that has a package.json
+  // (linked folders, cloned repos, cloud projects, nodebox projects).
+  // Sandpack is reserved for pure static HTML/CSS/JS projects without
+  // a build step.
+  const projectHasPkg = hasPackageJson(files);
+  if (
+    projectType === "cloud" ||
+    projectType === "nodebox" ||
+    projectType === "linked" ||
+    projectHasPkg
+  ) {
     return <DevServerPreview />;
   }
 
