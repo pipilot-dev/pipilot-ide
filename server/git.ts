@@ -233,6 +233,60 @@ export async function isGitRepo(workDir: string): Promise<boolean> {
   return code === 0;
 }
 
+/**
+ * Clone a remote git repository into a target parent directory.
+ * Derives the folder name from the URL (last path segment, stripped of .git).
+ * Returns the absolute path of the cloned folder on success.
+ */
+export async function gitClone(
+  url: string,
+  parentDir: string,
+): Promise<{ success: boolean; message: string; path?: string }> {
+  if (!url || !url.trim()) {
+    return { success: false, message: "URL required" };
+  }
+  if (!fs.existsSync(parentDir)) {
+    try { fs.mkdirSync(parentDir, { recursive: true }); }
+    catch (err: any) { return { success: false, message: err.message }; }
+  }
+
+  // Derive folder name from URL
+  const urlClean = url.replace(/\/+$/, "").replace(/\.git$/i, "");
+  const segments = urlClean.split(/[\/:]/).filter(Boolean);
+  const folderName = segments[segments.length - 1] || "repo";
+  const targetPath = path.join(parentDir, folderName);
+
+  // If target already exists, append a suffix until we find a free name
+  let finalPath = targetPath;
+  let suffix = 1;
+  while (fs.existsSync(finalPath)) {
+    finalPath = `${targetPath}-${suffix}`;
+    suffix++;
+    if (suffix > 20) {
+      return { success: false, message: "Target folder already exists — cleanup first" };
+    }
+  }
+
+  const result = await runGit(
+    parentDir,
+    ["clone", "--depth", "1", "--progress", url, path.basename(finalPath)],
+    { timeout: 180000 }, // 3 minutes
+  );
+
+  if (result.code !== 0) {
+    return {
+      success: false,
+      message: (result.stderr || result.stdout || "git clone failed").trim().slice(0, 800),
+    };
+  }
+
+  return {
+    success: true,
+    message: `Cloned to ${finalPath}`,
+    path: finalPath,
+  };
+}
+
 /** Initialize a git repo in a workspace */
 export async function gitInit(workDir: string): Promise<{ success: boolean; message: string }> {
   if (!fs.existsSync(workDir)) return { success: false, message: "Workspace not found" };

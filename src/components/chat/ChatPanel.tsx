@@ -222,6 +222,16 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Listen for focus requests (e.g. from the Welcome page "Generate with AI" button)
+  useEffect(() => {
+    const focusHandler = () => {
+      textareaRef.current?.focus();
+    };
+    window.addEventListener("pipilot:focus-chat-input", focusHandler);
+    return () => window.removeEventListener("pipilot:focus-chat-input", focusHandler);
+  }, []);
+
   const [showModeMenu, setShowModeMenu] = useState(false);
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [slashFilter, setSlashFilter] = useState("");

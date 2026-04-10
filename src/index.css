@@ -369,78 +369,110 @@
 }
 
 /* Tab bar */
+/* Editor tabs — editorial-terminal aesthetic */
 .editor-tabs {
   display: flex;
   overflow-x: auto;
-  background: hsl(220 13% 16%);
-  border-bottom: 1px solid hsl(220 13% 22%);
-  height: 35px;
-  min-height: 35px;
+  background: #0b0b0e;
+  border-bottom: 1px solid #28282f;
+  height: 38px;
+  min-height: 38px;
+  font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
 }
 .editor-tabs::-webkit-scrollbar {
   height: 0;
 }
 .editor-tab {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 12px;
-  border-right: 1px solid hsl(220 13% 22%);
-  font-size: 0.8rem;
+  gap: 8px;
+  padding: 0 16px;
+  font-size: 11px;
+  letter-spacing: 0.01em;
   cursor: pointer;
   white-space: nowrap;
-  color: hsl(220 14% 55%);
-  transition: color 0.15s, background 0.15s;
+  color: #5e5e68;
+  transition: color 0.15s ease;
   min-width: 100px;
-  max-width: 200px;
+  max-width: 240px;
+}
+.editor-tab + .editor-tab::before {
+  /* Hairline separator between tabs */
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 25%;
+  bottom: 25%;
+  width: 1px;
+  background: #28282f;
 }
 .editor-tab:hover {
-  background: hsl(220 13% 20%);
-  color: hsl(220 14% 85%);
+  color: #a8a8b3;
 }
 .editor-tab.active {
-  background: hsl(220 13% 18%);
-  color: hsl(220 14% 95%);
-  border-top: 1px solid hsl(207 90% 54%);
-  border-bottom: none;
+  color: #f5f5f7;
+  background: #15151b;
+}
+.editor-tab.active::after {
+  /* Lime indicator strip on top edge of active tab */
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1.5px;
+  background: #c6ff3d;
+  box-shadow: 0 0 8px rgba(198, 255, 61, 0.55);
 }
 .editor-tab .close-btn {
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, color 0.15s;
   border-radius: 2px;
-  padding: 1px;
+  padding: 2px;
+  color: #5e5e68;
+  background: transparent;
+  border: none;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
 }
 .editor-tab:hover .close-btn,
 .editor-tab.active .close-btn {
   opacity: 1;
 }
 .editor-tab .close-btn:hover {
-  background: hsl(220 13% 30%);
+  color: #c6ff3d;
 }
 
 /* Status bar */
 .status-bar {
-  height: 22px;
-  min-height: 22px;
-  background: hsl(207 90% 36%);
+  height: 24px;
+  min-height: 24px;
+  background: #0b0b0e;
+  border-top: 1px solid #28282f;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 10px;
-  font-size: 0.72rem;
-  color: hsl(0 0% 90%);
+  gap: 16px;
+  padding: 0 14px;
+  font-size: 10px;
+  font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+  letter-spacing: 0.05em;
+  color: #5e5e68;
+  text-transform: uppercase;
 }
 
 /* Breadcrumb */
 .breadcrumb {
-  height: 24px;
-  background: hsl(220 13% 18%);
-  border-bottom: 1px solid hsl(220 13% 24%);
+  height: 28px;
+  background: #0b0b0e;
+  border-bottom: 1px solid #28282f;
   display: flex;
   align-items: center;
-  padding: 0 10px;
-  font-size: 0.75rem;
-  color: hsl(220 14% 60%);
+  padding: 0 16px;
+  font-size: 11px;
+  font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+  color: #5e5e68;
   gap: 4px;
 }
 

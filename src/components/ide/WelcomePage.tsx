@@ -49,6 +49,10 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
   const { projects, openFolder, switchProject } = useProjects();
   const { activeProjectId } = useActiveProject();
   const [showOpenFolder, setShowOpenFolder] = useState(false);
+  const [showClone, setShowClone] = useState(false);
+  const [cloneUrl, setCloneUrl] = useState("");
+  const [cloneError, setCloneError] = useState<string | null>(null);
+  const [cloning, setCloning] = useState(false);
   const [logoLoaded, setLogoLoaded] = useState(false);
   const buildDate = useMemo(formatBuildDate, []);
 
@@ -94,9 +98,9 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
       hint: "Pull a git repo and open it as a workspace.",
       icon: <GitBranch size={14} />,
       onClick: () => {
-        window.dispatchEvent(new CustomEvent("pipilot:run-in-terminal", {
-          detail: { command: "git clone ", label: "git clone" },
-        }));
+        setCloneError(null);
+        setCloneUrl("");
+        setShowClone(true);
       },
     },
     {
@@ -105,9 +109,54 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
       hint: "Describe what you want and let PiPilot scaffold it.",
       icon: <Sparkles size={14} />,
       shortcut: "⌘⇧I",
-      onClick: () => window.dispatchEvent(new CustomEvent("pipilot:open-chat")),
+      onClick: () => {
+        // Open the chat panel AND focus the textarea so users can
+        // immediately start typing their prompt.
+        window.dispatchEvent(new CustomEvent("pipilot:open-chat"));
+        // Slight delay so the panel actually mounts before we focus
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent("pipilot:focus-chat-input"));
+        }, 150);
+      },
     },
   ];
+
+  /**
+   * Clone a remote git repository via a server endpoint, then auto-open
+   * the cloned folder as a linked workspace.
+   */
+  const handleClone = async () => {
+    const url = cloneUrl.trim();
+    if (!url) return;
+    // Basic validation
+    if (!/^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/i.test(url)) {
+      setCloneError("URL must start with https://, git@, ssh://, or git://");
+      return;
+    }
+    setCloning(true);
+    setCloneError(null);
+    try {
+      const res = await fetch("/api/git/clone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.message || "Clone failed");
+      }
+      // data.path is the absolute path of the cloned folder
+      if (data.path) {
+        await openFolder(data.path);
+      }
+      setShowClone(false);
+      setCloneUrl("");
+    } catch (err: any) {
+      setCloneError(err.message || "Clone failed");
+    } finally {
+      setCloning(false);
+    }
+  };
 
   return (
     <div
@@ -448,6 +497,139 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
         onClose={() => setShowOpenFolder(false)}
         onPick={async (path) => { await openFolder(path); }}
       />
+
+      {/* Clone Git repo modal */}
+      {showClone && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) setShowClone(false); }}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            background: "rgba(0, 0, 0, 0.6)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontFamily: FONT_SANS,
+          }}
+        >
+          <div style={{
+            width: 560,
+            background: C.surface,
+            border: `1px solid ${C.border}`,
+            borderRadius: 10,
+            padding: 28,
+            boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+              <span
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 9, fontWeight: 500,
+                  letterSpacing: "0.18em", textTransform: "uppercase",
+                  color: C.accent,
+                }}
+              >
+                / 04
+              </span>
+              <span
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 9, fontWeight: 500,
+                  letterSpacing: "0.18em", textTransform: "uppercase",
+                  color: C.textDim,
+                }}
+              >
+                Clone Repository
+              </span>
+            </div>
+
+            <h3
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontSize: 32,
+                fontWeight: 400,
+                lineHeight: 1.05,
+                color: C.text,
+                margin: "0 0 16px 0",
+              }}
+            >
+              pull a <span style={{ fontStyle: "italic", color: C.accent }}>repo</span>
+              <span style={{ color: C.accent }}>.</span>
+            </h3>
+
+            <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.6, margin: "0 0 18px 0" }}>
+              Enter a git URL. PiPilot will clone it and open the folder as a workspace.
+            </p>
+
+            <input
+              type="text"
+              autoFocus
+              value={cloneUrl}
+              onChange={(e) => { setCloneUrl(e.target.value); setCloneError(null); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !cloning) handleClone();
+                if (e.key === "Escape") setShowClone(false);
+              }}
+              placeholder="https://github.com/user/repo.git"
+              style={{
+                width: "100%", padding: "10px 14px",
+                fontFamily: FONT_MONO, fontSize: 12,
+                background: "#0a0a0d",
+                color: C.text,
+                border: `1px solid ${cloneError ? "#ff6b6b55" : C.border}`,
+                borderRadius: 5, outline: "none",
+                marginBottom: 10,
+              }}
+            />
+
+            {cloneError && (
+              <div style={{
+                padding: "8px 12px", marginBottom: 10,
+                fontSize: 11, fontFamily: FONT_MONO,
+                color: "#ff9b9b",
+                background: "#ff6b6b12",
+                border: `1px solid #ff6b6b33`,
+                borderRadius: 4,
+              }}>
+                {cloneError}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+              <button
+                onClick={() => setShowClone(false)}
+                disabled={cloning}
+                style={{
+                  padding: "8px 16px",
+                  fontFamily: FONT_MONO, fontSize: 10, fontWeight: 500,
+                  letterSpacing: "0.1em", textTransform: "uppercase",
+                  background: "transparent",
+                  color: C.textMid,
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 4,
+                  cursor: cloning ? "not-allowed" : "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleClone}
+                disabled={!cloneUrl.trim() || cloning}
+                style={{
+                  padding: "8px 18px",
+                  fontFamily: FONT_MONO, fontSize: 10, fontWeight: 600,
+                  letterSpacing: "0.1em", textTransform: "uppercase",
+                  background: (!cloneUrl.trim() || cloning) ? C.surfaceAlt : C.accent,
+                  color: (!cloneUrl.trim() || cloning) ? C.textDim : C.bg,
+                  border: `1px solid ${(!cloneUrl.trim() || cloning) ? C.border : C.accent}`,
+                  borderRadius: 4,
+                  cursor: (!cloneUrl.trim() || cloning) ? "not-allowed" : "pointer",
+                  display: "flex", alignItems: "center", gap: 6,
+                }}
+              >
+                {cloning ? "Cloning..." : "Clone →"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes welcomeFadeIn {

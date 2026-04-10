@@ -1293,6 +1293,29 @@ app.post("/api/git/init", async (req, res) => {
   res.json(result);
 });
 
+// POST /api/git/clone — clone a remote repo into the workspace base dir
+app.post("/api/git/clone", async (req, res) => {
+  const { url, parentDir } = req.body;
+  if (!url || typeof url !== "string") {
+    return res.status(400).json({ success: false, message: "url required" });
+  }
+  // Check git is installed
+  const installed = await gitOps.isGitInstalled();
+  if (!installed.installed) {
+    return res.status(400).json({
+      success: false,
+      message: "Git is not installed. Install it from https://git-scm.com",
+    });
+  }
+  const target = (parentDir && typeof parentDir === "string") ? parentDir : WORKSPACE_BASE;
+  try {
+    const result = await gitOps.gitClone(url, target);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // GET /api/git/status
 app.get("/api/git/status", async (req, res) => {
   const projectId = req.query.projectId as string;
