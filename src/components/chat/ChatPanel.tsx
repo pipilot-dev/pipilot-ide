@@ -538,10 +538,10 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
       color: "hsl(207 90% 65%)",
     },
     "claude-agent": {
-      label: "Claude Agent",
+      label: "PiPilot AI",
       icon: <Bot size={12} />,
-      desc: "Claude Agent SDK (server-side)",
-      color: "hsl(280 65% 65%)",
+      desc: "Server-side autonomous agent with file tools",
+      color: "#c6ff3d",
     },
   };
 
@@ -715,8 +715,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
               boxShadow: "0 0 6px hsl(142 71% 50% / 0.5)",
             }}
           />
-          <span style={{ fontWeight: 500 }}>{mode === "claude-agent" ? "Claude Agent" : "Agent mode"}</span>
-          <span style={{ color: "hsl(220 14% 45%)" }}>— {mode === "claude-agent" ? "server-side Claude Agent SDK" : "autonomous coding with file tools"}</span>
+          <span style={{ fontWeight: 500 }}>{mode === "claude-agent" ? "PiPilot AI" : "Agent mode"}</span>
+          <span style={{ color: "hsl(220 14% 45%)" }}>— {mode === "claude-agent" ? "server-side autonomous agent" : "autonomous coding with file tools"}</span>
         </div>
       )}
 
@@ -1044,33 +1044,79 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         />
       )}
 
-      {/* ── Input Area ── */}
+      {/* ── Input Area — editorial-terminal ── */}
       <div
-        className="px-3 py-2.5"
-        style={{ borderTop: "1px solid hsl(220 13% 20%)" }}
+        style={{
+          padding: "12px 14px 14px",
+          borderTop: `1px solid ${C.border}`,
+          background: C.surface,
+        }}
       >
+        {/* Editorial kicker above input — "// COMPOSE" + lime indicator */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8,
+          padding: "0 2px 8px",
+        }}>
+          <span
+            aria-hidden
+            style={{
+              width: 5, height: 5, borderRadius: "50%",
+              background: isStreaming ? C.accent : C.textFaint,
+              boxShadow: isStreaming ? `0 0 6px ${C.accent}80` : "none",
+              transition: "background 0.2s",
+            }}
+          />
+          <span
+            style={{
+              fontFamily: FONTS.mono,
+              fontSize: 9, fontWeight: 500,
+              letterSpacing: "0.18em", textTransform: "uppercase",
+              color: isStreaming ? C.accent : C.textDim,
+            }}
+          >
+            {isStreaming ? "// streaming" : "// compose"}
+          </span>
+          {charCount > 0 && !isStreaming && (
+            <span style={{
+              marginLeft: "auto",
+              fontFamily: FONTS.mono,
+              fontSize: 9,
+              color: charCount > 4000 ? C.warn : C.textDim,
+              letterSpacing: "0.05em",
+            }}>
+              {charCount.toLocaleString()}
+            </span>
+          )}
+        </div>
+
         <div
-          className="rounded-xl overflow-hidden transition-all duration-300"
           style={{
-            background: "hsl(220 13% 18%)",
-            border: `1px solid ${isStreaming ? "hsl(207 90% 45% / 0.5)" : "hsl(220 13% 25%)"}`,
+            overflow: "hidden",
+            background: C.surfaceAlt,
+            border: `1px solid ${isStreaming ? C.accent : C.accentLine}`,
+            borderRadius: 4,
+            transition: "border-color 0.25s ease",
             boxShadow: isStreaming
-              ? "0 0 20px hsl(207 90% 50% / 0.12), inset 0 1px 0 hsl(220 13% 22%)"
-              : "0 2px 8px hsl(220 13% 5% / 0.3), inset 0 1px 0 hsl(220 13% 22%)",
+              ? `0 0 24px ${C.accent}30, inset 0 0 0 1px ${C.accent}30`
+              : `0 0 0 1px ${C.accentDim}`,
           }}
         >
 
           {/* Attachment chips */}
           {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-3 pt-2.5 pb-1">
+            <div className="flex flex-wrap gap-1.5" style={{ padding: "10px 12px 4px" }}>
               {attachments.map((att) => (
                 <div
                   key={att.id}
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs group/chip"
+                  className="inline-flex items-center gap-1.5 group/chip"
                   style={{
-                    background: att.truncated ? "hsl(38 92% 50% / 0.1)" : "hsl(207 90% 45% / 0.1)",
-                    border: `1px solid ${att.truncated ? "hsl(38 92% 50% / 0.25)" : "hsl(207 90% 45% / 0.2)"}`,
-                    color: att.truncated ? "hsl(38 92% 65%)" : "hsl(207 90% 70%)",
+                    padding: "2px 7px",
+                    background: "transparent",
+                    border: `1px solid ${att.truncated ? C.warn + "55" : C.border}`,
+                    borderRadius: 3,
+                    color: att.truncated ? C.warn : C.textMid,
+                    fontFamily: FONTS.mono,
+                    fontSize: 10,
                   }}
                 >
                   <span style={{ flexShrink: 0 }}>
@@ -1107,18 +1153,19 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
 
           <textarea
             ref={textareaRef}
-            className="w-full px-3.5 pt-3 pb-1 text-sm resize-none outline-none bg-transparent leading-relaxed"
+            className="w-full resize-none outline-none bg-transparent"
             style={{
-              color: "hsl(220 14% 90%)",
-              minHeight: "42px",
-              maxHeight: "160px",
-              caretColor: "hsl(207 90% 60%)",
-              paddingTop: attachments.length > 0 ? "8px" : undefined,
+              padding: attachments.length > 0 ? "8px 14px 4px" : "12px 14px 4px",
+              fontFamily: FONTS.sans,
+              fontSize: 13,
+              lineHeight: 1.5,
+              color: C.text,
+              minHeight: "44px",
+              maxHeight: "180px",
+              caretColor: C.accent,
             }}
             placeholder={
-              mode === "agent" || mode === "claude-agent"
-                ? "Describe what to build, type / for commands, @ to attach files..."
-                : "Ask anything, type @ to attach files..."
+              mode === "agent" || mode === "claude-agent" ? "build something..." : "ask anything..."
             }
             value={input}
             onChange={handleInputChange}
@@ -1128,21 +1175,28 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           />
 
           {/* Bottom bar */}
-          <div className="flex items-center justify-between px-3 pb-2.5 pt-0.5">
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between" style={{ padding: "4px 10px 8px" }}>
+            <div className="flex items-center gap-8">
               <button
-                className="relative rounded-lg p-1.5 transition-all duration-150"
+                className="relative"
                 style={{
-                  color: showAtMenu || attachments.length > 0 ? "hsl(207 90% 60%)" : "hsl(220 14% 42%)",
-                  background: showAtMenu ? "hsl(207 90% 40% / 0.15)" : "transparent",
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "4px 6px",
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: showAtMenu || attachments.length > 0 ? C.accent : C.textDim,
+                  fontFamily: FONTS.mono,
+                  fontSize: 9,
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  transition: "color 0.15s",
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.color = "hsl(207 90% 70%)";
-                  e.currentTarget.style.background = "hsl(220 13% 24%)";
+                  e.currentTarget.style.color = C.accent;
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.color = showAtMenu || attachments.length > 0 ? "hsl(207 90% 60%)" : "hsl(220 14% 42%)";
-                  e.currentTarget.style.background = showAtMenu ? "hsl(207 90% 40% / 0.15)" : "transparent";
+                  e.currentTarget.style.color = showAtMenu || attachments.length > 0 ? C.accent : C.textDim;
                 }}
                 onClick={() => {
                   if (showAtMenu) {
@@ -1156,14 +1210,18 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                 }}
                 title="Attach file context (@)"
               >
-                <Paperclip size={13} />
+                <Paperclip size={11} strokeWidth={1.6} />
+                <span>@ attach</span>
                 {attachments.length > 0 && (
                   <span
-                    className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full flex items-center justify-center text-white font-bold"
                     style={{
-                      fontSize: "0.5rem",
-                      background: "hsl(207 90% 50%)",
-                      boxShadow: "0 1px 3px hsl(207 90% 30% / 0.5)",
+                      fontFamily: FONTS.mono,
+                      fontSize: 8, fontWeight: 700,
+                      padding: "1px 4px",
+                      background: C.accent,
+                      color: C.bg,
+                      borderRadius: 2,
+                      lineHeight: 1,
                     }}
                   >
                     {attachments.length}
@@ -1171,24 +1229,19 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                 )}
               </button>
 
-              {isStreaming ? (
-                <span className="flex items-center gap-1.5 text-xs" style={{ color: "hsl(207 90% 60%)" }}>
-                  <span className="flex gap-0.5">
-                    <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: "hsl(207 90% 60%)", animationDelay: "0ms" }} />
-                    <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: "hsl(207 90% 60%)", animationDelay: "150ms" }} />
-                    <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: "hsl(207 90% 60%)", animationDelay: "300ms" }} />
-                  </span>
-                  <span className="font-medium">Working</span>
-                </span>
-              ) : (
-                <span className="text-xs flex items-center gap-1" style={{ color: "hsl(220 14% 38%)" }}>
-                  <CornerDownLeft size={10} />
-                  <span>to send</span>
-                  {charCount > 0 && (
-                    <span className="ml-1 tabular-nums" style={{ color: charCount > 4000 ? "hsl(38 92% 55%)" : "hsl(220 14% 35%)" }}>
-                      {charCount.toLocaleString()}
-                    </span>
-                  )}
+              {!isStreaming && (
+                <span
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5,
+                    fontFamily: FONTS.mono,
+                    fontSize: 9,
+                    color: C.textDim,
+                    letterSpacing: "0.1em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  <CornerDownLeft size={10} strokeWidth={1.6} />
+                  <span>send</span>
                 </span>
               )}
             </div>
@@ -1196,57 +1249,69 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
             <div className="flex items-center gap-1.5">
               {isStreaming ? (
                 <button
-                  className="rounded-lg px-3 py-1.5 text-xs flex items-center gap-1.5 font-medium transition-all duration-200"
                   style={{
-                    background: "hsl(0 84% 58% / 0.15)",
-                    color: "hsl(0 84% 65%)",
-                    border: "1px solid hsl(0 84% 58% / 0.2)",
+                    display: "flex", alignItems: "center", gap: 6,
+                    padding: "6px 14px",
+                    background: "transparent",
+                    color: C.error,
+                    border: `1px solid ${C.error}55`,
+                    borderRadius: 4,
+                    fontFamily: FONTS.mono,
+                    fontSize: 10, fontWeight: 600,
+                    letterSpacing: "0.12em",
+                    textTransform: "uppercase",
+                    cursor: "pointer",
+                    transition: "all 0.15s",
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "hsl(0 84% 58% / 0.25)";
+                    e.currentTarget.style.background = `${C.error}14`;
+                    e.currentTarget.style.borderColor = C.error;
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "hsl(0 84% 58% / 0.15)";
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.borderColor = `${C.error}55`;
                   }}
                   onClick={stopStreaming}
                   data-testid="chat-stop-btn"
                 >
-                  <Square size={10} className="fill-current" />
+                  <Square size={9} className="fill-current" />
                   Stop
                 </button>
-              ) : (
-                <button
-                  className="rounded-lg px-3 py-1.5 text-xs flex items-center gap-1.5 font-medium transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
-                  style={{
-                    background: (input.trim() || attachments.length > 0)
-                      ? "linear-gradient(135deg, hsl(207 90% 45%) 0%, hsl(207 90% 38%) 100%)"
-                      : "hsl(220 13% 24%)",
-                    color: (input.trim() || attachments.length > 0) ? "white" : "hsl(220 14% 45%)",
-                    boxShadow: (input.trim() || attachments.length > 0)
-                      ? "0 2px 8px hsl(207 90% 35% / 0.4), inset 0 1px 0 hsl(207 90% 65% / 0.15)"
-                      : "none",
-                    border: "none",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (input.trim() || attachments.length > 0) {
-                      e.currentTarget.style.transform = "translateY(-1px)";
-                      e.currentTarget.style.boxShadow = "0 4px 12px hsl(207 90% 35% / 0.5), inset 0 1px 0 hsl(207 90% 65% / 0.2)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = "translateY(0)";
-                    if (input.trim() || attachments.length > 0) {
-                      e.currentTarget.style.boxShadow = "0 2px 8px hsl(207 90% 35% / 0.4), inset 0 1px 0 hsl(207 90% 65% / 0.15)";
-                    }
-                  }}
-                  onClick={handleSend}
-                  disabled={(!input.trim() && attachments.length === 0) || isStreaming}
-                  data-testid="chat-send-btn"
-                >
-                  <Send size={11} />
-                  Send
-                </button>
-              )}
+              ) : (() => {
+                const canSend = input.trim() || attachments.length > 0;
+                return (
+                  <button
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "6px 16px",
+                      background: canSend ? C.accent : "transparent",
+                      color: canSend ? C.bg : C.textFaint,
+                      border: `1px solid ${canSend ? C.accent : C.border}`,
+                      borderRadius: 4,
+                      fontFamily: FONTS.mono,
+                      fontSize: 10, fontWeight: 700,
+                      letterSpacing: "0.12em",
+                      textTransform: "uppercase",
+                      cursor: canSend ? "pointer" : "not-allowed",
+                      transition: "all 0.15s",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (canSend) {
+                        e.currentTarget.style.boxShadow = `0 0 20px ${C.accent}40`;
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.boxShadow = "none";
+                    }}
+                    onClick={handleSend}
+                    disabled={!canSend || isStreaming}
+                    data-testid="chat-send-btn"
+                  >
+                    Send
+                    <Send size={10} strokeWidth={1.8} />
+                  </button>
+                );
+              })()}
             </div>
           </div>
         </div>

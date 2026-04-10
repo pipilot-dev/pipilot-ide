@@ -198,27 +198,42 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
     ? `${(parsedArgs.files as unknown[]).length} files`
     : null;
 
+  // Border color reflects state: accent for running, border for idle/done, error for failed
+  const borderColor = isRunning
+    ? "#c6ff3d55"
+    : isError
+    ? "#ff6b6b55"
+    : "#28282f";
+
   return (
     <div
-      className="rounded-lg overflow-hidden my-1.5 transition-all duration-200"
+      className="overflow-hidden my-1.5"
       style={{
-        background: "hsl(220 13% 13%)",
-        border: `1px solid ${isRunning ? "hsl(207 90% 45% / 0.3)" : "hsl(220 13% 21%)"}`,
-        boxShadow: isRunning ? "0 0 16px hsl(207 90% 50% / 0.08)" : "none",
+        background: "transparent",
+        border: `1px solid ${borderColor}`,
+        borderRadius: 4,
+        transition: "border-color 0.2s ease",
       }}
     >
       <button
-        className="w-full flex items-center gap-2 px-2.5 py-2 text-xs transition-all duration-150"
-        style={{ background: expanded ? "hsl(220 13% 15%)" : "transparent" }}
-        onMouseEnter={(e) => { if (!expanded) e.currentTarget.style.background = "hsl(220 13% 15%)"; }}
-        onMouseLeave={(e) => { if (!expanded) e.currentTarget.style.background = "transparent"; }}
+        className="w-full flex items-center gap-2 text-xs"
+        style={{
+          background: "transparent",
+          padding: "6px 10px",
+          fontFamily: "'JetBrains Mono', 'Cascadia Code', ui-monospace, monospace",
+          border: "none",
+          cursor: "pointer",
+          transition: "background 0.15s",
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = "#10101580"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         onClick={() => setExpanded(!expanded)}
       >
         {/* Status indicator */}
         <span
-          className="flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center"
+          className="flex-shrink-0 flex items-center justify-center"
           style={{
-            background: `${statusColor}15`,
+            width: 14, height: 14,
             color: statusColor,
           }}
         >
@@ -234,19 +249,34 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
         </span>
 
         {/* Tool icon + label */}
-        <span style={{ color: accentColor }} className="flex-shrink-0">{getToolIcon(toolCall.name)}</span>
-        <span style={{ color: "hsl(220 14% 82%)" }} className="font-medium flex-shrink-0">
+        <span style={{ color: "#5e5e68" }} className="flex-shrink-0">{getToolIcon(toolCall.name)}</span>
+        <span
+          style={{
+            color: "#a8a8b3",
+            fontSize: 10,
+            fontWeight: 500,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+          }}
+          className="flex-shrink-0"
+        >
           {getToolLabel(toolCall.name)}
         </span>
+
+        {/* Separator */}
+        {summary && (
+          <span style={{ color: "#3a3a42", flexShrink: 0 }}>/</span>
+        )}
 
         {/* Summary */}
         {summary && (
           <span
-            className="font-mono truncate"
+            className="truncate"
             style={{
-              color: "hsl(207 90% 65%)",
-              fontSize: "0.68rem",
-              opacity: 0.85,
+              color: "#c6ff3d",
+              fontSize: 10,
+              fontWeight: 400,
+              letterSpacing: "0.02em",
             }}
           >
             {summary}
@@ -254,8 +284,8 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
         )}
 
         {/* Expand arrow */}
-        <span className="ml-auto flex-shrink-0" style={{ color: "hsl(220 14% 40%)" }}>
-          {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        <span className="ml-auto flex-shrink-0" style={{ color: "#3a3a42" }}>
+          {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         </span>
       </button>
 
@@ -264,8 +294,9 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
         <div
           className="px-2.5 py-2.5 text-xs font-mono"
           style={{
-            borderTop: "1px solid hsl(220 13% 19%)",
-            color: "hsl(220 14% 68%)",
+            borderTop: "1px solid #28282f",
+            background: "#10101580",
+            color: "#a8a8b3",
           }}
         >
           <div className="mb-2">
@@ -470,31 +501,34 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
 
   return (
     <div
-      className="group/msg relative flex gap-2.5 mb-5 flex-row-reverse"
+      className="group/msg relative flex gap-2.5 mb-5 flex-row"
       style={{ animation: "fadeInMsg 0.3s ease-out" }}
       data-testid={`chat-message-${message.id}`}
     >
-      {/* User Avatar */}
+      {/* User Avatar — editorial-terminal */}
       <div
-        className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-xs font-medium mt-0.5"
+        className="flex-shrink-0 w-7 h-7 flex items-center justify-center text-xs font-medium mt-0.5"
         style={{
-          background: "linear-gradient(135deg, hsl(207 90% 45%) 0%, hsl(207 90% 38%) 100%)",
-          color: "white",
-          boxShadow: "0 2px 6px hsl(207 90% 35% / 0.3)",
+          background: "#15151b",
+          color: "#c6ff3d",
+          border: "1px solid #28282f",
+          borderRadius: 4,
         }}
       >
-        <User size={13} />
+        <User size={13} strokeWidth={1.6} />
       </div>
 
-      {/* User Bubble */}
-      <div className="relative flex-1 max-w-[88%] text-right">
+      {/* User message — full-width editorial block */}
+      <div className="relative flex-1 w-full text-left" style={{ minWidth: 0 }}>
         <div
-          className="inline-block text-left text-sm leading-relaxed rounded-2xl rounded-tr-md"
+          className="text-left text-sm leading-relaxed"
           style={{
-            background: "linear-gradient(135deg, hsl(207 90% 38%) 0%, hsl(207 85% 33%) 100%)",
-            color: "white",
+            background: "#15151b",
+            color: "#f5f5f7",
             padding: "10px 14px",
-            boxShadow: "0 2px 8px hsl(207 90% 30% / 0.3)",
+            border: "1px solid #28282f",
+            borderLeft: "2px solid #c6ff3d",
+            borderRadius: 4,
             maxWidth: "100%",
           }}
         >
@@ -555,8 +589,14 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
 
         {/* Timestamp */}
         <div
-          className="text-xs mt-1 px-1 tabular-nums"
-          style={{ color: "hsl(220 14% 35%)", fontSize: "0.65rem", textAlign: "right" }}
+          className="mt-1 px-1 tabular-nums"
+          style={{
+            color: "#5e5e68",
+            fontSize: 9,
+            fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+            letterSpacing: "0.05em",
+            textAlign: "left",
+          }}
         >
           {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </div>
@@ -755,29 +795,28 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
       style={{ animation: "fadeInMsg 0.3s ease-out" }}
       data-testid={`chat-turn-${messages[0]?.id}`}
     >
-      {/* Single AI Avatar for entire turn */}
+      {/* AI Avatar — editorial-terminal */}
       <div
-        className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-xs font-medium mt-0.5"
+        className="flex-shrink-0 w-7 h-7 flex items-center justify-center text-xs font-medium mt-0.5"
         style={{
-          background: "linear-gradient(135deg, hsl(220 13% 25%) 0%, hsl(220 13% 20%) 100%)",
-          color: "hsl(207 90% 65%)",
-          border: "1px solid hsl(220 13% 28%)",
+          background: "#15151b",
+          color: "#c6ff3d",
+          border: "1px solid #c6ff3d55",
+          borderRadius: 4,
         }}
       >
-        <Sparkles size={13} />
+        <Sparkles size={13} strokeWidth={1.6} />
       </div>
 
-      {/* Single unified bubble for entire turn */}
-      <div className="relative flex-1 max-w-[88%] text-left">
+      {/* Assistant turn — transparent container, no bubble */}
+      <div className="relative flex-1 w-full text-left" style={{ minWidth: 0 }}>
         <div
-          className="text-left text-sm leading-relaxed rounded-2xl rounded-tl-md"
+          className="text-left text-sm leading-relaxed"
           style={{
-            background: "hsl(220 13% 19%)",
-            color: "hsl(220 14% 88%)",
-            padding: "10px 14px",
+            background: "transparent",
+            color: "#f5f5f7",
+            padding: "2px 0 4px",
             maxWidth: "100%",
-            border: "1px solid hsl(220 13% 23%)",
-            boxShadow: "0 1px 4px hsl(220 13% 5% / 0.2)",
           }}
         >
           {assistantMessages.map((msg, idx) => {
