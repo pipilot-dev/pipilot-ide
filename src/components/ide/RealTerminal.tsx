@@ -3,6 +3,22 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
+import { db } from "@/lib/db";
+
+// Read terminal settings synchronously from a small in-memory cache
+// (settings are stored in IndexedDB but we want them at xterm construction time)
+const settingsCache: Record<string, string> = {};
+async function loadTerminalSettings() {
+  try {
+    const rows = await db.settings.toArray();
+    for (const r of rows) settingsCache[r.key] = r.value;
+  } catch {}
+}
+// Eagerly populate
+loadTerminalSettings();
+function getSetting(key: string, fallback: string): string {
+  return settingsCache[key] ?? fallback;
+}
 
 interface RealTerminalProps {
   sessionId: string;
@@ -37,9 +53,9 @@ export function RealTerminal({ sessionId, projectId, initialCommand, onExit }: R
     const pid = projectIdRef.current;
 
     const term = new Terminal({
-      cursorBlink: true,
-      fontSize: 12,
-      scrollback: 10000,
+      cursorBlink: getSetting("terminalCursorBlink", "true") !== "false",
+      fontSize: parseInt(getSetting("terminalFontSize", "12")) || 12,
+      scrollback: parseInt(getSetting("terminalScrollback", "10000")) || 10000,
       fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
       theme: {
         background: "#0d1117",

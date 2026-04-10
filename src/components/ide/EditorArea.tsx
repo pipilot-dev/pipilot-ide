@@ -8,7 +8,7 @@ import { CommitDetailView } from "./CommitDetailView";
 import { FileDiffView } from "./FileDiffView";
 import { SettingsTabView } from "./SettingsTabView";
 import { WelcomePage } from "./WelcomePage";
-import { setupInlineAI } from "@/hooks/useInlineAI";
+import { setupInlineAI, configureInlineAI } from "@/hooks/useInlineAI";
 import { useSettings } from "@/hooks/useSettings";
 import { useActiveProject } from "@/contexts/ProjectContext";
 
@@ -343,6 +343,14 @@ export function EditorArea({
   const changeTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const { get: getSetting } = useSettings();
   const { activeProjectId } = useActiveProject();
+
+  // Push current AI settings into the inline AI runtime config on every render
+  // so changes to "Inline AI enabled / delay / context lines" take effect live.
+  configureInlineAI({
+    enabled: getSetting("aiInlineEnabled") !== "false",
+    keystrokeDebounce: parseInt(getSetting("aiInlineDelay")) || 80,
+    contextLinesBefore: parseInt(getSetting("aiContextLines")) || 30,
+  });
 
   const activeTab = tabs.find((t) => t.node.id === activeTabId);
 
@@ -743,18 +751,20 @@ declare module "*.woff2" { const content: string; export default content; }
               options={{
                 fontSize: parseInt(getSetting("editorFontSize")) || 14,
                 fontFamily: getSetting("editorFontFamily") || "'Cascadia Code', 'Fira Code', 'Menlo', monospace",
-                fontLigatures: true,
+                fontLigatures: getSetting("editorFontLigatures") !== "false",
                 lineNumbers: "on",
                 minimap: { enabled: getSetting("editorMinimap") === "true", scale: 1 },
                 scrollBeyondLastLine: false,
-                wordWrap: getSetting("editorWordWrap") === "on" ? "on" : "off",
+                wordWrap: (getSetting("editorWordWrap") || "off") as "on" | "off" | "wordWrapColumn",
                 tabSize: parseInt(getSetting("editorTabSize")) || 2,
                 insertSpaces: true,
                 automaticLayout: true,
                 cursorBlinking: "smooth",
                 smoothScrolling: true,
-                renderWhitespace: "selection",
+                renderWhitespace: (getSetting("editorRenderWhitespace") || "selection") as "none" | "selection" | "all",
                 bracketPairColorization: { enabled: true },
+                formatOnPaste: getSetting("formatOnSave") === "true",
+                formatOnType: getSetting("formatOnSave") === "true",
                 padding: { top: 8, bottom: 8 },
                 scrollbar: {
                   vertical: "auto",
@@ -764,7 +774,7 @@ declare module "*.woff2" { const content: string; export default content; }
                 },
                 // AI inline completions (Copilot-like ghost text)
                 inlineSuggest: {
-                  enabled: true,
+                  enabled: getSetting("aiInlineEnabled") !== "false",
                   mode: "subwordSmart",
                   showToolbar: "onHover",
                 },

@@ -92,7 +92,8 @@
       "Bash(wc:*)",
       "Bash(echo \"const x: number = \"\"broken\"\"; let y = unknownVar;\")",
       "Bash(cmd.exe /c \"node_modules\\\\.bin\\\\tsc.cmd --noEmit --pretty false\")",
-      "Bash(find C:/Users/big/Documents/Projects/pipilot-ide -name *.md -path *frontend-design*)"
+      "Bash(find C:/Users/big/Documents/Projects/pipilot-ide -name *.md -path *frontend-design*)",
+      "Bash(grep -rn \"getSetting\\\\|useSettings\\\\|settings\\\\.get\" C:/Users/big/Documents/Projects/pipilot-ide/src --include=*.tsx --include=*.ts)"
     ]
   }
 }

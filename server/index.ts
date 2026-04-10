@@ -1293,6 +1293,31 @@ app.post("/api/git/init", async (req, res) => {
   res.json(result);
 });
 
+// GET /api/git/config — read git author name + email from global config
+app.get("/api/git/config", async (_req, res) => {
+  try {
+    const [name, email] = await Promise.all([
+      gitOps.gitConfigGet("user.name"),
+      gitOps.gitConfigGet("user.email"),
+    ]);
+    res.json({ name, email });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/git/config — set git author name + email in global config
+app.post("/api/git/config", async (req, res) => {
+  const { name, email } = req.body;
+  try {
+    if (typeof name === "string") await gitOps.gitConfigSet("user.name", name);
+    if (typeof email === "string") await gitOps.gitConfigSet("user.email", email);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // POST /api/git/clone — clone a remote repo into the workspace base dir
 app.post("/api/git/clone", async (req, res) => {
   const { url, parentDir } = req.body;

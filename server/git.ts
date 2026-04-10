@@ -287,6 +287,17 @@ export async function gitClone(
   };
 }
 
+/** Read or write global git config (user.name, user.email, etc.) */
+export async function gitConfigGet(key: string): Promise<string> {
+  const { stdout } = await runGit(process.cwd(), ["config", "--global", key]);
+  return stdout.trim();
+}
+
+export async function gitConfigSet(key: string, value: string): Promise<{ success: boolean; message: string }> {
+  const { stderr, code } = await runGit(process.cwd(), ["config", "--global", key, value]);
+  return { success: code === 0, message: stderr || "ok" };
+}
+
 /** Initialize a git repo in a workspace */
 export async function gitInit(workDir: string): Promise<{ success: boolean; message: string }> {
   if (!fs.existsSync(workDir)) return { success: false, message: "Workspace not found" };

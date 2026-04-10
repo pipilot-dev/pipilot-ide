@@ -68,8 +68,18 @@ function createShell(id: string, index: number): ShellTab {
 
 export function TerminalPanel() {
   const { activeProjectId } = useActiveProject();
-  const [shells, setShells] = useState<ShellTab[]>(() => [createRealShell("real-default-1", 1)]);
-  const [activeShellId, setActiveShellId] = useState("real-default-1");
+  // Default shell type from settings (real | virtual | node) — read from
+  // localStorage so we have a synchronous value at initial mount.
+  // SettingsTabView mirrors terminalDefaultType to localStorage on save.
+  const [shells, setShells] = useState<ShellTab[]>(() => {
+    const defaultType = typeof window !== "undefined"
+      ? localStorage.getItem("pipilot:terminalDefaultType") || "real"
+      : "real";
+    if (defaultType === "virtual") return [createShell("shell-1", 1)];
+    if (defaultType === "node") return [createNodeShell("node-1", 1)];
+    return [createRealShell("real-default-1", 1)];
+  });
+  const [activeShellId, setActiveShellId] = useState(() => shells[0]?.id || "real-default-1");
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);

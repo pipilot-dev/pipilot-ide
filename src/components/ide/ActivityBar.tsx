@@ -47,7 +47,11 @@ export function ActivityBar({
       }}
     >
       {ACTIVITIES.map((item) => {
-        const count = badges?.[item.id] ?? 0;
+        // Respect showActivityBadges setting (default ON)
+        const showBadges = typeof window !== "undefined"
+          ? localStorage.getItem("pipilot:showActivityBadges") !== "false"
+          : true;
+        const count = showBadges ? (badges?.[item.id] ?? 0) : 0;
         const isActive = activeView === item.id;
         return (
           <ActivityButton

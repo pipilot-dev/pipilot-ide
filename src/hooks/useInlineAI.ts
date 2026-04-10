@@ -27,25 +27,28 @@ const LLM_URL = "https://the3rdacademy.com/api/chat/completions";
 const LLM_MODEL = "kilo-auto/free";
 const DEBUG = typeof window !== "undefined" && localStorage.getItem("pipilot:debug-inline-ai") === "1";
 const CACHE_SIZE = 10;
-// Aggressive Cursor-like timings
-const KEYSTROKE_DEBOUNCE = 80;   // Trigger after 80ms of no typing
-const STOP_AFTER_IDLE = 800;     // Stop background work after 800ms idle
+// Mutable runtime config — overridable via configureInlineAI()
+const config = {
+  enabled: true,                  // master switch
+  keystrokeDebounce: 80,          // ms of no typing before fetch fires
+  stopAfterIdle: 800,             // ms of inactivity before pending requests cancel
+  smallFileLineLimit: 200,        // tier threshold (lines)
+  smallFileCharLimit: 8000,       // tier threshold (chars)
+  smallFileMaxTokens: 400,        // generation cap for small files
+  largeFileMaxTokens: 100,        // generation cap for large files
+  contextLinesBefore: 30,         // clipped window — lines before cursor
+  contextLinesAfter: 10,          // clipped window — lines after cursor
+  contextCharsBefore: 1500,       // clipped window — chars before cursor
+  contextCharsAfter: 600,         // clipped window — chars after cursor
+};
 
-// Tiered context strategy:
-// - Small files (≤200 lines, ≤8000 chars): send the WHOLE file with a
-//   cursor marker. The model gets awareness of all functions, imports,
-//   types, etc. and can implement entire functions.
-// - Large files: send a clipped window for speed.
-const SMALL_FILE_LINE_LIMIT = 200;
-const SMALL_FILE_CHAR_LIMIT = 8000;
-const SMALL_FILE_MAX_TOKENS = 400;   // Allow full function bodies for small files
-const LARGE_FILE_MAX_TOKENS = 100;   // Quick line-level completions for large files
-
-// Clipped windows (used only for large files)
-const CONTEXT_LINES_BEFORE = 30;
-const CONTEXT_LINES_AFTER = 10;
-const CONTEXT_CHARS_BEFORE = 1500;
-const CONTEXT_CHARS_AFTER = 600;
+/**
+ * Update runtime configuration. Call from any React component that has
+ * access to the user's settings (e.g. EditorArea on every render).
+ */
+export function configureInlineAI(overrides: Partial<typeof config>) {
+  Object.assign(config, overrides);
+}
 
 function dlog(...args: any[]) {
   if (DEBUG) console.log("[inline-ai]", ...args);
@@ -71,16 +74,16 @@ const RECENT_TTL_MS = 4000;
 let activeProjectInfo: { language: string } = { language: "code" };
 
 // ─── Helpers ─────────────────────────────────────────────────────
-function clipBefore(text: string, maxLines = CONTEXT_LINES_BEFORE, maxChars = CONTEXT_CHARS_BEFORE): string {
+function clipBefore(text: string): string {
   const lines = text.split("\n");
-  const recent = lines.slice(-maxLines).join("\n");
-  return recent.length > maxChars ? recent.slice(-maxChars) : recent;
+  const recent = lines.slice(-config.contextLinesBefore).join("\n");
+  return recent.length > config.contextCharsBefore ? recent.slice(-config.contextCharsBefore) : recent;
 }
 
-function clipAfter(text: string, maxLines = CONTEXT_LINES_AFTER, maxChars = CONTEXT_CHARS_AFTER): string {
+function clipAfter(text: string): string {
   const lines = text.split("\n");
-  const next = lines.slice(0, maxLines).join("\n");
-  return next.length > maxChars ? next.slice(0, maxChars) : next;
+  const next = lines.slice(0, config.contextLinesAfter).join("\n");
+  return next.length > config.contextCharsAfter ? next.slice(0, config.contextCharsAfter) : next;
 }
 
 function buildSystemPrompt(language: string, isFullFile: boolean): string {
@@ -256,8 +259,8 @@ async function fetchSuggestion(): Promise<void> {
 
   // Decide: full file or clipped window?
   const useFullFile =
-    totalLines <= SMALL_FILE_LINE_LIMIT &&
-    fullText.length <= SMALL_FILE_CHAR_LIMIT;
+    totalLines <= config.smallFileLineLimit &&
+    fullText.length <= config.smallFileCharLimit;
 
   let before: string;
   let after: string;
@@ -314,7 +317,7 @@ async function fetchSuggestion(): Promise<void> {
           { role: "user", content: `${before}<|cursor|>${after}` },
         ],
         temperature: 0,
-        max_tokens: useFullFile ? SMALL_FILE_MAX_TOKENS : LARGE_FILE_MAX_TOKENS,
+        max_tokens: useFullFile ? config.smallFileMaxTokens : config.largeFileMaxTokens,
         stream: false,
         direct_kilo: true,
       }),
@@ -382,15 +385,17 @@ async function fetchSuggestion(): Promise<void> {
 }
 
 function scheduleFetch() {
-  // Debounced — kicks off a fetch KEYSTROKE_DEBOUNCE ms after the last
-  // keystroke. The dedup-by-hash inside fetchSuggestion ensures we never
+  // Bail entirely if disabled via settings
+  if (!config.enabled) return;
+  // Debounced — kicks off a fetch after `keystrokeDebounce` ms of no
+  // typing. The dedup-by-hash inside fetchSuggestion ensures we never
   // re-fetch the same input, and in-flight requests are NEVER aborted —
   // they're allowed to complete and populate the cache.
   if (debouncedFetchTimer !== undefined) clearTimeout(debouncedFetchTimer);
   debouncedFetchTimer = window.setTimeout(() => {
     debouncedFetchTimer = undefined;
     fetchSuggestion();
-  }, KEYSTROKE_DEBOUNCE);
+  }, config.keystrokeDebounce);
 }
 
 function stopFetching() {
