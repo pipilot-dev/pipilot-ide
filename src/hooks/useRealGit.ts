@@ -23,7 +23,7 @@ export interface GitRemote {
 
 export type GitInstallStatus =
   | { state: "checking" }
-  | { state: "missing" }
+  | { state: "missing"; manualCommand?: string }
   | { state: "installing" }
   | { state: "installed"; version: string };
 
@@ -79,11 +79,11 @@ export function useRealGit() {
         if (check.installed) {
           setInstallStatus({ state: "installed", version: check.version });
         } else {
-          setInstallStatus({ state: "missing" });
+          setInstallStatus({ state: "missing", manualCommand: data.manualCommand });
           setLastError(data.message);
         }
       } else {
-        setInstallStatus({ state: "missing" });
+        setInstallStatus({ state: "missing", manualCommand: data.manualCommand });
         setLastError(data.message);
       }
     } catch (err: any) {

@@ -51,44 +51,151 @@ export function resetGitCache() {
   gitVersionCache = null;
 }
 
+/** Helper to spawn an installer and capture output */
+function runInstaller(cmd: string, args: string[], shell = true): Promise<{ success: boolean; output: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn(cmd, args, { stdio: "pipe", shell });
+    let output = "";
+    proc.stdout?.on("data", (d) => { output += d.toString(); });
+    proc.stderr?.on("data", (d) => { output += d.toString(); });
+    proc.on("exit", (code) => {
+      resetGitCache();
+      resolve({ success: code === 0, output: output.slice(-2000) });
+    });
+    proc.on("error", () => {
+      resolve({ success: false, output: `Failed to spawn ${cmd}` });
+    });
+  });
+}
+
+/** Detect available package manager on the current system */
+async function detectPackageManager(): Promise<string | null> {
+  const candidates = process.platform === "darwin"
+    ? ["brew"]
+    : ["apt-get", "dnf", "yum", "pacman", "zypper", "apk"];
+
+  for (const pm of candidates) {
+    try {
+      await execAsync(`${pm} --version`, { timeout: 3000 });
+      return pm;
+    } catch {}
+  }
+  return null;
+}
+
 /** Try to install git on the host system */
-export async function installGit(): Promise<{ success: boolean; message: string }> {
+export async function installGit(): Promise<{ success: boolean; message: string; manualCommand?: string }> {
+  // ── Windows: winget ──────────────────────────────────────────────
   if (process.platform === "win32") {
-    // Try winget first (Windows 10/11)
     try {
       await execAsync("winget --version", { timeout: 3000 });
-      return new Promise((resolve) => {
-        const proc = spawn("winget", ["install", "--id", "Git.Git", "-e", "--source", "winget", "--accept-source-agreements", "--accept-package-agreements"], {
-          stdio: "pipe",
-          shell: true,
-        });
-        let output = "";
-        proc.stdout?.on("data", (d) => { output += d.toString(); });
-        proc.stderr?.on("data", (d) => { output += d.toString(); });
-        proc.on("exit", (code) => {
-          resetGitCache();
-          if (code === 0) {
-            resolve({ success: true, message: "Git installed successfully via winget. Please restart the server to use it." });
-          } else {
-            resolve({ success: false, message: `winget install failed (code ${code}): ${output.slice(-500)}` });
-          }
-        });
-      });
+      const result = await runInstaller(
+        "winget",
+        ["install", "--id", "Git.Git", "-e", "--source", "winget", "--accept-source-agreements", "--accept-package-agreements"],
+        true
+      );
+      if (result.success) {
+        return { success: true, message: "Git installed via winget. Please restart the server to use it." };
+      }
+      return {
+        success: false,
+        message: `winget install failed: ${result.output}`,
+        manualCommand: "winget install --id Git.Git -e",
+      };
     } catch {
       return {
         success: false,
-        message: "Could not auto-install git. Please install manually from https://git-scm.com/download/win",
+        message: "winget not available. Install Git manually from https://git-scm.com/download/win",
+        manualCommand: "Download from https://git-scm.com/download/win",
       };
     }
-  } else if (process.platform === "darwin") {
+  }
+
+  // ── macOS: brew ──────────────────────────────────────────────────
+  if (process.platform === "darwin") {
+    try {
+      await execAsync("brew --version", { timeout: 3000 });
+      const result = await runInstaller("brew", ["install", "git"], true);
+      if (result.success) {
+        return { success: true, message: "Git installed via Homebrew." };
+      }
+      return {
+        success: false,
+        message: `brew install failed: ${result.output}`,
+        manualCommand: "brew install git",
+      };
+    } catch {
+      // Try xcode-select --install (this opens a GUI prompt)
+      return {
+        success: false,
+        message: "Homebrew not detected. Install via Xcode Command Line Tools (xcode-select --install) or download Homebrew from https://brew.sh",
+        manualCommand: "xcode-select --install",
+      };
+    }
+  }
+
+  // ── Linux: detect package manager ────────────────────────────────
+  const pm = await detectPackageManager();
+  if (!pm) {
     return {
       success: false,
-      message: "On macOS, install git via: brew install git, or xcode-select --install",
+      message: "No supported package manager detected. Install git manually for your distribution.",
+      manualCommand: "Install git via your distro's package manager",
     };
-  } else {
+  }
+
+  // Map package manager to install command
+  const installCmds: Record<string, string[]> = {
+    "apt-get": ["apt-get", "install", "-y", "git"],
+    "dnf": ["dnf", "install", "-y", "git"],
+    "yum": ["yum", "install", "-y", "git"],
+    "pacman": ["pacman", "-S", "--noconfirm", "git"],
+    "zypper": ["zypper", "install", "-y", "git"],
+    "apk": ["apk", "add", "git"],
+  };
+
+  const args = installCmds[pm];
+  if (!args) {
     return {
       success: false,
-      message: "On Linux, install git via your package manager: sudo apt install git, sudo dnf install git, etc.",
+      message: `Detected ${pm} but no install command mapped`,
+      manualCommand: `${pm} install git`,
+    };
+  }
+
+  // Linux installs require root. Check if we're already root.
+  const isRoot = process.getuid && process.getuid() === 0;
+
+  if (isRoot) {
+    // Run directly without sudo
+    const result = await runInstaller(args[0], args.slice(1), false);
+    if (result.success) {
+      return { success: true, message: `Git installed via ${pm}.` };
+    }
+    return {
+      success: false,
+      message: `${pm} install failed: ${result.output}`,
+      manualCommand: `sudo ${args.join(" ")}`,
+    };
+  }
+
+  // Try with sudo -n (non-interactive — only works if NOPASSWD is configured)
+  try {
+    const result = await runInstaller("sudo", ["-n", ...args], false);
+    if (result.success) {
+      return { success: true, message: `Git installed via sudo ${pm}.` };
+    }
+    // Sudo failed (likely password required) — return manual command
+    return {
+      success: false,
+      message: `Auto-install requires a password. Please run this command in a terminal:\n\nsudo ${args.join(" ")}`,
+      manualCommand: `sudo ${args.join(" ")}`,
+    };
+  } catch {
+    return {
+      success: false,
+      message: `Please run this command in a terminal:\n\nsudo ${args.join(" ")}`,
+      manualCommand: `sudo ${args.join(" ")}`,
     };
   }
 }

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   GitBranch, GitCommit, RefreshCw, Plus, Minus, Check, ChevronDown, ChevronRight,
   Upload, Download, History, AlertTriangle, ExternalLink, Loader2, FileText, X,
-  RotateCcw, MoreHorizontal,
+  RotateCcw, MoreHorizontal, Copy, Terminal,
 } from "lucide-react";
 import { useRealGit, GitFileStatus } from "@/hooks/useRealGit";
 
@@ -215,6 +215,7 @@ export function SourceControlPanel() {
 
   if (git.installStatus.state === "missing" || git.installStatus.state === "installing") {
     const installing = git.installStatus.state === "installing";
+    const manualCmd = git.installStatus.state === "missing" ? git.installStatus.manualCommand : undefined;
     return (
       <div className="flex flex-col p-4 gap-3">
         <div className="flex items-center gap-2">
@@ -222,7 +223,7 @@ export function SourceControlPanel() {
           <span style={{ fontWeight: 600, fontSize: 12, color: "hsl(220 14% 85%)" }}>Git Not Installed</span>
         </div>
         <p style={{ fontSize: 11, color: "hsl(220 14% 60%)", lineHeight: 1.6 }}>
-          Git is required for source control. PiPilot can attempt to install it automatically using your system's package manager.
+          Git is required for source control. PiPilot will try to install it via your system's package manager (winget on Windows, Homebrew on macOS, apt/dnf/pacman on Linux).
         </p>
         <button
           onClick={git.installGit}
@@ -237,6 +238,62 @@ export function SourceControlPanel() {
           {installing ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
           {installing ? "Installing..." : "Auto-install Git"}
         </button>
+
+        {/* Manual command — copy to clipboard or run in terminal */}
+        {manualCmd && (
+          <div style={{
+            padding: "8px 10px", borderRadius: 6,
+            background: "hsl(220 13% 12%)",
+            border: "1px solid hsl(220 13% 25%)",
+          }}>
+            <div style={{ fontSize: 10, color: "hsl(220 14% 55%)", marginBottom: 4 }}>
+              Or run this manually in a terminal:
+            </div>
+            <code style={{
+              display: "block", fontSize: 10, fontFamily: "monospace",
+              color: "hsl(207 90% 70%)", padding: "4px 6px",
+              background: "hsl(220 13% 8%)", borderRadius: 3, marginBottom: 6,
+              wordBreak: "break-all", whiteSpace: "pre-wrap",
+            }}>
+              {manualCmd}
+            </code>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(manualCmd);
+                  setStatusMessage("Copied to clipboard");
+                  setTimeout(() => setStatusMessage(null), 2000);
+                }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 4,
+                  padding: "4px 8px", fontSize: 10,
+                  background: "hsl(220 13% 20%)", color: "hsl(220 14% 80%)",
+                  border: "1px solid hsl(220 13% 28%)", borderRadius: 4, cursor: "pointer",
+                }}
+              >
+                <Copy size={10} />
+                Copy
+              </button>
+              <button
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent("pipilot:run-in-terminal", {
+                    detail: { command: manualCmd, label: "install git" },
+                  }));
+                }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 4,
+                  padding: "4px 8px", fontSize: 10,
+                  background: "hsl(207 90% 45%)", color: "#fff",
+                  border: "none", borderRadius: 4, cursor: "pointer",
+                }}
+              >
+                <Terminal size={10} />
+                Run in terminal
+              </button>
+            </div>
+          </div>
+        )}
+
         <a
           href="https://git-scm.com/downloads"
           target="_blank"
@@ -249,14 +306,15 @@ export function SourceControlPanel() {
           }}
         >
           <ExternalLink size={11} />
-          Manual download
+          Download from git-scm.com
         </a>
+
         {git.lastError && (
           <div style={{
             padding: "6px 8px", fontSize: 10, color: "hsl(0 84% 75%)",
             background: "hsl(0 84% 50% / 0.1)", borderRadius: 4,
             border: "1px solid hsl(0 84% 50% / 0.2)",
-            whiteSpace: "pre-wrap", maxHeight: 100, overflowY: "auto",
+            whiteSpace: "pre-wrap", maxHeight: 120, overflowY: "auto",
           }}>
             {git.lastError}
           </div>
