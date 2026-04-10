@@ -22,7 +22,9 @@
 import type * as Monaco from "monaco-editor";
 import type { IDisposable, editor as MonacoEditor, Position, IRange } from "monaco-editor";
 
-const A0_LLM_URL = "https://api.a0.dev/ai/llm";
+// Same OpenAI-compatible endpoint that useChat uses
+const LLM_URL = "https://the3rdacademy.com/api/chat/completions";
+const LLM_MODEL = "kilo-auto/free";
 const DEBUG = typeof window !== "undefined" && localStorage.getItem("pipilot:debug-inline-ai") === "1";
 const CACHE_SIZE = 10;
 const FETCH_INTERVAL = 500;
@@ -241,14 +243,22 @@ async function fetchSuggestion(): Promise<void> {
 
   try {
     dlog("fetching", { language, beforeLen: before.length });
-    const res = await fetch(A0_LLM_URL, {
+    const res = await fetch(LLM_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer unused",
+      },
       body: JSON.stringify({
+        model: LLM_MODEL,
         messages: [
           { role: "system", content: buildSystemPrompt(language) },
           { role: "user", content: `${before}<|cursor|>${after}` },
         ],
+        temperature: 0.2,
+        max_tokens: 200,
+        stream: false,
+        direct_kilo: true,
       }),
       signal,
     });
@@ -259,7 +269,8 @@ async function fetchSuggestion(): Promise<void> {
     }
 
     const data = await res.json();
-    let raw = (data.completion || "").toString();
+    // OpenAI-compatible response: { choices: [{ message: { content } }] }
+    let raw = (data.choices?.[0]?.message?.content || "").toString();
     if (!raw.trim()) {
       dlog("empty response");
       return;
