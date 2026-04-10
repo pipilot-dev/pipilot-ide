@@ -1,31 +1,93 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, DBFile, DBCheckpoint } from "@/lib/db";
 import { useActiveProject } from "@/contexts/ProjectContext";
 
 const MAX_CHECKPOINTS = 50;
 
+/**
+ * Check if a project's files live on disk (linked project, agent mode).
+ * Returns the project type from IndexedDB so we can decide between
+ * server-side checkpoints (disk snapshots) and local IndexedDB checkpoints.
+ */
+async function getProjectType(projectId: string | undefined): Promise<string | null> {
+  if (!projectId) return null;
+  try {
+    const p = await db.projects.get(projectId);
+    return p?.type || null;
+  } catch { return null; }
+}
+
+interface ServerCheckpointMeta {
+  id: string;
+  projectId: string;
+  label: string;
+  messageId?: string;
+  createdAt: number;
+  fileCount: number;
+  byteSize: number;
+}
+
 export function useCheckpoints() {
   const { activeProjectId } = useActiveProject();
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [useServer, setUseServer] = useState(false);
+  const [serverCheckpoints, setServerCheckpoints] = useState<ServerCheckpointMeta[]>([]);
 
-  const checkpoints =
+  // Detect mode: server-side for linked projects, otherwise IndexedDB
+  useEffect(() => {
+    if (!activeProjectId) {
+      setUseServer(false);
+      return;
+    }
+    getProjectType(activeProjectId).then((type) => {
+      // Linked = always server. The chat panel hooks pass the right
+      // checkpoint manager based on this.
+      setUseServer(type === "linked");
+    });
+  }, [activeProjectId]);
+
+  // Refresh server-side checkpoints when projectId or mode changes
+  const refreshServerCheckpoints = useCallback(async () => {
+    if (!activeProjectId || !useServer) return;
+    try {
+      const res = await fetch(`/api/checkpoints/list?projectId=${encodeURIComponent(activeProjectId)}`);
+      const data = await res.json();
+      setServerCheckpoints(data.checkpoints || []);
+    } catch {}
+  }, [activeProjectId, useServer]);
+
+  useEffect(() => {
+    if (useServer) refreshServerCheckpoints();
+  }, [useServer, refreshServerCheckpoints]);
+
+  const localCheckpoints =
     useLiveQuery(
       () =>
-        activeProjectId
+        activeProjectId && !useServer
           ? db.checkpoints
               .where("projectId")
               .equals(activeProjectId)
               .reverse()
               .sortBy("createdAt")
           : Promise.resolve([]),
-      [activeProjectId]
+      [activeProjectId, useServer]
     ) ?? [];
 
-  // Sort descending by createdAt (newest first)
-  const sorted = [...checkpoints].sort(
-    (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
-  );
+  // Sort descending by createdAt (newest first), normalized to common shape
+  const sorted = useServer
+    ? serverCheckpoints
+        .slice()
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((m) => ({
+          id: m.id,
+          projectId: m.projectId,
+          label: m.label,
+          snapshot: "", // not loaded client-side for server checkpoints
+          createdAt: new Date(m.createdAt),
+          messageId: m.messageId,
+        }))
+    : [...localCheckpoints].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
   const canUndo = currentIndex < sorted.length - 1;
   const canRedo = currentIndex > 0;
@@ -34,7 +96,26 @@ export function useCheckpoints() {
     async (label: string, messageId?: string) => {
       if (!activeProjectId) return;
 
-      // Snapshot all files for this project
+      // Server-side branch — for linked projects (files on disk)
+      if (useServer) {
+        try {
+          const res = await fetch("/api/checkpoints/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId: activeProjectId, label, messageId }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            await refreshServerCheckpoints();
+            setCurrentIndex(0);
+          }
+        } catch (err) {
+          console.error("Server checkpoint create failed:", err);
+        }
+        return;
+      }
+
+      // Local IndexedDB branch
       const files = await db.files
         .where("projectId")
         .equals(activeProjectId)
@@ -64,7 +145,7 @@ export function useCheckpoints() {
 
       setCurrentIndex(0);
     },
-    [activeProjectId]
+    [activeProjectId, useServer, refreshServerCheckpoints]
   );
 
   /**
@@ -76,6 +157,20 @@ export function useCheckpoints() {
     async (messageId: string): Promise<string | null> => {
       if (!activeProjectId) return null;
 
+      // Server-side branch
+      if (useServer) {
+        try {
+          const res = await fetch(
+            `/api/checkpoints/find-before?projectId=${encodeURIComponent(activeProjectId)}&messageId=${encodeURIComponent(messageId)}`,
+          );
+          const data = await res.json();
+          return data.checkpoint?.id || null;
+        } catch {
+          return null;
+        }
+      }
+
+      // Local IndexedDB branch
       const allCheckpoints = await db.checkpoints
         .where("projectId")
         .equals(activeProjectId)
@@ -95,16 +190,40 @@ export function useCheckpoints() {
         return allCheckpoints[afterCheckpointIdx - 1].id;
       }
 
-      // No checkpoint found — return null
       return null;
     },
-    [activeProjectId]
+    [activeProjectId, useServer]
   );
 
   const restoreToCheckpoint = useCallback(
     async (id: string) => {
       if (!activeProjectId) return;
 
+      // Server-side branch — restore disk files via the server
+      if (useServer) {
+        try {
+          const res = await fetch("/api/checkpoints/restore", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId: activeProjectId, checkpointId: id }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            // Tell file watchers to re-sync
+            window.dispatchEvent(new CustomEvent("pipilot:files-changed"));
+            const idx = sorted.findIndex((c) => c.id === id);
+            if (idx !== -1) setCurrentIndex(idx);
+          } else {
+            throw new Error(data.message || "Restore failed");
+          }
+        } catch (err) {
+          console.error("Server checkpoint restore failed:", err);
+          throw err;
+        }
+        return;
+      }
+
+      // Local IndexedDB branch
       const checkpoint = await db.checkpoints.get(id);
       if (!checkpoint) throw new Error(`Checkpoint not found: ${id}`);
 
@@ -118,24 +237,18 @@ export function useCheckpoints() {
       }));
 
       await db.transaction("rw", db.files, async () => {
-        // Delete all files for this project
         const existing = await db.files
           .where("projectId")
           .equals(activeProjectId)
           .toArray();
         await db.files.bulkDelete(existing.map((f) => f.id));
-
-        // Restore snapshot
         await db.files.bulkPut(hydratedFiles);
       });
 
-      // Update currentIndex to match this checkpoint's position
       const idx = sorted.findIndex((c) => c.id === id);
-      if (idx !== -1) {
-        setCurrentIndex(idx);
-      }
+      if (idx !== -1) setCurrentIndex(idx);
     },
-    [activeProjectId, sorted]
+    [activeProjectId, sorted, useServer]
   );
 
   const undo = useCallback(async () => {

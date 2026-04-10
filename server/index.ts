@@ -14,6 +14,11 @@ import {
   initWorkspaces, resolveWorkspaceDir, linkFolder, unlinkFolder,
   listLinked, touchLinked, isLinked, getLinked,
 } from "./workspaces";
+import {
+  initCheckpoints, createCheckpoint, listCheckpoints, getCheckpoint,
+  findCheckpointBeforeMessage as findCheckpointBeforeMessageFn,
+  restoreCheckpoint, deleteCheckpoint, clearProjectCheckpoints,
+} from "./checkpoints";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -28,6 +33,9 @@ const WORKSPACE_BASE = path.join(process.cwd(), "workspaces");
 
 // Initialize the linked-workspaces registry (Open Folder feature)
 initWorkspaces({ workspaceBase: WORKSPACE_BASE });
+
+// Initialize the checkpoints data dir (separate from workspace files)
+initCheckpoints({ dataDir: path.join(process.cwd(), ".pipilot-data", "checkpoints") });
 
 /**
  * Resolve a projectId to its absolute working directory.
@@ -1670,6 +1678,74 @@ app.post("/api/project/search", async (req, res) => {
 
   walk(workDir, "");
   res.json({ results, truncated: results.length >= limit });
+});
+
+// ── Workspace Checkpoints (revert support for disk-backed projects) ─
+
+// POST /api/checkpoints/create — snapshot the current workspace
+app.post("/api/checkpoints/create", (req, res) => {
+  const { projectId, label, messageId } = req.body;
+  if (!projectId || !label) {
+    return res.status(400).json({ error: "projectId and label required" });
+  }
+  const workDir = getWorkDir(projectId);
+  if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
+  try {
+    const meta = createCheckpoint({ projectId, workDir, label, messageId });
+    res.json({ success: true, checkpoint: meta });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/checkpoints/list?projectId=...
+app.get("/api/checkpoints/list", (req, res) => {
+  const projectId = req.query.projectId as string;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+  res.json({ checkpoints: listCheckpoints(projectId) });
+});
+
+// GET /api/checkpoints/find-before?projectId=&messageId=
+app.get("/api/checkpoints/find-before", (req, res) => {
+  const projectId = req.query.projectId as string;
+  const messageId = req.query.messageId as string;
+  if (!projectId || !messageId) return res.status(400).json({ error: "projectId and messageId required" });
+  const meta = findCheckpointBeforeMessageFn(projectId, messageId);
+  res.json({ checkpoint: meta });
+});
+
+// POST /api/checkpoints/restore — restore the workspace to a checkpoint
+app.post("/api/checkpoints/restore", (req, res) => {
+  const { projectId, checkpointId } = req.body;
+  if (!projectId || !checkpointId) {
+    return res.status(400).json({ error: "projectId and checkpointId required" });
+  }
+  const workDir = getWorkDir(projectId);
+  if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
+  try {
+    const result = restoreCheckpoint({ projectId, workDir, checkpointId });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/checkpoints/delete
+app.post("/api/checkpoints/delete", (req, res) => {
+  const { projectId, checkpointId } = req.body;
+  if (!projectId || !checkpointId) {
+    return res.status(400).json({ error: "projectId and checkpointId required" });
+  }
+  const ok = deleteCheckpoint(projectId, checkpointId);
+  res.json({ success: ok });
+});
+
+// POST /api/checkpoints/clear — wipe all checkpoints for a project
+app.post("/api/checkpoints/clear", (req, res) => {
+  const { projectId } = req.body;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+  const count = clearProjectCheckpoints(projectId);
+  res.json({ success: true, deleted: count });
 });
 
 // ── Diagnostics (Problems panel) ────────────────────────────────────
