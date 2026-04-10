@@ -24,6 +24,7 @@ import {
   FolderPlus,
 } from "lucide-react";
 import { exportProjectAsZip } from "@/lib/exportZip";
+import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 import { importFromZip, importFromFolder } from "@/lib/importFiles";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { ExtensionMarketplace } from "@/components/extensions/ExtensionMarketplace";
@@ -97,6 +98,56 @@ function ToggleButton({
   );
 }
 
+/**
+ * Compact icon button for the sidebar header — matches the editorial-terminal
+ * design system with subtle hover and lime accent on active.
+ */
+function SidebarIconButton({
+  onClick,
+  title,
+  disabled,
+  children,
+}: {
+  onClick: () => void;
+  title: string;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      style={{
+        width: 22,
+        height: 22,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "transparent",
+        border: "1px solid transparent",
+        borderRadius: 3,
+        cursor: disabled ? "not-allowed" : "pointer",
+        color: C.textDim,
+        opacity: disabled ? 0.5 : 1,
+        transition: "color 0.15s, border-color 0.15s",
+      }}
+      onMouseEnter={(e) => {
+        if (disabled) return;
+        (e.currentTarget as HTMLElement).style.color = C.accent;
+        (e.currentTarget as HTMLElement).style.borderColor = C.borderHover;
+      }}
+      onMouseLeave={(e) => {
+        if (disabled) return;
+        (e.currentTarget as HTMLElement).style.color = C.textDim;
+        (e.currentTarget as HTMLElement).style.borderColor = "transparent";
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 // --- Main component ---
 
 interface SidebarPanelProps {
@@ -117,6 +168,7 @@ interface SidebarPanelProps {
 }
 
 export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSearchFiles, onRunPreview, onOpenTerminal, onOpenCommit, onOpenDiff, onCreateFile, onCreateFolder, onRenameFile, onDeleteFile, onUpdateFileContent }: SidebarPanelProps) {
+  useEffect(() => { injectFonts(); }, []);
   const { activeProjectId } = useActiveProject();
   const { activeProject } = useProjects();
   const [searchQuery, setSearchQuery] = useState("");
@@ -557,7 +609,16 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
   if (!view) return null;
 
   return (
-    <div className="flex flex-col h-full overflow-hidden" data-testid="sidebar-panel">
+    <div
+      className="flex flex-col h-full overflow-hidden"
+      data-testid="sidebar-panel"
+      style={{
+        background: C.surface,
+        color: C.text,
+        fontFamily: FONTS.sans,
+        borderRight: `1px solid ${C.border}`,
+      }}
+    >
       {/* Hidden file inputs */}
       <input ref={zipInputRef} type="file" accept=".zip" className="hidden" onChange={handleZipImport} />
       <input ref={folderInputRef} type="file" className="hidden" onChange={handleFolderImport}
@@ -565,89 +626,120 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
 
       {view === "explorer" && (
         <>
+          {/* Section label — editorial mono */}
           <div
-            className="flex items-center justify-between px-4 py-2 text-xs font-semibold tracking-widest uppercase"
-            style={{ color: "hsl(220 14% 60%)" }}
+            style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "16px 14px 10px",
+            }}
           >
-            <span>Explorer</span>
+            <span
+              style={{
+                fontFamily: FONTS.mono,
+                fontSize: 9, fontWeight: 500,
+                letterSpacing: "0.18em", textTransform: "uppercase",
+                color: C.accent,
+              }}
+            >
+              / A
+            </span>
+            <span
+              style={{
+                fontFamily: FONTS.mono,
+                fontSize: 9, fontWeight: 500,
+                letterSpacing: "0.18em", textTransform: "uppercase",
+                color: C.text,
+              }}
+            >
+              Explorer
+            </span>
             {activeProject?.type && activeProject.type !== "static" && (
-              <span style={{
-                fontSize: 8, padding: "1px 4px", borderRadius: 3, marginLeft: 4,
-                background: activeProject.type === "cloud" ? "hsl(280 65% 55% / 0.2)" : "hsl(142 71% 45% / 0.2)",
-                color: activeProject.type === "cloud" ? "hsl(280 65% 60%)" : "hsl(142 71% 45%)",
-                textTransform: "none" as const, letterSpacing: "normal",
-              }}>
-                {activeProject.type === "cloud" ? "Cloud" : "Node"}
+              <span
+                style={{
+                  fontFamily: FONTS.mono,
+                  fontSize: 8, padding: "1px 5px",
+                  borderRadius: 2,
+                  background: activeProject.type === "linked" ? `${C.accent}1a` : C.surfaceAlt,
+                  color: activeProject.type === "linked" ? C.accent : C.textMid,
+                  letterSpacing: "0.1em", textTransform: "uppercase",
+                  border: `1px solid ${activeProject.type === "linked" ? C.accentLine : C.border}`,
+                }}
+              >
+                {activeProject.type === "cloud" ? "cloud" : activeProject.type === "linked" ? "linked" : "node"}
               </span>
             )}
-            <div className="flex items-center gap-1">
-              <button
-                className="p-1 rounded hover:bg-white/10 transition-colors"
-                onClick={() => handleCreateFile("")}
-                title="New File (in root)"
-                style={{ color: "hsl(207 90% 65%)" }}
-              >
-                <FilePlus size={13} />
-              </button>
-              <button
-                className="p-1 rounded hover:bg-white/10 transition-colors"
-                onClick={() => handleCreateFolder("")}
-                title="New Folder (in root)"
-                style={{ color: "hsl(38 92% 60%)" }}
-              >
-                <FolderPlus size={13} />
-              </button>
-              <div style={{ width: 1, height: 14, background: "hsl(220 13% 25%)", margin: "0 2px" }} />
-              <button
-                className="p-1 rounded hover:bg-white/10 transition-colors"
-                onClick={() => folderInputRef.current?.click()}
-                title="Import Folder"
-                disabled={importing}
-              >
-                <Upload size={12} />
-              </button>
-              <button
-                className="p-1 rounded hover:bg-white/10 transition-colors"
-                onClick={() => zipInputRef.current?.click()}
-                title="Import ZIP"
-                disabled={importing}
-              >
-                <Upload size={12} style={{ transform: "scaleX(-1)" }} />
-              </button>
-              <button
-                className="p-1 rounded hover:bg-white/10 transition-colors"
-                onClick={handleExport}
-                title="Export as ZIP"
-              >
-                <Download size={12} />
-              </button>
-            </div>
+            <div style={{ flex: 1 }} />
+            <SidebarIconButton onClick={() => handleCreateFile("")} title="New File (in root)">
+              <FilePlus size={12} strokeWidth={1.6} />
+            </SidebarIconButton>
+            <SidebarIconButton onClick={() => handleCreateFolder("")} title="New Folder (in root)">
+              <FolderPlus size={12} strokeWidth={1.6} />
+            </SidebarIconButton>
+            <span style={{ width: 1, height: 12, background: C.border, margin: "0 2px" }} />
+            <SidebarIconButton onClick={() => folderInputRef.current?.click()} title="Import Folder" disabled={importing}>
+              <Upload size={11} strokeWidth={1.6} />
+            </SidebarIconButton>
+            <SidebarIconButton onClick={handleExport} title="Export as ZIP">
+              <Download size={11} strokeWidth={1.6} />
+            </SidebarIconButton>
           </div>
 
-          {/* Project Switcher */}
-          <ProjectSwitcher />
+          {/* Hairline divider */}
+          <div style={{ height: 1, background: C.border, margin: "0 14px" }} />
 
-          {/* File search */}
-          <div className="px-2 py-1">
-            <div className="flex items-center gap-2 rounded px-2 py-1" style={{ background: "hsl(220 13% 22%)" }}>
-              <Search size={11} style={{ color: "hsl(220 14% 50%)" }} />
+          {/* Project Switcher */}
+          <div style={{ padding: "8px 14px 4px" }}>
+            <ProjectSwitcher />
+          </div>
+
+          {/* File search input */}
+          <div style={{ padding: "4px 14px 8px" }}>
+            <div
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "6px 10px",
+                background: C.surfaceAlt,
+                border: `1px solid ${C.border}`,
+                borderRadius: 4,
+              }}
+            >
+              <Search size={11} style={{ color: C.textDim }} />
               <input
-                className="bg-transparent text-xs outline-none w-full"
-                placeholder="Filter files..."
-                style={{ color: "hsl(220 14% 85%)" }}
+                placeholder="filter files..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  flex: 1,
+                  background: "transparent",
+                  outline: "none",
+                  border: "none",
+                  fontFamily: FONTS.mono,
+                  fontSize: 11,
+                  color: C.text,
+                }}
               />
             </div>
           </div>
 
-          <div className="border-b" style={{ borderColor: "hsl(220 13% 22%)" }}>
+          <div style={{ borderTop: `1px solid ${C.border}` }}>
             <div
-              className="flex items-center gap-1 px-2 py-1 text-xs font-semibold cursor-pointer select-none"
-              style={{ color: "hsl(220 14% 75%)" }}
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "10px 14px 6px",
+                cursor: "pointer", userSelect: "none",
+              }}
             >
-              <ChevronDown size={12} />
-              <span>WORKSPACE</span>
+              <ChevronDown size={11} style={{ color: C.textDim }} />
+              <span
+                style={{
+                  fontFamily: FONTS.mono,
+                  fontSize: 9, fontWeight: 500,
+                  letterSpacing: "0.18em", textTransform: "uppercase",
+                  color: C.textMid,
+                }}
+              >
+                Workspace
+              </span>
             </div>
             <div className="pb-2 overflow-y-auto" style={{ maxHeight: "calc(100vh - 220px)" }}>
               <FileTree
@@ -671,25 +763,52 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
 
       {view === "search" && (
         <div className="flex flex-col h-full overflow-hidden">
-          {/* Header */}
+          {/* Editorial section header */}
           <div
-            className="flex items-center justify-between px-4 py-2 text-xs font-semibold tracking-widest uppercase shrink-0"
-            style={{ color: "hsl(220 14% 60%)" }}
+            style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "16px 14px 10px",
+              flexShrink: 0,
+            }}
           >
-            <span>Search</span>
+            <span
+              style={{
+                fontFamily: FONTS.mono,
+                fontSize: 9, fontWeight: 500,
+                letterSpacing: "0.18em", textTransform: "uppercase",
+                color: C.accent,
+              }}
+            >
+              / B
+            </span>
+            <span
+              style={{
+                fontFamily: FONTS.mono,
+                fontSize: 9, fontWeight: 500,
+                letterSpacing: "0.18em", textTransform: "uppercase",
+                color: C.text,
+              }}
+            >
+              Search
+            </span>
             {totalMatchCount > 0 && (
               <span
-                className="text-xs font-normal normal-case tracking-normal rounded-full px-1.5 py-0.5"
                 style={{
-                  background: "hsl(220 13% 28%)",
-                  color: "hsl(220 14% 75%)",
-                  fontSize: 10,
+                  fontFamily: FONTS.mono,
+                  fontSize: 9, padding: "1px 6px",
+                  background: `${C.accent}1a`,
+                  color: C.accent,
+                  borderRadius: 2,
+                  border: `1px solid ${C.accentLine}`,
+                  letterSpacing: "0.05em",
+                  marginLeft: "auto",
                 }}
               >
                 {totalMatchCount} {totalMatchCount === 1 ? "result" : "results"}
               </span>
             )}
           </div>
+          <div style={{ height: 1, background: C.border, margin: "0 14px 8px" }} />
 
           {/* Search inputs area */}
           <div className="px-2 pb-2 flex flex-col gap-1.5 shrink-0">

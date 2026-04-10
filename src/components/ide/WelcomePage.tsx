@@ -5,6 +5,7 @@ import {
 import { useProjects } from "@/hooks/useProjects";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { FolderPicker } from "./FolderPicker";
+import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 
 interface WelcomePageProps {
   onOpenPreview?: () => void;
@@ -12,36 +13,9 @@ interface WelcomePageProps {
 }
 
 const LOGO_URL = "https://pipilot.dev/logo.png";
-
-// ── Design tokens ──────────────────────────────────────────────────
-const C = {
-  bg: "#0b0b0e",
-  surface: "#15151b",
-  border: "#28282f",
-  borderHover: "#3d3d46",
-  text: "#f5f5f7",
-  textMid: "#a8a8b3",
-  textDim: "#5e5e68",
-  textFaint: "#3a3a42",
-  accent: "#c6ff3d",         // electric lime
-  accentDim: "#c6ff3d22",
-  warn: "#ffb86b",
-};
-
-const FONT_DISPLAY = `"Instrument Serif", "Fraunces", Georgia, serif`;
-const FONT_MONO = `"JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace`;
-const FONT_SANS = `"Inter Tight", -apple-system, BlinkMacSystemFont, system-ui, sans-serif`;
-
-// Inject Google Fonts once on first mount
-let fontsInjected = false;
-function injectFonts() {
-  if (fontsInjected || typeof document === "undefined") return;
-  fontsInjected = true;
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500&family=Inter+Tight:wght@400;500;600&display=swap";
-  document.head.appendChild(link);
-}
+const FONT_DISPLAY = FONTS.display;
+const FONT_MONO = FONTS.mono;
+const FONT_SANS = FONTS.sans;
 
 // Format the current date as "10 APR 2026"
 function formatBuildDate(): string {

@@ -7,6 +7,7 @@ import {
   MessageSquareCode,
   Bug,
 } from "lucide-react";
+import { COLORS as C } from "@/lib/design-tokens";
 
 export type ActivityBarView = "explorer" | "search" | "source-control" | "extensions" | "debug";
 
@@ -20,71 +21,151 @@ interface ActivityBarProps {
 }
 
 const ACTIVITIES: { id: ActivityBarView; icon: React.ReactNode; label: string }[] = [
-  { id: "explorer", icon: <Files size={22} />, label: "Explorer" },
-  { id: "search", icon: <Search size={22} />, label: "Search" },
-  { id: "source-control", icon: <GitBranch size={22} />, label: "Source Control" },
-  { id: "debug", icon: <Bug size={22} />, label: "Run and Debug" },
-  { id: "extensions", icon: <Package size={22} />, label: "Extensions" },
+  { id: "explorer", icon: <Files size={18} strokeWidth={1.6} />, label: "Explorer" },
+  { id: "search", icon: <Search size={18} strokeWidth={1.6} />, label: "Search" },
+  { id: "source-control", icon: <GitBranch size={18} strokeWidth={1.6} />, label: "Source Control" },
+  { id: "debug", icon: <Bug size={18} strokeWidth={1.6} />, label: "Run and Debug" },
+  { id: "extensions", icon: <Package size={18} strokeWidth={1.6} />, label: "Extensions" },
 ];
 
-export function ActivityBar({ activeView, onViewChange, chatOpen, onToggleChat, onOpenSettings, badges }: ActivityBarProps) {
+export function ActivityBar({
+  activeView, onViewChange, chatOpen, onToggleChat, onOpenSettings, badges,
+}: ActivityBarProps) {
   return (
-    <div className="activity-bar" data-testid="activity-bar">
+    <div
+      data-testid="activity-bar"
+      style={{
+        width: 48,
+        background: C.bg,
+        borderRight: `1px solid ${C.border}`,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        paddingTop: 8,
+        flexShrink: 0,
+        position: "relative",
+      }}
+    >
       {ACTIVITIES.map((item) => {
         const count = badges?.[item.id] ?? 0;
+        const isActive = activeView === item.id;
         return (
-          <button
+          <ActivityButton
             key={item.id}
-            className={`activity-bar-btn ${activeView === item.id ? "active" : ""}`}
+            isActive={isActive}
+            label={count > 0 ? `${item.label} (${count})` : item.label}
             onClick={() => onViewChange(item.id)}
-            title={count > 0 ? `${item.label} (${count})` : item.label}
-            data-testid={`activity-btn-${item.id}`}
-            style={{ position: "relative" }}
+            badge={count}
+            testid={`activity-btn-${item.id}`}
           >
             {item.icon}
-            {count > 0 && (
-              <span
-                style={{
-                  position: "absolute",
-                  top: 4, right: 4,
-                  minWidth: 16, height: 16, padding: "0 4px",
-                  borderRadius: 8,
-                  background: "hsl(207 90% 50%)",
-                  color: "#fff",
-                  fontSize: 9, fontWeight: 700,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  border: "2px solid hsl(220 13% 13%)",
-                  lineHeight: 1,
-                }}
-              >
-                {count > 99 ? "99+" : count}
-              </span>
-            )}
-          </button>
+          </ActivityButton>
         );
       })}
 
-      <div className="flex-1" />
+      <div style={{ flex: 1 }} />
 
-      <button
-        className={`activity-bar-btn ${chatOpen ? "active" : ""}`}
+      <ActivityButton
+        isActive={chatOpen}
+        label="AI Chat (Ctrl+Shift+I)"
         onClick={onToggleChat}
-        title="AI Chat (Ctrl+Shift+I)"
-        data-testid="activity-btn-chat"
-        style={{ marginBottom: 8 }}
+        testid="activity-btn-chat"
       >
-        <MessageSquareCode size={22} />
-      </button>
+        <MessageSquareCode size={18} strokeWidth={1.6} />
+      </ActivityButton>
 
-      <button
-        className="activity-bar-btn"
-        title="Settings"
-        data-testid="activity-btn-settings"
-        style={{ marginBottom: 8 }}
+      <ActivityButton
+        isActive={false}
+        label="Settings"
         onClick={() => onOpenSettings?.()}
+        testid="activity-btn-settings"
       >
-        <Settings size={22} />
-      </button>
+        <Settings size={18} strokeWidth={1.6} />
+      </ActivityButton>
+
+      <div style={{ height: 12 }} />
     </div>
+  );
+}
+
+interface ActivityButtonProps {
+  isActive: boolean;
+  label: string;
+  onClick: () => void;
+  badge?: number;
+  testid?: string;
+  children: React.ReactNode;
+}
+
+function ActivityButton({ isActive, label, onClick, badge, testid, children }: ActivityButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      data-testid={testid}
+      style={{
+        position: "relative",
+        width: 48,
+        height: 44,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "transparent",
+        border: "none",
+        cursor: "pointer",
+        color: isActive ? C.text : C.textDim,
+        transition: "color 0.15s ease",
+      }}
+      onMouseEnter={(e) => {
+        if (!isActive) (e.currentTarget as HTMLElement).style.color = C.textMid;
+      }}
+      onMouseLeave={(e) => {
+        if (!isActive) (e.currentTarget as HTMLElement).style.color = C.textDim;
+      }}
+    >
+      {/* Active indicator — thin lime bar on the left */}
+      {isActive && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: 0,
+            top: "50%",
+            transform: "translateY(-50%)",
+            width: 2,
+            height: 18,
+            background: C.accent,
+            borderRadius: "0 2px 2px 0",
+            boxShadow: `0 0 8px ${C.accent}80`,
+          }}
+        />
+      )}
+      {children}
+      {badge !== undefined && badge > 0 && (
+        <span
+          style={{
+            position: "absolute",
+            top: 6,
+            right: 6,
+            minWidth: 14,
+            height: 14,
+            padding: "0 3px",
+            borderRadius: 7,
+            background: C.accent,
+            color: C.bg,
+            fontSize: 8,
+            fontWeight: 700,
+            fontFamily: "JetBrains Mono, monospace",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            lineHeight: 1,
+            border: `1.5px solid ${C.bg}`,
+          }}
+        >
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
+    </button>
   );
 }

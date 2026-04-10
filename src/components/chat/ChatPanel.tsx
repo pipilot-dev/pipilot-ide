@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useChat, ChatMode, ToolExecutor, WorkspaceContext, CheckpointManager } from "@/hooks/useChat";
 import { useAgentChat } from "@/hooks/useAgentChat";
+import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 import { TodoPanel } from "./TodoPanel";
 import { AskUserDialog } from "./AskUserDialog";
 import { QueuePanel } from "./QueuePanel";
@@ -169,6 +170,7 @@ interface ChatPanelProps {
 }
 
 export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, projectId, fileTree, activeProvider: activeProviderProp, onProviderChange }: ChatPanelProps) {
+  useEffect(() => { injectFonts(); }, []);
   // Call both hooks unconditionally (React rules), pick based on active mode
   const aiSdk = useChat(toolExecutor, workspaceContext, checkpointManager, projectId);
   const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, projectId);
@@ -538,40 +540,63 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   return (
     <div
       className="flex flex-col h-full"
-      style={{ background: "hsl(220 13% 15%)" }}
+      style={{
+        background: C.surface,
+        color: C.text,
+        fontFamily: FONTS.sans,
+        borderLeft: `1px solid ${C.border}`,
+      }}
       data-testid="chat-panel"
     >
-      {/* ── Header ── */}
+      {/* ── Header — editorial label + indicator ── */}
       <div
-        className="flex items-center justify-between px-4 py-2.5"
         style={{
-          borderBottom: "1px solid hsl(220 13% 20%)",
-          background: "linear-gradient(180deg, hsl(220 13% 17%) 0%, hsl(220 13% 15%) 100%)",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "16px 16px 12px",
         }}
       >
-        <div className="flex items-center gap-2.5">
-          <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center"
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <span
+            aria-hidden
             style={{
-              background: "linear-gradient(135deg, hsl(207 90% 45%) 0%, hsl(207 90% 35%) 100%)",
-              boxShadow: "0 2px 8px hsl(207 90% 35% / 0.4)",
+              width: 6, height: 6, borderRadius: "50%",
+              background: C.accent,
+              boxShadow: `0 0 8px ${C.accent}80`,
+              flexShrink: 0,
+            }}
+          />
+          <span
+            style={{
+              fontFamily: FONTS.mono,
+              fontSize: 9, fontWeight: 500,
+              letterSpacing: "0.18em", textTransform: "uppercase",
+              color: C.accent,
             }}
           >
-            <Sparkles size={14} style={{ color: "white" }} />
-          </div>
-          <div>
-            <span className="text-sm font-semibold" style={{ color: "hsl(220 14% 92%)", letterSpacing: "-0.01em" }}>
-              PiPilot AI
+            / C
+          </span>
+          <span
+            style={{
+              fontFamily: FONTS.mono,
+              fontSize: 9, fontWeight: 500,
+              letterSpacing: "0.18em", textTransform: "uppercase",
+              color: C.text,
+            }}
+          >
+            AI Assistant
+          </span>
+          {messageCount > 0 && (
+            <span
+              style={{
+                fontFamily: FONTS.mono,
+                fontSize: 9,
+                color: C.textDim,
+                letterSpacing: "0.05em",
+              }}
+            >
+              ({String(messageCount).padStart(2, "0")})
             </span>
-            {messageCount > 0 && (
-              <span
-                className="ml-2 text-xs tabular-nums"
-                style={{ color: "hsl(220 14% 45%)" }}
-              >
-                {messageCount} message{messageCount !== 1 ? "s" : ""}
-              </span>
-            )}
-          </div>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -694,81 +719,130 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
       >
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-4 py-8">
-            {/* Logo */}
-            <div
-              className="w-16 h-16 rounded-2xl flex items-center justify-center relative"
-              style={{
-                background: "linear-gradient(135deg, hsl(207 90% 45%) 0%, hsl(220 80% 35%) 100%)",
-                boxShadow: "0 8px 32px hsl(207 90% 35% / 0.35), 0 0 0 1px hsl(207 90% 50% / 0.2)",
-              }}
-            >
-              <Sparkles size={28} style={{ color: "white" }} />
+            {/* Editorial empty-state — display heading + numbered prompts */}
+            <div style={{ width: "100%", maxWidth: 360, padding: "32px 8px" }}>
+              {/* Mono kicker */}
               <div
-                className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center"
                 style={{
-                  background: "hsl(142 71% 45%)",
-                  boxShadow: "0 2px 6px hsl(142 71% 40% / 0.4)",
-                  border: "2px solid hsl(220 13% 15%)",
+                  fontFamily: FONTS.mono,
+                  fontSize: 9, fontWeight: 500,
+                  letterSpacing: "0.18em", textTransform: "uppercase",
+                  color: C.accent, marginBottom: 12,
                 }}
               >
-                <Zap size={10} style={{ color: "white" }} />
+                <span style={{ color: C.textDim }}>// </span>type <kbd style={{
+                  display: "inline-block",
+                  padding: "1px 5px",
+                  background: C.surfaceAlt,
+                  color: C.accent,
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 2,
+                  fontSize: 9, fontFamily: FONTS.mono,
+                  margin: "0 2px",
+                }}>/</kbd> for commands
               </div>
-            </div>
 
-            <div>
-              <p
-                className="text-base font-semibold"
-                style={{ color: "hsl(220 14% 88%)", letterSpacing: "-0.02em" }}
+              {/* Display heading */}
+              <h2
+                style={{
+                  fontFamily: FONTS.display,
+                  fontSize: 38,
+                  fontWeight: 400,
+                  lineHeight: 1.0,
+                  letterSpacing: "-0.02em",
+                  color: C.text,
+                  margin: 0,
+                }}
               >
-                What shall we build?
-              </p>
-              <p className="text-xs mt-1.5" style={{ color: "hsl(220 14% 48%)" }}>
-                Type <kbd
-                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-mono"
-                  style={{
-                    background: "hsl(220 13% 22%)",
-                    border: "1px solid hsl(220 13% 30%)",
-                    color: "hsl(207 90% 65%)",
-                  }}
-                >/</kbd> for commands or describe what you want
-              </p>
-            </div>
+                what shall we{" "}
+                <span style={{ fontStyle: "italic", color: C.accent }}>build</span>
+                <span style={{ color: C.accent }}>.</span>
+              </h2>
 
-            {/* Suggestion cards */}
-            <div className="grid grid-cols-2 gap-2 mt-2 w-full max-w-[300px]">
-              {suggestions.map((s, i) => (
-                <button
-                  key={i}
-                  className="flex items-center gap-2 text-xs rounded-xl px-3 py-2.5 text-left transition-all duration-200 group"
-                  style={{
-                    background: "hsl(220 13% 19%)",
-                    color: "hsl(220 14% 68%)",
-                    border: "1px solid hsl(220 13% 24%)",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = "hsl(207 90% 45% / 0.4)";
-                    e.currentTarget.style.background = "hsl(220 13% 21%)";
-                    e.currentTarget.style.color = "hsl(220 14% 85%)";
-                    e.currentTarget.style.transform = "translateY(-1px)";
-                    e.currentTarget.style.boxShadow = "0 4px 12px hsl(220 13% 5% / 0.3)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = "hsl(220 13% 24%)";
-                    e.currentTarget.style.background = "hsl(220 13% 19%)";
-                    e.currentTarget.style.color = "hsl(220 14% 68%)";
-                    e.currentTarget.style.transform = "translateY(0)";
-                    e.currentTarget.style.boxShadow = "none";
-                  }}
-                  onClick={() => {
-                    setInput(s.text);
-                    setCharCount(s.text.length);
-                    textareaRef.current?.focus();
-                  }}
-                >
-                  <span style={{ color: "hsl(207 90% 60%)", flexShrink: 0 }}>{s.icon}</span>
-                  <span className="leading-tight">{s.text}</span>
-                </button>
-              ))}
+              <p
+                style={{
+                  marginTop: 14,
+                  fontSize: 12,
+                  color: C.textMid,
+                  lineHeight: 1.5,
+                }}
+              >
+                Describe a feature, ask for a refactor, or pick a starter below.
+              </p>
+
+              {/* Numbered prompt list */}
+              <ol
+                style={{
+                  listStyle: "none",
+                  margin: "28px 0 0",
+                  padding: 0,
+                  borderTop: `1px solid ${C.border}`,
+                }}
+              >
+                {suggestions.map((s, i) => (
+                  <li key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <button
+                      onClick={() => {
+                        setInput(s.text);
+                        setCharCount(s.text.length);
+                        textareaRef.current?.focus();
+                      }}
+                      style={{
+                        width: "100%",
+                        display: "grid",
+                        gridTemplateColumns: "auto 1fr",
+                        alignItems: "baseline",
+                        gap: 14,
+                        padding: "12px 4px",
+                        background: "transparent",
+                        border: "none",
+                        textAlign: "left",
+                        cursor: "pointer",
+                        transition: "padding 0.18s ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.paddingLeft = "10px";
+                        const lbl = e.currentTarget.querySelector("[data-prompt]") as HTMLElement;
+                        const idx = e.currentTarget.querySelector("[data-idx]") as HTMLElement;
+                        if (lbl) lbl.style.color = C.accent;
+                        if (idx) idx.style.color = C.accent;
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.paddingLeft = "4px";
+                        const lbl = e.currentTarget.querySelector("[data-prompt]") as HTMLElement;
+                        const idx = e.currentTarget.querySelector("[data-idx]") as HTMLElement;
+                        if (lbl) lbl.style.color = C.text;
+                        if (idx) idx.style.color = C.textDim;
+                      }}
+                    >
+                      <span
+                        data-idx
+                        style={{
+                          fontFamily: FONTS.mono,
+                          fontSize: 9,
+                          color: C.textDim,
+                          letterSpacing: "0.05em",
+                          transition: "color 0.18s",
+                        }}
+                      >
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      <span
+                        data-prompt
+                        style={{
+                          fontFamily: FONTS.display,
+                          fontSize: 16,
+                          color: C.text,
+                          lineHeight: 1.3,
+                          transition: "color 0.18s",
+                        }}
+                      >
+                        {s.text}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
             </div>
           </div>
         )}
