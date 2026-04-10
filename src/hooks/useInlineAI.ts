@@ -27,8 +27,14 @@ const LLM_URL = "https://the3rdacademy.com/api/chat/completions";
 const LLM_MODEL = "kilo-auto/free";
 const DEBUG = typeof window !== "undefined" && localStorage.getItem("pipilot:debug-inline-ai") === "1";
 const CACHE_SIZE = 10;
-const FETCH_INTERVAL = 500;
-const STOP_AFTER_IDLE = 1500;
+// Aggressive Cursor-like timings
+const KEYSTROKE_DEBOUNCE = 80;   // Trigger after 80ms of no typing (was 500ms interval)
+const STOP_AFTER_IDLE = 800;     // Stop background work after 800ms idle (was 1500)
+const MAX_OUTPUT_TOKENS = 100;   // Short snippets = faster generation
+const CONTEXT_LINES_BEFORE = 30; // Smaller prompt = faster (was 80)
+const CONTEXT_LINES_AFTER = 10;  // (was 30)
+const CONTEXT_CHARS_BEFORE = 1500; // (was 4000)
+const CONTEXT_CHARS_AFTER = 600;   // (was 1500)
 
 function dlog(...args: any[]) {
   if (DEBUG) console.log("[inline-ai]", ...args);
@@ -43,45 +49,28 @@ interface CachedSuggestion {
 let registered = false;
 let activeEditor: MonacoEditor.IStandaloneCodeEditor | null = null;
 const cache: CachedSuggestion[] = [];
-let fetchIntervalId: number | undefined;
+let debouncedFetchTimer: number | undefined;
 let stopIdleTimeoutId: number | undefined;
 let inFlightAbort: AbortController | null = null;
 let activeProjectInfo: { language: string } = { language: "code" };
 
 // ─── Helpers ─────────────────────────────────────────────────────
-function clipBefore(text: string, maxLines = 80, maxChars = 4000): string {
+function clipBefore(text: string, maxLines = CONTEXT_LINES_BEFORE, maxChars = CONTEXT_CHARS_BEFORE): string {
   const lines = text.split("\n");
   const recent = lines.slice(-maxLines).join("\n");
   return recent.length > maxChars ? recent.slice(-maxChars) : recent;
 }
 
-function clipAfter(text: string, maxLines = 30, maxChars = 1500): string {
+function clipAfter(text: string, maxLines = CONTEXT_LINES_AFTER, maxChars = CONTEXT_CHARS_AFTER): string {
   const lines = text.split("\n");
   const next = lines.slice(0, maxLines).join("\n");
   return next.length > maxChars ? next.slice(0, maxChars) : next;
 }
 
 function buildSystemPrompt(language: string): string {
-  return `## Task: Code Completion
-
-### Language: ${language}
-
-### Instructions:
-- You are a world-class coding assistant.
-- Given the current text and the cursor position, provide ONLY the code that should be inserted at the cursor.
-- The suggestion must be based on the current text, especially the text before the cursor.
-- This is not a conversation — do not ask questions or prompt for additional information.
-
-### Strict Rules:
-- NEVER include any markdown in the response — no code fences, no language tags.
-- Never include annotations like "# Suggestion:" or "// completion:".
-- Newlines should be used after { [ ( and before } ] ), with proper indentation matching the current line.
-- Never suggest a newline after a space or newline.
-- The suggestion must START with characters that fit naturally where the cursor is.
-- Only ever return the code snippet itself.
-- Do NOT return code that is already present in the current text.
-- Do not return anything that is not valid code.
-- If you have no suggestion, return an empty string.`;
+  // Kept ultra-short for low latency. Every token in the system prompt
+  // costs latency on every request.
+  return `You are a ${language} code completion engine. Output ONLY the raw code to insert at <|cursor|>. No markdown, no fences, no commentary, no echoing existing text. Keep it short — usually 1-3 lines. Empty response if unsure.`;
 }
 
 class CompletionFormatter {
@@ -255,8 +244,8 @@ async function fetchSuggestion(): Promise<void> {
           { role: "system", content: buildSystemPrompt(language) },
           { role: "user", content: `${before}<|cursor|>${after}` },
         ],
-        temperature: 0.2,
-        max_tokens: 200,
+        temperature: 0,         // deterministic — no random sampling cost
+        max_tokens: MAX_OUTPUT_TOKENS,
         stream: false,
         direct_kilo: true,
       }),
@@ -313,27 +302,30 @@ async function fetchSuggestion(): Promise<void> {
   }
 }
 
-function startFetching() {
-  if (fetchIntervalId === undefined) {
-    dlog("starting fetch interval");
-    fetchSuggestion(); // immediate
-    fetchIntervalId = window.setInterval(fetchSuggestion, FETCH_INTERVAL);
-  }
-  // Reset the idle stop timer
+function scheduleFetch() {
+  // Debounced — kicks off a fetch KEYSTROKE_DEBOUNCE ms after the last keystroke.
+  // This is what makes Cursor feel instant: no fixed-interval delay, the fetch
+  // starts the moment the user stops typing.
+  if (debouncedFetchTimer !== undefined) clearTimeout(debouncedFetchTimer);
+  debouncedFetchTimer = window.setTimeout(() => {
+    debouncedFetchTimer = undefined;
+    fetchSuggestion();
+  }, KEYSTROKE_DEBOUNCE);
+
+  // Idle watchdog: cancel pending requests if user stops interacting entirely
   if (stopIdleTimeoutId !== undefined) clearTimeout(stopIdleTimeoutId);
   stopIdleTimeoutId = window.setTimeout(() => {
-    if (fetchIntervalId !== undefined) {
-      dlog("idle — stopping fetch interval");
-      clearInterval(fetchIntervalId);
-      fetchIntervalId = undefined;
+    if (inFlightAbort) {
+      try { inFlightAbort.abort(); } catch {}
+      inFlightAbort = null;
     }
   }, STOP_AFTER_IDLE);
 }
 
 function stopFetching() {
-  if (fetchIntervalId !== undefined) {
-    clearInterval(fetchIntervalId);
-    fetchIntervalId = undefined;
+  if (debouncedFetchTimer !== undefined) {
+    clearTimeout(debouncedFetchTimer);
+    debouncedFetchTimer = undefined;
   }
   if (stopIdleTimeoutId !== undefined) {
     clearTimeout(stopIdleTimeoutId);
@@ -370,11 +362,13 @@ function registerProvider(monaco: typeof Monaco) {
         cacheSize: cache.length,
       });
 
-      // Filter cache for entries relevant to current position
+      // Filter cache for entries relevant to current position. With the
+      // debounced fetcher, the user may have typed 1-2 more chars between
+      // when the request was issued and the response arrived, so allow
+      // up to 8 columns of drift on the same line.
       const relevant = cache.filter((s) => {
-        // Same line, and the suggestion was made within ~3 columns of cursor
         if (s.range.startLineNumber !== position.lineNumber) return false;
-        if (Math.abs(s.range.startColumn - position.column) > 3) return false;
+        if (Math.abs(s.range.startColumn - position.column) > 8) return false;
         return true;
       });
 
@@ -434,14 +428,10 @@ export function setupInlineAI(
 
   const disposables: IDisposable[] = [];
 
-  // Trigger background fetching whenever the user types
+  // Trigger debounced fetch whenever the user types
   disposables.push(
     editor.onDidChangeModelContent(() => {
-      // Clear cache on content change so stale suggestions don't surface
-      // (but we keep recent ones — only clear if a long time has passed
-      //  or if cursor moved far). Simpler: invalidate by position in the
-      //  filter step, which we already do.
-      startFetching();
+      scheduleFetch();
     }),
   );
 
