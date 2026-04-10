@@ -91,7 +91,8 @@
       "Bash(find C:/Users/big/Documents/Projects/pipilot-ide/src -path *extensions* -name *.ts*)",
       "Bash(wc:*)",
       "Bash(echo \"const x: number = \"\"broken\"\"; let y = unknownVar;\")",
-      "Bash(cmd.exe /c \"node_modules\\\\.bin\\\\tsc.cmd --noEmit --pretty false\")"
+      "Bash(cmd.exe /c \"node_modules\\\\.bin\\\\tsc.cmd --noEmit --pretty false\")",
+      "Bash(find C:/Users/big/Documents/Projects/pipilot-ide -name *.md -path *frontend-design*)"
     ]
   }
 }
