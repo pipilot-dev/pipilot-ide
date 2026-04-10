@@ -15,7 +15,13 @@ export function useProjects() {
     type: "static" | "nodebox" | "cloud" = "static",
     template?: ProjectTemplate
   ): Promise<string> => {
-    const id = `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Use slugified name as ID — check availability
+    const baseSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+    let id = baseSlug || "project";
+    const existing = await db.projects.get(id);
+    if (existing) {
+      id = `${baseSlug}-${Date.now().toString(36).slice(-4)}`;
+    }
     const now = new Date();
 
     // Resolve template from type if not specified
@@ -42,6 +48,18 @@ export function useProjects() {
       }))
     );
 
+    // Auto-seed template files to the server workspace
+    try {
+      await fetch("/api/files/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: id,
+          files: seedFiles.filter(f => f.type === "file").map(f => ({ path: f.id, content: f.content || "" })),
+        }),
+      });
+    } catch {}
+
     // Create a default chat session for the new project
     await db.chatSessions.put({
       id: `chat-${id}`,
@@ -67,6 +85,11 @@ export function useProjects() {
     if (allProjects.length <= 1) {
       throw new Error("Cannot delete the last project");
     }
+
+    // Delete workspace folder on disk
+    try {
+      await fetch(`/api/files/workspace?projectId=${encodeURIComponent(id)}`, { method: "DELETE" });
+    } catch {}
 
     // Delete all files belonging to this project
     const projectFiles = await db.files.where("projectId").equals(id).toArray();

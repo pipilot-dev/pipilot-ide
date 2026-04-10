@@ -4,7 +4,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { streamText, tool, stepCountIs } from "ai";
 import { z } from "zod";
 
-export type ChatMode = "chat" | "agent";
+export type ChatMode = "chat" | "agent" | "claude-agent";
 
 export interface ToolCallInfo {
   id: string;
@@ -20,6 +20,12 @@ export interface BuiltinToolStatus {
   arguments?: Record<string, unknown>;
 }
 
+export interface MessagePart {
+  type: "text" | "tool";
+  content?: string;       // for text parts
+  toolCallId?: string;    // for tool parts — references toolCalls[] by id
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "tool";
@@ -29,7 +35,8 @@ export interface ChatMessage {
   toolCalls?: ToolCallInfo[];
   builtinToolStatuses?: BuiltinToolStatus[];
   tool_call_id?: string;
-  checkpointId?: string; // checkpoint created after this conversation turn
+  checkpointId?: string;
+  parts?: MessagePart[];  // ordered sequence of text chunks and tool calls
 }
 
 function generateId() {
@@ -191,23 +198,30 @@ File paths are **relative, NO leading slash**: \`"app.js"\` ✅ \`"/app.js"\` �
 
 **Files:** create_file, edit_file (search/replace or newContent), read_file, delete_file, list_files, search_files, batch_create_files (use for 2+ files), rename_file, copy_file, get_project_tree
 **Preview:** screenshot_preview (verify UI visually), preview_find_elements, preview_click, preview_scroll, preview_type
-**Other:** deploy_site${isNodeProject ? "" : " (to puter.site)"}, run_script (execute JS/Node.js, use console.log for output)
+**Other:** deploy_site${isNodeProject ? "" : " (to puter.site)"}, run_script (test logic/APIs, can fs.readFileSync but NEVER fs.writeFileSync — use create_file/edit_file for writes)
 
 ## DESIGN
 
-- Unique Google Font pairings (not Inter/Roboto/Arial). CSS variables for colors.
-- Images: \`https://api.a0.dev/assets/image?text={url-encoded description}&aspect={16:9|1:1|9:16}\`. Use on every page.
-- Icons: Lucide CDN for UI, Simple Icons for brands. No emojis.
-- Responsive: mobile-first, hamburger nav, grid breakpoints. Animations: fadeInUp, hover effects.
-- Real content, no lorem ipsum. Complete pages, no placeholders.
+Create distinctive, production-grade interfaces. NEVER generic "AI slop" aesthetics. Commit to a BOLD aesthetic direction.
+- **Typography**: Distinctive, characterful fonts. NEVER Inter/Roboto/Arial. Pair display + body fonts.
+- **Color**: Cohesive palette with CSS variables. Dominant colors + sharp accents.
+- **Motion**: Staggered fadeIn on load (animation-delay), hover surprises, scroll-triggered animations.
+- **Layout**: Unexpected compositions — asymmetry, overlap, grid-breaking, generous negative space.
+- **Depth**: Gradient meshes, noise textures, shadows, grain overlays. Never flat solid backgrounds.
+- **Images**: \`https://api.a0.dev/assets/image?text={url-encoded description}&aspect={16:9|1:1|9:16}\`. Every page.
+- **Icons**: Lucide CDN for UI, Simple Icons for brands. No emojis.
+- **Content**: Real names, prices, dates. No lorem ipsum. Complete all pages fully.
+No design should be the same. Vary fonts, themes, aesthetics. Match complexity to vision.
 
-## RULES
+## RULES (STRICT)
 
-1. NEVER paste code in chat — use file tools. Keep chat to 1-2 sentences.
-2. Use batch_create_files to scaffold. read_file before edit_file.
-3. Use screenshot_preview after building UI. Fix issues immediately.
-4. Build complete, polished, production-quality apps — not demos.
-5. Deploy with deploy_site when done. Tell user the live URL.`;
+1. NEVER paste code in chat — use file tools only. Keep chat to 1 sentence max.
+2. **EXACTLY ONE tool call per response. NEVER call 2+ tools at once.** After each tool call, stop and let it execute. Then continue in the next step.
+3. read_file before edit_file. Never guess at content.
+4. Build one file at a time: index.html → styles.css → app.js. User sees each file appear live.
+5. Build complete, polished, production-quality apps with real content.
+6. For new projects: DON'T read existing files first. Just start creating. Use get_project_tree only if editing existing code.
+7. **NEVER use run_script with fs.writeFileSync.** All file writes MUST use create_file or edit_file so changes sync to the IDE. run_script can read files with fs.readFileSync but writing bypasses the IDE and preview.`;
 }
 
 // ─── AI SDK Provider ────────────────────────────────────────────────────────
@@ -224,7 +238,7 @@ const provider = createOpenAICompatible({
 
 // ─── AI SDK Tool Definitions ────────────────────────────────────────────────
 
-const MAX_TOOL_RESULT = 3000; // ~750 tokens
+const MAX_TOOL_RESULT = 12000; // ~3000 tokens — generous context for file reads
 
 function truncateToolResult(result: string): string {
   if (result.length <= MAX_TOOL_RESULT) return result;
@@ -306,7 +320,7 @@ function buildAITools(executor: ToolExecutor) {
       execute: async (args) => exec("search_files", args),
     }),
     run_script: tool({
-      description: "Execute JS/Node.js code and return output. Use console.log().",
+      description: "Execute JS/Node.js code and return output. Use console.log(). Can read files with fs.readFileSync. NEVER use fs.writeFileSync — use create_file/edit_file tools for writes so changes sync to the IDE.",
       parameters: z.object({
         code: z.string(),
         timeout: z.number().optional(),
@@ -429,15 +443,20 @@ export function useChat(
           }
         }
 
-        // Build conversation history — keep last 30 messages to limit token usage
-        const MAX_CONTEXT_MESSAGES = 30;
+        // Build conversation history — keep last 10 messages to limit token usage
+        // AI SDK handles tool results internally within each step
+        const MAX_CONTEXT_MESSAGES = 10;
         const allMessages = [...messagesRef.current, userMsg];
         let conversationMessages = allMessages
           .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({
-            role: m.role as "user" | "assistant",
-            content: m.content,
-          }));
+          .map((m, i, arr) => {
+            let content = m.content;
+            // Truncate old assistant messages (not the latest) to save tokens
+            if (m.role === "assistant" && i < arr.length - 2 && content.length > 500) {
+              content = content.slice(0, 500) + "\n[...truncated]";
+            }
+            return { role: m.role as "user" | "assistant", content };
+          });
 
         // Trim old messages but always keep at least the latest user message
         if (conversationMessages.length > MAX_CONTEXT_MESSAGES) {

@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+
+# Agent SDK workspaces
+workspaces/
 .pnp
 .pnp.js
 

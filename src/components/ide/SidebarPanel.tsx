@@ -104,9 +104,14 @@ interface SidebarPanelProps {
   files: FileNode[];
   onSearchFiles?: (query: string) => void;
   onRunPreview?: () => void;
+  onCreateFile?: (filePath: string, content?: string) => Promise<void>;
+  onCreateFolder?: (folderPath: string) => Promise<void>;
+  onRenameFile?: (oldPath: string, newPath: string) => Promise<void>;
+  onDeleteFile?: (filePath: string) => Promise<void>;
+  onUpdateFileContent?: (filePath: string, content: string) => Promise<void>;
 }
 
-export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSearchFiles, onRunPreview }: SidebarPanelProps) {
+export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSearchFiles, onRunPreview, onCreateFile, onCreateFolder, onRenameFile, onDeleteFile, onUpdateFileContent }: SidebarPanelProps) {
   const { activeProjectId } = useActiveProject();
   const { activeProject } = useProjects();
   const [searchQuery, setSearchQuery] = useState("");
@@ -283,10 +288,13 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
   const handleReplace = useCallback(
     async (fileId: string, match: ContentMatch) => {
       try {
-        const file = await db.files.get(fileId);
-        if (!file || !file.content) return;
+        // Try to get content from in-memory tree first, fall back to DB
+        const flatFiles = flattenFileTree(files);
+        const inMemory = flatFiles.find((f) => f.id === fileId);
+        const content = inMemory?.content ?? (await db.files.get(fileId))?.content;
+        if (!content) return;
 
-        const lines = file.content.split("\n");
+        const lines = content.split("\n");
         const lineIdx = match.lineNumber - 1;
         if (lineIdx < 0 || lineIdx >= lines.length) return;
 
@@ -301,7 +309,11 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
         lines[lineIdx] = line.replace(pattern, replaceQuery);
         const newContent = lines.join("\n");
 
-        await db.files.update(fileId, { content: newContent, updatedAt: new Date() });
+        if (onUpdateFileContent) {
+          await onUpdateFileContent(fileId, newContent);
+        } else {
+          await db.files.update(fileId, { content: newContent, updatedAt: new Date() });
+        }
         // Re-trigger search
         setDebouncedQuery("");
         setTimeout(() => setDebouncedQuery(sidebarSearchQuery), 50);
@@ -309,15 +321,18 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
         console.error("Replace failed:", err);
       }
     },
-    [debouncedQuery, replaceQuery, useRegex, caseSensitive, sidebarSearchQuery]
+    [debouncedQuery, replaceQuery, useRegex, caseSensitive, sidebarSearchQuery, files, onUpdateFileContent]
   );
 
   // Replace all in a single file
   const handleReplaceInFile = useCallback(
     async (fileId: string) => {
       try {
-        const file = await db.files.get(fileId);
-        if (!file || !file.content) return;
+        // Try to get content from in-memory tree first, fall back to DB
+        const flatFiles = flattenFileTree(files);
+        const inMemory = flatFiles.find((f) => f.id === fileId);
+        const content = inMemory?.content ?? (await db.files.get(fileId))?.content;
+        if (!content) return;
 
         let pattern: RegExp;
         if (useRegex) {
@@ -326,8 +341,12 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
           pattern = new RegExp(escapeRegExp(debouncedQuery), caseSensitive ? "g" : "gi");
         }
 
-        const newContent = file.content.replace(pattern, replaceQuery);
-        await db.files.update(fileId, { content: newContent, updatedAt: new Date() });
+        const newContent = content.replace(pattern, replaceQuery);
+        if (onUpdateFileContent) {
+          await onUpdateFileContent(fileId, newContent);
+        } else {
+          await db.files.update(fileId, { content: newContent, updatedAt: new Date() });
+        }
         // Re-trigger search
         setDebouncedQuery("");
         setTimeout(() => setDebouncedQuery(sidebarSearchQuery), 50);
@@ -335,7 +354,7 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
         console.error("Replace all failed:", err);
       }
     },
-    [debouncedQuery, replaceQuery, useRegex, caseSensitive, sidebarSearchQuery]
+    [debouncedQuery, replaceQuery, useRegex, caseSensitive, sidebarSearchQuery, files, onUpdateFileContent]
   );
 
   // Replace all across all files
@@ -424,11 +443,15 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     const trimmed = name.trim();
     const filePath = parentPath ? `${parentPath}/${trimmed}` : trimmed;
     try {
-      await fileOps.createFile(filePath, "", activeProjectId);
+      if (onCreateFile) {
+        await onCreateFile(filePath, "");
+      } else {
+        await fileOps.createFile(filePath, "", activeProjectId);
+      }
     } catch (err) {
       alert(`Failed to create file: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [activeProjectId]);
+  }, [activeProjectId, onCreateFile]);
 
   const handleCreateFolder = useCallback(async (parentPath: string) => {
     const name = prompt("Enter folder name:");
@@ -436,24 +459,28 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     const trimmed = name.trim();
     const folderPath = parentPath ? `${parentPath}/${trimmed}` : trimmed;
     try {
-      const existing = await db.files.get(folderPath);
-      if (existing) {
-        alert(`A file or folder already exists at: ${folderPath}`);
-        return;
+      if (onCreateFolder) {
+        await onCreateFolder(folderPath);
+      } else {
+        const existing = await db.files.get(folderPath);
+        if (existing) {
+          alert(`A file or folder already exists at: ${folderPath}`);
+          return;
+        }
+        await db.files.put({
+          id: folderPath,
+          name: trimmed,
+          type: "folder",
+          parentPath,
+          projectId: activeProjectId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
       }
-      await db.files.put({
-        id: folderPath,
-        name: trimmed,
-        type: "folder",
-        parentPath,
-        projectId: activeProjectId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
     } catch (err) {
       alert(`Failed to create folder: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [activeProjectId]);
+  }, [activeProjectId, onCreateFolder]);
 
   const handleCtxRename = useCallback((node: FileNode) => {
     setRenamingNodeId(node.id);
@@ -470,57 +497,61 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     const newPath = parentPath ? `${parentPath}/${newName}` : newName;
 
     try {
-      const existing = await db.files.get(newPath);
-      if (existing) {
-        alert(`A file or folder already exists at: ${newPath}`);
-        return;
-      }
-
-      const oldFile = await db.files.get(oldPath);
-      if (!oldFile) return;
-
-      if (node.type === "folder") {
-        // Recursively rename folder and all descendants
-        const allFiles = await db.files.toArray();
-        const descendants = allFiles.filter(
-          (f) => f.parentPath === oldPath || f.parentPath.startsWith(oldPath + "/")
-        );
-
-        await db.files.put({
-          ...oldFile,
-          id: newPath,
-          name: newName,
-          updatedAt: new Date(),
-        });
-
-        for (const desc of descendants) {
-          const newDescId = newPath + desc.id.substring(oldPath.length);
-          const newDescParent = newPath + desc.parentPath.substring(oldPath.length);
-          await db.files.put({
-            ...desc,
-            id: newDescId,
-            parentPath: newDescParent,
-            updatedAt: new Date(),
-          });
-          await db.files.delete(desc.id);
+      if (onRenameFile) {
+        await onRenameFile(oldPath, newPath);
+      } else {
+        const existing = await db.files.get(newPath);
+        if (existing) {
+          alert(`A file or folder already exists at: ${newPath}`);
+          return;
         }
 
-        await db.files.delete(oldPath);
-      } else {
-        const ext = newName.split(".").pop()?.toLowerCase();
-        await db.files.put({
-          ...oldFile,
-          id: newPath,
-          name: newName,
-          language: LANG_MAP[ext ?? ""] ?? "plaintext",
-          updatedAt: new Date(),
-        });
-        await db.files.delete(oldPath);
+        const oldFile = await db.files.get(oldPath);
+        if (!oldFile) return;
+
+        if (node.type === "folder") {
+          // Recursively rename folder and all descendants
+          const allFiles = await db.files.toArray();
+          const descendants = allFiles.filter(
+            (f) => f.parentPath === oldPath || f.parentPath.startsWith(oldPath + "/")
+          );
+
+          await db.files.put({
+            ...oldFile,
+            id: newPath,
+            name: newName,
+            updatedAt: new Date(),
+          });
+
+          for (const desc of descendants) {
+            const newDescId = newPath + desc.id.substring(oldPath.length);
+            const newDescParent = newPath + desc.parentPath.substring(oldPath.length);
+            await db.files.put({
+              ...desc,
+              id: newDescId,
+              parentPath: newDescParent,
+              updatedAt: new Date(),
+            });
+            await db.files.delete(desc.id);
+          }
+
+          await db.files.delete(oldPath);
+        } else {
+          const ext = newName.split(".").pop()?.toLowerCase();
+          await db.files.put({
+            ...oldFile,
+            id: newPath,
+            name: newName,
+            language: LANG_MAP[ext ?? ""] ?? "plaintext",
+            updatedAt: new Date(),
+          });
+          await db.files.delete(oldPath);
+        }
       }
     } catch (err) {
       alert(`Rename failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, []);
+  }, [onRenameFile]);
 
   const handleRenameCancel = useCallback(() => {
     setRenamingNodeId(null);
@@ -530,11 +561,15 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     const confirmed = confirm(`Delete "${node.name}"${node.type === "folder" ? " and all its contents" : ""}?`);
     if (!confirmed) return;
     try {
-      await fileOps.deleteFile(node.id);
+      if (onDeleteFile) {
+        await onDeleteFile(node.id);
+      } else {
+        await fileOps.deleteFile(node.id);
+      }
     } catch (err) {
       alert(`Delete failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, []);
+  }, [onDeleteFile]);
 
   const handleDuplicate = useCallback(async (node: FileNode) => {
     if (node.type === "folder") return;
@@ -549,12 +584,19 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     const newPath = parentPath ? `${parentPath}/${newName}` : newName;
 
     try {
-      const original = await db.files.get(node.id);
-      await fileOps.createFile(newPath, original?.content ?? "", original?.projectId);
+      if (onCreateFile) {
+        // Get content from in-memory tree for agent mode
+        const flatFiles = flattenFileTree(files);
+        const inMemory = flatFiles.find((f) => f.id === node.id);
+        await onCreateFile(newPath, inMemory?.content ?? node.content ?? "");
+      } else {
+        const original = await db.files.get(node.id);
+        await fileOps.createFile(newPath, original?.content ?? "", original?.projectId);
+      }
     } catch (err) {
       alert(`Duplicate failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, []);
+  }, [onCreateFile, files]);
 
   const handleCopyPath = useCallback((node: FileNode) => {
     navigator.clipboard.writeText(node.id).catch(() => {
@@ -583,6 +625,16 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
             style={{ color: "hsl(220 14% 60%)" }}
           >
             <span>Explorer</span>
+            {activeProject?.type && activeProject.type !== "static" && (
+              <span style={{
+                fontSize: 8, padding: "1px 4px", borderRadius: 3, marginLeft: 4,
+                background: activeProject.type === "cloud" ? "hsl(280 65% 55% / 0.2)" : "hsl(142 71% 45% / 0.2)",
+                color: activeProject.type === "cloud" ? "hsl(280 65% 60%)" : "hsl(142 71% 45%)",
+                textTransform: "none" as const, letterSpacing: "normal",
+              }}>
+                {activeProject.type === "cloud" ? "Cloud" : "Node"}
+              </span>
+            )}
             <div className="flex items-center gap-1">
               <button
                 className="p-1 rounded hover:bg-white/10 transition-colors"

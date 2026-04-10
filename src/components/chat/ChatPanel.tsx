@@ -24,6 +24,10 @@ import {
   X,
 } from "lucide-react";
 import { useChat, ChatMode, ToolExecutor, WorkspaceContext, CheckpointManager } from "@/hooks/useChat";
+import { useAgentChat } from "@/hooks/useAgentChat";
+import { TodoPanel } from "./TodoPanel";
+import { AskUserDialog } from "./AskUserDialog";
+import { QueuePanel } from "./QueuePanel";
 import { ChatMessageItem, AssistantTurnGroup } from "./ChatMessage";
 import { ChatMessage } from "@/hooks/useChat";
 import { FileNode } from "@/hooks/useFileSystem";
@@ -160,20 +164,33 @@ interface ChatPanelProps {
   checkpointManager?: CheckpointManager;
   projectId?: string;
   fileTree?: FileNode[];
+  activeProvider?: "ai-sdk" | "claude-agent";
+  onProviderChange?: (provider: "ai-sdk" | "claude-agent") => void;
 }
 
-export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, projectId, fileTree }: ChatPanelProps) {
-  const {
-    messages,
-    isStreaming,
-    mode,
-    setMode,
-    sendMessage,
-    stopStreaming,
-    clearMessages,
-    deleteMessage,
-    revertToMessage,
-  } = useChat(toolExecutor, workspaceContext, checkpointManager, projectId);
+export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, projectId, fileTree, activeProvider: activeProviderProp, onProviderChange }: ChatPanelProps) {
+  // Call both hooks unconditionally (React rules), pick based on active mode
+  const aiSdk = useChat(toolExecutor, workspaceContext, checkpointManager, projectId);
+  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, projectId);
+  const activeProvider = activeProviderProp || "claude-agent";
+  const setActiveProvider = onProviderChange || (() => {});
+
+  const chat = activeProvider === "claude-agent" ? agentSdk : aiSdk;
+  const { messages, isStreaming, mode, setMode, sendMessage, stopStreaming, clearMessages, deleteMessage, revertToMessage } = chat;
+  const agentTodos = activeProvider === "claude-agent" ? (agentSdk as any).todos || [] : [];
+  const agentPendingQuestion = activeProvider === "claude-agent" ? (agentSdk as any).pendingQuestion || null : null;
+  const agentAnswerQuestion = activeProvider === "claude-agent" ? (agentSdk as any).answerQuestion : null;
+
+  // Sync mode changes to switch providers
+  const handleSetMode = useCallback((newMode: ChatMode) => {
+    if (newMode === "claude-agent") {
+      setActiveProvider("claude-agent");
+      agentSdk.setMode("claude-agent");
+    } else {
+      setActiveProvider("ai-sdk");
+      aiSdk.setMode(newMode);
+    }
+  }, [aiSdk, agentSdk]);
 
   const handleDeleteMessage = useCallback(
     (messageId: string) => {
@@ -500,6 +517,12 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
       desc: "Multi-step autonomous coding",
       color: "hsl(207 90% 65%)",
     },
+    "claude-agent": {
+      label: "Claude Agent",
+      icon: <Bot size={12} />,
+      desc: "Claude Agent SDK (server-side)",
+      color: "hsl(280 65% 65%)",
+    },
   };
 
   const messageCount = messages.filter((m) => m.role === "user").length;
@@ -549,12 +572,12 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
             <button
               className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all duration-200"
               style={{
-                background: mode === "agent"
-                  ? "linear-gradient(135deg, hsl(207 90% 36% / 0.25) 0%, hsl(207 90% 36% / 0.15) 100%)"
+                background: mode !== "chat"
+                  ? `linear-gradient(135deg, ${mode === "claude-agent" ? "hsl(280 65% 36% / 0.25)" : "hsl(207 90% 36% / 0.25)"} 0%, ${mode === "claude-agent" ? "hsl(280 65% 36% / 0.15)" : "hsl(207 90% 36% / 0.15)"} 100%)`
                   : "hsl(220 13% 22%)",
-                color: modeConfig[mode].color,
-                border: `1px solid ${mode === "agent" ? "hsl(207 90% 45% / 0.3)" : "hsl(220 13% 28%)"}`,
-                boxShadow: mode === "agent" ? "0 0 12px hsl(207 90% 50% / 0.15)" : "none",
+                color: modeConfig[mode]?.color || "hsl(220 14% 65%)",
+                border: `1px solid ${mode !== "chat" ? (mode === "claude-agent" ? "hsl(280 65% 45% / 0.3)" : "hsl(207 90% 45% / 0.3)") : "hsl(220 13% 28%)"}`,
+                boxShadow: mode !== "chat" ? `0 0 12px ${mode === "claude-agent" ? "hsl(280 65% 50% / 0.15)" : "hsl(207 90% 50% / 0.15)"}` : "none",
               }}
               onClick={() => setShowModeMenu((p) => !p)}
               data-testid="chat-mode-toggle"
@@ -577,7 +600,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                     boxShadow: "0 8px 32px hsl(220 13% 5% / 0.6), 0 0 0 1px hsl(220 13% 25%)",
                   }}
                 >
-                  {(["chat", "agent"] as ChatMode[]).map((m) => (
+                  {(["chat", "agent", "claude-agent"] as ChatMode[]).map((m) => (
                     <button
                       key={m}
                       className="w-full flex items-start gap-2.5 px-3.5 py-2.5 text-xs transition-all duration-150 text-left"
@@ -593,7 +616,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                         if (mode !== m) e.currentTarget.style.background = "transparent";
                       }}
                       onClick={() => {
-                        setMode(m);
+                        handleSetMode(m);
                         setShowModeMenu(false);
                       }}
                       data-testid={`chat-mode-option-${m}`}
@@ -633,7 +656,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
       </div>
 
       {/* ── Agent mode badge ── */}
-      {mode === "agent" && (
+      {(mode === "agent" || mode === "claude-agent") && (
         <div
           className="flex items-center gap-2 px-4 py-2 text-xs"
           style={{
@@ -649,8 +672,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
               boxShadow: "0 0 6px hsl(142 71% 50% / 0.5)",
             }}
           />
-          <span style={{ fontWeight: 500 }}>Agent mode</span>
-          <span style={{ color: "hsl(220 14% 45%)" }}>— autonomous coding with file tools</span>
+          <span style={{ fontWeight: 500 }}>{mode === "claude-agent" ? "Claude Agent" : "Agent mode"}</span>
+          <span style={{ color: "hsl(220 14% 45%)" }}>— {mode === "claude-agent" ? "server-side Claude Agent SDK" : "autonomous coding with file tools"}</span>
         </div>
       )}
 
@@ -912,6 +935,21 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         </div>
       )}
 
+      {/* ── Queue Panel (shows pending messages) ── */}
+      {projectId && <QueuePanel projectId={projectId} isStreaming={isStreaming} />}
+
+      {/* ── Todo Panel (above input, like Cursor/Copilot) ── */}
+      {agentTodos.length > 0 && <TodoPanel todos={agentTodos} />}
+
+      {/* ── Ask User Dialog (agent needs input) ── */}
+      {agentPendingQuestion && agentAnswerQuestion && (
+        <AskUserDialog
+          requestId={agentPendingQuestion.requestId}
+          questions={agentPendingQuestion.questions}
+          onAnswer={agentAnswerQuestion}
+        />
+      )}
+
       {/* ── Input Area ── */}
       <div
         className="px-3 py-2.5"
@@ -984,7 +1022,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
               paddingTop: attachments.length > 0 ? "8px" : undefined,
             }}
             placeholder={
-              mode === "agent"
+              mode === "agent" || mode === "claude-agent"
                 ? "Describe what to build, type / for commands, @ to attach files..."
                 : "Ask anything, type @ to attach files..."
             }

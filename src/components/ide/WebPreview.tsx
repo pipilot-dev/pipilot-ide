@@ -6,6 +6,7 @@ import {
 } from "@codesandbox/sandpack-react";
 import { FileNode } from "@/hooks/useFileSystem";
 import { CloudPreview } from "./CloudPreview";
+import { DevServerPreview } from "./DevServerPreview";
 
 interface WebPreviewProps {
   files: FileNode[];
@@ -47,18 +48,30 @@ function FileSyncer({ files }: { files: FileNode[] }) {
     const current = flattenToSandpack(files);
     const prev = prevFilesRef.current;
 
-    // Find added or changed files
-    for (const [path, code] of Object.entries(current)) {
-      if (prev[path] !== code) {
-        // File is new or changed
-        sandpack.updateFile(path, code, false);
+    // Collect all changes first
+    const updates: [string, string][] = [];
+    const deletes: string[] = [];
+
+    for (const [filePath, code] of Object.entries(current)) {
+      if (prev[filePath] !== code) {
+        updates.push([filePath, code]);
+      }
+    }
+    for (const filePath of Object.keys(prev)) {
+      if (!(filePath in current)) {
+        deletes.push(filePath);
       }
     }
 
-    // Find deleted files
-    for (const path of Object.keys(prev)) {
-      if (!(path in current)) {
-        sandpack.deleteFile(path, false);
+    // Apply all changes, trigger preview refresh on the last one
+    if (updates.length > 0 || deletes.length > 0) {
+      for (let i = 0; i < updates.length; i++) {
+        const isLast = i === updates.length - 1 && deletes.length === 0;
+        sandpack.updateFile(updates[i][0], updates[i][1], isLast);
+      }
+      for (let i = 0; i < deletes.length; i++) {
+        const isLast = i === deletes.length - 1;
+        sandpack.deleteFile(deletes[i], isLast);
       }
     }
 
@@ -69,8 +82,9 @@ function FileSyncer({ files }: { files: FileNode[] }) {
 }
 
 export function WebPreview({ files, projectType = "static" }: WebPreviewProps) {
-  if (projectType === "cloud") {
-    return <CloudPreview files={files} />;
+  // For cloud/nodebox projects, use the local dev server preview
+  if (projectType === "cloud" || projectType === "nodebox") {
+    return <DevServerPreview />;
   }
 
   const isNode = projectType === "nodebox";

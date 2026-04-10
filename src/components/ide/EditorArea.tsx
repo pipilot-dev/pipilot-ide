@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
-import Editor, { OnMount } from "@monaco-editor/react";
+import Editor, { OnMount, loader } from "@monaco-editor/react";
 import { X, Circle, ChevronRight, FileCode2, FileJson, FileText, FileType, Folder, Globe } from "lucide-react";
 import { FileNode } from "@/hooks/useFileSystem";
 import { WebPreview } from "./WebPreview";
 import { useSettings } from "@/hooks/useSettings";
+import { useActiveProject } from "@/contexts/ProjectContext";
 
 export interface EditorTab {
   node: FileNode;
@@ -248,13 +249,203 @@ export function EditorArea({
   const [editorMounted, setEditorMounted] = useState(false);
   const changeTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const { get: getSetting } = useSettings();
+  const { activeProjectId } = useActiveProject();
 
   const activeTab = tabs.find((t) => t.node.id === activeTabId);
 
-  const handleMount: OnMount = (editor) => {
+  const monacoRef = useRef<any>(null);
+
+  const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    monacoRef.current = monaco;
     setEditorMounted(true);
+
+    // Configure TypeScript with proper module resolution
+    const tsDefaults = monaco.languages.typescript.typescriptDefaults;
+    const jsDefaults = monaco.languages.typescript.javascriptDefaults;
+
+    const compilerOptions: any = {
+      target: monaco.languages.typescript.ScriptTarget.Latest,
+      module: monaco.languages.typescript.ModuleKind.ESNext,
+      moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+      jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+      allowJs: true,
+      checkJs: false,
+      allowSyntheticDefaultImports: true,
+      esModuleInterop: true,
+      strict: false,
+      noEmit: true,
+      skipLibCheck: true,
+      baseUrl: ".",
+      paths: { "@/*": ["src/*"] },
+    };
+
+    tsDefaults.setCompilerOptions(compilerOptions);
+    jsDefaults.setCompilerOptions(compilerOptions);
+
+    // Enable semantic validation but suppress some noise
+    tsDefaults.setDiagnosticsOptions({
+      noSemanticValidation: false,
+      noSyntaxValidation: false,
+      diagnosticCodesToIgnore: [
+        2307, // Cannot find module
+        2304, // Cannot find name
+        7016, // Could not find declaration file
+        2792, // Cannot find module (moduleResolution)
+        1259, // Module can only be default-imported
+        2686, // UMD global reference
+        1375, // await at top level
+        2345, // Argument type not assignable
+        2322, // Type not assignable
+        2875, // JSX tag requires module path 'react/jsx-runtime'
+        2503, // Cannot find namespace
+        2694, // Namespace has no exported member
+        2695, // Left side of comma operator is unused
+        1005, // ';' expected (JSX)
+        1382, // Unused directive
+        6133, // Declared but never read
+        2339, // Property does not exist on type (too noisy without full types)
+      ],
+    });
+    jsDefaults.setDiagnosticsOptions({
+      noSemanticValidation: false,
+      noSyntaxValidation: false,
+      diagnosticCodesToIgnore: [2307, 2304, 7016, 2792, 1259, 2686, 1375, 8006, 8010, 2875, 2503, 6133],
+    });
+
+    // Enable eager model sync for Ctrl+Click navigation
+    tsDefaults.setEagerModelSync(true);
+    jsDefaults.setEagerModelSync(true);
+
+    // Add essential global type stubs
+    tsDefaults.addExtraLib(`
+declare module "react/jsx-runtime" { export const jsx: any; export const jsxs: any; export const Fragment: any; }
+declare module "react/jsx-dev-runtime" { export const jsxDEV: any; export const Fragment: any; }
+declare namespace NodeJS {
+  type Timeout = ReturnType<typeof setTimeout>;
+  type Timer = ReturnType<typeof setTimeout>;
+  type Immediate = ReturnType<typeof setImmediate>;
+  interface ProcessEnv { [key: string]: string | undefined; NODE_ENV: string; }
+  interface Process { env: ProcessEnv; cwd(): string; argv: string[]; platform: string; exit(code?: number): never; }
+  interface ReadableStream { read(): any; on(event: string, listener: Function): this; pipe(dest: any): any; }
+  interface WritableStream { write(data: any): boolean; end(): void; on(event: string, listener: Function): this; }
+  interface EventEmitter { on(event: string, listener: Function): this; emit(event: string, ...args: any[]): boolean; removeListener(event: string, listener: Function): this; }
+}
+declare var process: NodeJS.Process;
+declare var __dirname: string;
+declare var __filename: string;
+declare var Buffer: { from(data: any, encoding?: string): any; alloc(size: number): any; isBuffer(obj: any): boolean; };
+declare function require(module: string): any;
+declare var module: { exports: any };
+declare var exports: any;
+declare module "*.css" { const content: Record<string, string>; export default content; }
+declare module "*.module.css" { const content: Record<string, string>; export default content; }
+declare module "*.svg" { const content: any; export default content; }
+declare module "*.png" { const content: string; export default content; }
+declare module "*.jpg" { const content: string; export default content; }
+declare module "*.gif" { const content: string; export default content; }
+declare module "*.webp" { const content: string; export default content; }
+declare module "*.json" { const content: any; export default content; }
+declare module "*.woff" { const content: string; export default content; }
+declare module "*.woff2" { const content: string; export default content; }
+`, "file:///global.d.ts");
   };
+
+  // Register all project files as Monaco models for Ctrl+Click navigation
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || !allFiles?.length) return;
+
+    function walkAndRegister(nodes: FileNode[]) {
+      for (const node of nodes) {
+        if (node.type === "file" && node.content != null) {
+          const ext = node.name.split(".").pop()?.toLowerCase() || "";
+          const langMap: Record<string, string> = {
+            ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+            json: "json", css: "css", html: "html", md: "markdown", svg: "xml",
+          };
+          const lang = langMap[ext] || "plaintext";
+          const uri = monaco.Uri.parse(`file:///${node.id}`);
+
+          // Only create model if it doesn't exist yet
+          if (!monaco.editor.getModel(uri)) {
+            monaco.editor.createModel(node.content, lang, uri);
+          } else {
+            // Update content if changed
+            const model = monaco.editor.getModel(uri);
+            if (model && model.getValue() !== node.content) {
+              model.setValue(node.content);
+            }
+          }
+        }
+        if (node.children) walkAndRegister(node.children);
+      }
+    }
+
+    walkAndRegister(allFiles);
+  }, [allFiles]);
+
+  // Auto-fetch type definitions from the workspace's node_modules via our API
+  const fetchedTypesRef = useRef(new Set<string>());
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || !allFiles?.length || !projectType) return;
+
+    // Find package.json in the file tree
+    function findPackageJson(nodes: FileNode[]): string | null {
+      for (const node of nodes) {
+        if (node.name === "package.json" && node.content) return node.content;
+        if (node.children) {
+          const found = findPackageJson(node.children);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+
+    const pkgContent = findPackageJson(allFiles);
+    if (!pkgContent) return;
+
+    let deps: string[] = [];
+    try {
+      const pkg = JSON.parse(pkgContent);
+      deps = [
+        ...Object.keys(pkg.dependencies || {}),
+        ...Object.keys(pkg.devDependencies || {}),
+      ];
+    } catch { return; }
+
+    const tsDefaults = monaco.languages.typescript.typescriptDefaults;
+
+    for (const dep of deps) {
+      if (fetchedTypesRef.current.has(dep)) continue;
+      fetchedTypesRef.current.add(dep);
+
+      // Fetch type definitions from the workspace's node_modules
+      fetch(`/api/files/types?projectId=${encodeURIComponent(activeProjectId)}&package=${encodeURIComponent(dep)}`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (!data?.files) return;
+          // Register all .d.ts files as extra libs
+          for (const [filePath, content] of Object.entries(data.files)) {
+            if (typeof content === "string") {
+              const libPath = `file:///node_modules/${dep}/${filePath}`;
+              tsDefaults.addExtraLib(content, libPath);
+            }
+          }
+        })
+        .catch(() => {
+          // Fallback to CDN if workspace node_modules don't have types
+          const typePkg = `@types/${dep.replace("@", "").replace("/", "__")}`;
+          fetch(`https://cdn.jsdelivr.net/npm/${typePkg}/index.d.ts`)
+            .then(r => r.ok ? r.text() : null)
+            .then(dts => {
+              if (dts) tsDefaults.addExtraLib(dts, `file:///node_modules/${dep}/index.d.ts`);
+            })
+            .catch(() => {});
+        });
+    }
+  }, [allFiles, projectType, activeProjectId]);
 
   useEffect(() => {
     if (editorMounted && editorRef.current) {
@@ -415,7 +606,8 @@ export function EditorArea({
             <Editor
               key={activeTab.node.id}
               height="100%"
-              defaultLanguage={activeTab.node.language ?? "plaintext"}
+              language={activeTab.node.language ?? "plaintext"}
+              path={`file:///${activeTab.node.id}`}
               defaultValue={activeTab.node.content ?? ""}
               theme="vs-dark"
               onMount={handleMount}

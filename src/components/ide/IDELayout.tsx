@@ -8,6 +8,7 @@ import { TerminalPanel } from "./TerminalPanel";
 import { CheckpointBar } from "./CheckpointBar";
 import SettingsPanel from "@/components/ide/SettingsPanel";
 import { useFileSystem, FileNode } from "@/hooks/useFileSystem";
+import { useFileSystemRemote } from "@/hooks/useFileSystemRemote";
 import { useCheckpoints } from "@/hooks/useCheckpoints";
 import { useSidebarResizable, useResizable } from "@/hooks/useResizable";
 import { WorkspaceContext, CheckpointManager } from "@/hooks/useChat";
@@ -57,6 +58,7 @@ export function IDELayout() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [problemsOpen, setProblemsOpen] = useState(false);
+  const [activeProvider, setActiveProvider] = useState<"ai-sdk" | "claude-agent">("claude-agent");
 
   const { addNotification } = useNotifications();
   const { errorCount, warningCount } = useProblems();
@@ -66,8 +68,94 @@ export function IDELayout() {
   const chatPanel = useResizable(360, 260, 600, "horizontal");
   const { activeProject } = useProjects();
 
-  const { files, isReady, executeTool, updateFileContent, changeLog, activeProjectId } = useFileSystem();
+  const localFs = useFileSystem();
+  const remoteFs = useFileSystemRemote();
+  const { files, isReady, executeTool, updateFileContent, getFileContent, activeProjectId } =
+    activeProvider === "claude-agent" ? remoteFs : localFs;
   const checkpoints = useCheckpoints();
+
+  // File operation callbacks — route to DB or server based on mode
+  const handleCreateFile = useCallback(async (filePath: string, content: string = "") => {
+    if (activeProvider === "claude-agent") {
+      await fetch("/api/files/write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: activeProjectId, path: filePath, content }),
+      });
+    } else {
+      const name = filePath.split("/").pop() || filePath;
+      const parentPath = filePath.includes("/") ? filePath.split("/").slice(0, -1).join("/") : "";
+      const ext = name.split(".").pop()?.toLowerCase() || "";
+      const langMap: Record<string, string> = { tsx: "typescript", jsx: "typescript", ts: "typescript", js: "javascript", json: "json", md: "markdown", css: "css", html: "html" };
+      await db.files.put({
+        id: filePath, name, type: "file", parentPath,
+        language: langMap[ext] || "plaintext", content,
+        projectId: activeProjectId, createdAt: new Date(), updatedAt: new Date(),
+      });
+    }
+  }, [activeProvider, activeProjectId]);
+
+  const handleCreateFolder = useCallback(async (folderPath: string) => {
+    if (activeProvider === "claude-agent") {
+      await fetch("/api/files/mkdir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: activeProjectId, path: folderPath }),
+      });
+    } else {
+      const name = folderPath.split("/").pop() || folderPath;
+      const parentPath = folderPath.includes("/") ? folderPath.split("/").slice(0, -1).join("/") : "";
+      await db.files.put({
+        id: folderPath, name, type: "folder", parentPath,
+        projectId: activeProjectId, createdAt: new Date(), updatedAt: new Date(),
+      });
+    }
+  }, [activeProvider, activeProjectId]);
+
+  const handleRenameFile = useCallback(async (oldPath: string, newPath: string) => {
+    if (activeProvider === "claude-agent") {
+      await fetch("/api/files/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: activeProjectId, oldPath, newPath }),
+      });
+    } else {
+      const file = await db.files.get(oldPath);
+      if (file) {
+        const name = newPath.split("/").pop() || newPath;
+        const parentPath = newPath.includes("/") ? newPath.split("/").slice(0, -1).join("/") : "";
+        await db.files.put({ ...file, id: newPath, name, parentPath, updatedAt: new Date() });
+        await db.files.delete(oldPath);
+      }
+    }
+  }, [activeProvider, activeProjectId]);
+
+  const handleDeleteFile = useCallback(async (filePath: string) => {
+    if (activeProvider === "claude-agent") {
+      await fetch(`/api/files?projectId=${encodeURIComponent(activeProjectId)}&path=${encodeURIComponent(filePath)}`, { method: "DELETE" });
+    } else {
+      const file = await db.files.get(filePath);
+      if (file?.type === "folder") {
+        const children = await db.files.toArray();
+        const toDelete = children.filter(f => f.id === filePath || f.id.startsWith(filePath + "/"));
+        await db.files.bulkDelete(toDelete.map(f => f.id));
+      } else {
+        await db.files.delete(filePath);
+      }
+    }
+  }, [activeProvider, activeProjectId]);
+
+  const handleUpdateFileContent = useCallback(async (filePath: string, content: string) => {
+    if (activeProvider === "claude-agent") {
+      await fetch("/api/files/write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: activeProjectId, path: filePath, content }),
+      });
+    } else {
+      await db.files.update(filePath, { content, updatedAt: new Date() });
+    }
+  }, [activeProvider, activeProjectId]);
 
   // Deploy handler
   const handleDeploy = useCallback(async () => {
@@ -98,6 +186,29 @@ export function IDELayout() {
         if (!activeProject) return "Error: No active project";
         // AI can pass a custom slug; fall back to project name
         const customSlug = args.slug as string | undefined;
+
+        // In agent mode, deploy from disk files via server API
+        if (activeProvider === "claude-agent") {
+          try {
+            const treeRes = await fetch(`/api/files/tree?projectId=${encodeURIComponent(activeProjectId)}`);
+            const treeData = await treeRes.json();
+            const flatFiles: { path: string; content: string }[] = [];
+            function flattenTree(nodes: any[]) {
+              for (const n of nodes) {
+                if (n.type === "file" && n.content) flatFiles.push({ path: n.id, content: n.content });
+                if (n.children) flattenTree(n.children);
+              }
+            }
+            flattenTree(treeData.files || []);
+            const slug = customSlug || activeProject.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+            const previewUrl = `/api/preview/${activeProjectId}/index.html`;
+            addNotification({ title: "Preview Ready", message: `Preview at: ${previewUrl}`, type: "success" });
+            return `Preview available at: ${previewUrl} (${flatFiles.length} files on disk). Full deploy to Puter coming soon.`;
+          } catch (err: any) {
+            return `Deploy error: ${err.message}`;
+          }
+        }
+
         const result = await deploySite(activeProjectId, customSlug || activeProject.name);
         setLastDeploy(result);
         if (result.success) {
@@ -127,7 +238,7 @@ export function IDELayout() {
       }
       return result;
     },
-    [executeTool, checkpoints, activeProject, activeProjectId]
+    [executeTool, checkpoints, activeProject, activeProjectId, activeProvider]
   );
 
   // Build checkpoint manager for the chat panel
@@ -198,24 +309,37 @@ export function IDELayout() {
     [activeTabId]
   );
 
-  // When files change from AI edits, update open tabs
-  // Use changeLog length as the trigger instead of files (which gets a new ref every render)
-  const changeCount = changeLog.length;
+  // Auto-refresh editor tabs when files change on disk (agent mode)
   useEffect(() => {
-    if (!changeCount || !files.length) return;
-    setTabs((prev) => {
+    if (!files.length || !tabs.length) return;
+
+    // Build a flat map of file paths → content from the current tree
+    const contentMap = new Map<string, string>();
+    function walk(nodes: FileNode[]) {
+      for (const node of nodes) {
+        if (node.type === "file" && node.content !== undefined) {
+          contentMap.set(node.id, node.content);
+        }
+        if (node.children) walk(node.children);
+      }
+    }
+    walk(files);
+
+    // Check if any open tab's content has changed
+    setTabs((prevTabs) => {
       let changed = false;
-      const next = prev.map((tab) => {
-        const updated = findFileById(files, tab.node.id);
-        if (updated && updated.content !== tab.node.content) {
+      const newTabs = prevTabs.map((tab) => {
+        if (tab.isPreview || !tab.node || tab.node.type !== "file") return tab;
+        const newContent = contentMap.get(tab.node.id);
+        if (newContent !== undefined && newContent !== tab.node.content) {
           changed = true;
-          return { ...tab, node: { ...tab.node, content: updated.content } };
+          return { ...tab, node: { ...tab.node, content: newContent }, isDirty: false };
         }
         return tab;
       });
-      return changed ? next : prev;
+      return changed ? newTabs : prevTabs;
     });
-  }, [changeCount]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [files]);
 
   // Handle editor content changes - save to IndexedDB
   const handleEditorChange = useCallback(
@@ -264,6 +388,11 @@ export function IDELayout() {
       if ((e.ctrlKey || e.metaKey) && e.key === "b") {
         e.preventDefault();
         setActiveView((prev) => (prev ? null : "explorer"));
+      }
+      // Ctrl+Shift+M - toggle AI mode
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "M") {
+        e.preventDefault();
+        setActiveProvider((p) => p === "claude-agent" ? "ai-sdk" : "claude-agent");
       }
     };
     document.addEventListener("keydown", handler);
@@ -393,6 +522,11 @@ export function IDELayout() {
                 onSelectFile={handleSelectFile}
                 files={files}
                 onRunPreview={handleOpenPreview}
+                onCreateFile={handleCreateFile}
+                onCreateFolder={handleCreateFolder}
+                onRenameFile={handleRenameFile}
+                onDeleteFile={handleDeleteFile}
+                onUpdateFileContent={handleUpdateFileContent}
               />
             </div>
             {/* Sidebar resize handle */}
@@ -469,7 +603,7 @@ export function IDELayout() {
               }}
               data-testid="chat-panel-wrapper"
             >
-              <ChatPanel toolExecutor={toolExecutorWithCheckpoints} workspaceContext={workspaceContext} checkpointManager={checkpointManagerForChat} projectId={activeProjectId} fileTree={files} />
+              <ChatPanel toolExecutor={toolExecutorWithCheckpoints} workspaceContext={workspaceContext} checkpointManager={checkpointManagerForChat} projectId={activeProjectId} fileTree={files} activeProvider={activeProvider} onProviderChange={setActiveProvider} />
             </div>
           </>
         )}

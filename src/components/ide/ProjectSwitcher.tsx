@@ -1,15 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { ChevronDown, Plus, Check, FolderOpen } from "lucide-react";
+import { ChevronDown, Plus, Check, FolderOpen, Trash2 } from "lucide-react";
 import { useProjects } from "@/hooks/useProjects";
 import { TEMPLATE_INFO, type ProjectTemplate } from "@/lib/project-templates";
 
 export function ProjectSwitcher() {
-  const { projects, activeProject, createProject, switchProject } = useProjects();
+  const { projects, activeProject, createProject, switchProject, deleteProject } = useProjects();
   const [open, setOpen] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectType, setNewProjectType] = useState<"static" | "nodebox" | "cloud">("static");
   const [newProjectTemplate, setNewProjectTemplate] = useState<ProjectTemplate>("static");
+  const [slugPreview, setSlugPreview] = useState("");
+  const [slugTaken, setSlugTaken] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -98,7 +100,7 @@ export function ProjectSwitcher() {
                 <button
                   key={project.id}
                   onClick={() => handleSwitch(project.id)}
-                  className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors"
+                  className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left transition-colors group"
                   style={{
                     color: isActive ? "hsl(220 14% 90%)" : "hsl(220 14% 70%)",
                     background: isActive ? "hsl(220 13% 22%)" : "transparent",
@@ -114,7 +116,30 @@ export function ProjectSwitcher() {
                     {isActive && <Check size={12} style={{ color: "hsl(207 90% 64%)" }} />}
                   </span>
                   <FolderOpen size={12} style={{ color: "hsl(220 14% 50%)" }} />
-                  <span className="truncate">{project.name}</span>
+                  <span className="truncate flex-1">{project.name}</span>
+                  {project.type && project.type !== "static" && (
+                    <span style={{
+                      fontSize: 8, padding: "1px 4px", borderRadius: 3, marginLeft: 4,
+                      background: project.type === "cloud" ? "hsl(280 65% 55% / 0.2)" : "hsl(142 71% 45% / 0.2)",
+                      color: project.type === "cloud" ? "hsl(280 65% 60%)" : "hsl(142 71% 45%)",
+                    }}>
+                      {project.type === "cloud" ? "Cloud" : "Node"}
+                    </span>
+                  )}
+                  {projects.length > 1 && (
+                    <span
+                      className="opacity-0 group-hover:opacity-100 flex-shrink-0"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`Delete "${project.name}"?`)) {
+                          deleteProject(project.id).catch(console.error);
+                        }
+                      }}
+                      style={{ color: "hsl(0 84% 60%)", padding: "0 2px", cursor: "pointer" }}
+                    >
+                      <Trash2 size={11} />
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -191,7 +216,18 @@ export function ProjectSwitcher() {
                 type="text"
                 placeholder="Project name"
                 value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setNewProjectName(val);
+                  const slug = val.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+                  setSlugPreview(slug);
+                  if (slug) {
+                    const taken = projects.some(p => p.id === slug);
+                    setSlugTaken(taken);
+                  } else {
+                    setSlugTaken(false);
+                  }
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleCreateSubmit();
                   if (e.key === "Escape") setShowCreateForm(false);
@@ -202,6 +238,11 @@ export function ProjectSwitcher() {
                   color: "hsl(220 14% 85%)", outline: "none", boxSizing: "border-box",
                 }}
               />
+              {slugPreview && (
+                <div style={{ fontSize: 9, marginTop: 3, color: slugTaken ? "hsl(0 84% 60%)" : "hsl(220 14% 45%)" }}>
+                  {slugTaken ? `"${slugPreview}" is taken — will append suffix` : `→ ${slugPreview}`}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
                 <button
                   onClick={handleCreateSubmit}

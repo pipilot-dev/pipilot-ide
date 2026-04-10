@@ -177,15 +177,23 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
     ? "hsl(207 90% 60%)"
     : "hsl(220 14% 50%)";
 
-  // Smart summary: show the most relevant arg
-  const summary = parsedArgs.path
+  // Smart summary: show the most relevant arg for the tool type
+  const summary = parsedArgs.file_path
+    ? parsedArgs.file_path as string
+    : parsedArgs.command
+    ? `$ ${(parsedArgs.command as string).substring(0, 80)}`
+    : parsedArgs.path
     ? parsedArgs.path as string
+    : parsedArgs.pattern
+    ? parsedArgs.pattern as string
+    : parsedArgs.content && typeof parsedArgs.content === "string"
+    ? `${(parsedArgs.content as string).substring(0, 50)}...`
     : parsedArgs.oldPath
     ? `${parsedArgs.oldPath} → ${parsedArgs.newPath}`
-    : parsedArgs.srcPath
-    ? `${parsedArgs.srcPath} → ${parsedArgs.destPath}`
     : parsedArgs.query
     ? `"${parsedArgs.query}"`
+    : parsedArgs.description
+    ? parsedArgs.description as string
     : parsedArgs.files
     ? `${(parsedArgs.files as unknown[]).length} files`
     : null;
@@ -617,29 +625,64 @@ export function AssistantTurnGroup({ messages, onDelete }: AssistantTurnGroupPro
                   </div>
                 )}
 
-                {/* Tool call cards */}
-                {hasTools && (
-                  <div className="mb-2">
-                    {msg.toolCalls!.map((tc) => (
-                      <ToolCallCard key={tc.id} toolCall={tc} />
-                    ))}
+                {/* Render parts in order (interleaved text + tools) if available */}
+                {msg.parts && msg.parts.length > 0 ? (
+                  <div>
+                    {msg.parts.map((part, pi) => {
+                      if (part.type === "tool" && part.toolCallId) {
+                        const tc = msg.toolCalls?.find(t => t.id === part.toolCallId);
+                        return tc ? <ToolCallCard key={`${msg.id}-pt-${pi}`} toolCall={tc} /> : null;
+                      }
+                      if (part.type === "text" && part.content) {
+                        return (
+                          <div key={`${msg.id}-txt-${pi}`} className="chat-message">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {part.content}
+                            </ReactMarkdown>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })}
+                    {msg.streaming && (
+                      <div className="flex items-center gap-2 py-1">
+                        <div style={{
+                          display: "flex", gap: 3, alignItems: "center",
+                        }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "hsl(207 90% 60%)", animation: "pulse-dot 1.4s ease-in-out infinite" }} />
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "hsl(207 90% 60%)", animation: "pulse-dot 1.4s ease-in-out 0.2s infinite" }} />
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "hsl(207 90% 60%)", animation: "pulse-dot 1.4s ease-in-out 0.4s infinite" }} />
+                        </div>
+                        <span style={{ fontSize: 11, color: "hsl(207 90% 60%)", fontWeight: 500 }}>Working...</span>
+                        <style>{`@keyframes pulse-dot { 0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1.2); } }`}</style>
+                      </div>
+                    )}
                   </div>
-                )}
-
-                {/* Message content */}
-                {(hasContent || msg.streaming) && (
-                  <div className={`chat-message ${msg.streaming ? "streaming-cursor" : ""}`}>
-                    {msg.content ? (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content}
-                      </ReactMarkdown>
-                    ) : msg.streaming ? (
-                      <span className="flex items-center gap-1.5 text-xs" style={{ color: "hsl(207 90% 60%)" }}>
-                        <Loader2 size={12} className="animate-spin" />
-                        <span>Thinking...</span>
-                      </span>
-                    ) : null}
-                  </div>
+                ) : (
+                  <>
+                    {/* Fallback: tool calls first, then content (AI SDK mode) */}
+                    {hasTools && (
+                      <div className="mb-2">
+                        {msg.toolCalls!.map((tc) => (
+                          <ToolCallCard key={`${msg.id}-fb-${tc.id}`} toolCall={tc} />
+                        ))}
+                      </div>
+                    )}
+                    {(hasContent || msg.streaming) && (
+                      <div className={`chat-message ${msg.streaming ? "streaming-cursor" : ""}`}>
+                        {msg.content ? (
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {msg.content}
+                          </ReactMarkdown>
+                        ) : msg.streaming ? (
+                          <span className="flex items-center gap-2 text-xs" style={{ color: "hsl(207 90% 60%)" }}>
+                            <Loader2 size={12} className="animate-spin" />
+                            <span>Thinking...</span>
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             );
