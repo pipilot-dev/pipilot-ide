@@ -90,12 +90,25 @@ export function RealTerminal({ sessionId, projectId, initialCommand, profile, on
     fitRef.current = fitAddon;
 
     // Helper functions using closure over sid
-    const writeToPty = (data: string) => {
+    // Batch keystrokes: buffer input and flush after 8ms of silence.
+    // Sends one HTTP request per typing burst instead of one per character.
+    let writeBuffer = "";
+    let writeTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushWrite = () => {
+      if (!writeBuffer) return;
+      const data = writeBuffer;
+      writeBuffer = "";
+      writeTimer = null;
       fetch("/api/terminal/write", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId: sid, data }),
       }).catch(() => {});
+    };
+    const writeToPty = (data: string) => {
+      writeBuffer += data;
+      if (writeTimer) clearTimeout(writeTimer);
+      writeTimer = setTimeout(flushWrite, 8);
     };
 
     const resizePty = (cols: number, rows: number) => {

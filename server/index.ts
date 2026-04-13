@@ -1205,12 +1205,98 @@ function createIdeToolServer(projectId: string) {
     { annotations: { readOnlyHint: true } }
   );
 
+  // ── memory ──
+  // Persistent memory system: MEMORY.md index + topic files in .pipilot/memory/
+  // The agent reads MEMORY.md at session start and writes topic files on demand.
+  const MEMORY_DIR = path.join(workDir, ".pipilot", "memory");
+  const MEMORY_INDEX = path.join(MEMORY_DIR, "MEMORY.md");
+
+  const memory = tool(
+    "memory",
+    "Manage persistent memory for this project. Memory survives across sessions and helps the agent remember user preferences, coding patterns, project decisions, debugging insights, and reinforcement learnings.\n\n" +
+    "Actions:\n" +
+    "  'read_index' — Read MEMORY.md (the index of all memories). Always do this at the start of a conversation.\n" +
+    "  'read_topic' — Read a specific topic file (e.g. 'preferences', 'api-conventions').\n" +
+    "  'write_topic' — Write/update a topic file with new information.\n" +
+    "  'append_index' — Add a new entry to MEMORY.md linking to a topic file.\n" +
+    "  'list_topics' — List all topic files in the memory directory.\n\n" +
+    "Use this proactively: when you learn something about the user's preferences, coding style, project architecture, or when they correct you — save it. On future sessions, read the index first to recall context.",
+    {
+      action: z.enum(["read_index", "read_topic", "write_topic", "append_index", "list_topics"]).describe("What to do"),
+      topic: z.string().optional().describe("Topic filename without .md (e.g. 'preferences', 'debugging', 'api-conventions')"),
+      content: z.string().optional().describe("Content to write (for write_topic and append_index)"),
+    },
+    async (args) => {
+      try {
+        if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true });
+
+        switch (args.action) {
+          case "read_index": {
+            if (!fs.existsSync(MEMORY_INDEX)) {
+              return { content: [{ type: "text" as const, text: "No memory index exists yet. The memory is empty. Use write_topic to start recording memories, then append_index to add an entry." }] };
+            }
+            const raw = fs.readFileSync(MEMORY_INDEX, "utf8");
+            // Only load first 200 lines / 25KB
+            const lines = raw.split("\n");
+            const truncated = lines.length > 200 ? lines.slice(0, 200).join("\n") + "\n\n...[truncated at 200 lines]" : raw;
+            const capped = truncated.length > 25000 ? truncated.slice(0, 25000) + "\n\n...[truncated at 25KB]" : truncated;
+            return { content: [{ type: "text" as const, text: capped }] };
+          }
+
+          case "read_topic": {
+            if (!args.topic) return { content: [{ type: "text" as const, text: "Error: topic is required" }], isError: true };
+            const topicPath = path.join(MEMORY_DIR, `${args.topic}.md`);
+            if (!fs.existsSync(topicPath)) {
+              return { content: [{ type: "text" as const, text: `Topic '${args.topic}' not found. Use list_topics to see available topics.` }] };
+            }
+            const content = fs.readFileSync(topicPath, "utf8");
+            return { content: [{ type: "text" as const, text: content }] };
+          }
+
+          case "write_topic": {
+            if (!args.topic) return { content: [{ type: "text" as const, text: "Error: topic is required" }], isError: true };
+            if (!args.content) return { content: [{ type: "text" as const, text: "Error: content is required" }], isError: true };
+            // Sanitize topic name
+            const safeTopic = args.topic.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
+            const topicPath = path.join(MEMORY_DIR, `${safeTopic}.md`);
+            fs.writeFileSync(topicPath, args.content, "utf8");
+            return { content: [{ type: "text" as const, text: `Memory topic '${safeTopic}' saved (${args.content.length} chars).` }] };
+          }
+
+          case "append_index": {
+            if (!args.content) return { content: [{ type: "text" as const, text: "Error: content is required (the line to append to MEMORY.md)" }], isError: true };
+            const existing = fs.existsSync(MEMORY_INDEX) ? fs.readFileSync(MEMORY_INDEX, "utf8") : "# Project Memory\n\n";
+            fs.writeFileSync(MEMORY_INDEX, existing.trimEnd() + "\n" + args.content + "\n", "utf8");
+            return { content: [{ type: "text" as const, text: `Appended to MEMORY.md: ${args.content.slice(0, 100)}` }] };
+          }
+
+          case "list_topics": {
+            const files = fs.existsSync(MEMORY_DIR)
+              ? fs.readdirSync(MEMORY_DIR).filter((f) => f.endsWith(".md") && f !== "MEMORY.md")
+              : [];
+            if (files.length === 0) {
+              return { content: [{ type: "text" as const, text: "No topic files yet. Use write_topic to create one." }] };
+            }
+            const list = files.map((f) => {
+              const stat = fs.statSync(path.join(MEMORY_DIR, f));
+              return `- ${f.replace(".md", "")} (${(stat.size / 1024).toFixed(1)}KB, updated ${new Date(stat.mtime).toLocaleDateString()})`;
+            }).join("\n");
+            return { content: [{ type: "text" as const, text: `Memory topics:\n${list}` }] };
+          }
+        }
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `Memory error: ${err.message}` }], isError: true };
+      }
+    },
+  );
+
   return createSdkMcpServer({
     name: "pipilot",
     version: "1.0.0",
     tools: [
       getDiagnostics, manageDevServer, searchNpm, getDevServerLogs,
       updateProjectContext, frontendDesignGuide, analyzeUi, screenshotPreview,
+      memory,
     ],
   });
 }
@@ -1797,7 +1883,23 @@ What you must NOT do:
 
 End your response with a section titled "## Plan" containing the numbered steps.`;
   const connectorCtx = getConnectorContext(workDir);
-  const agentSystemPrompt = (agentMode === "plan" ? planSystemPrompt : buildSystemPrompt) + connectorCtx;
+
+  // Load memory index (first 200 lines / 25KB) into system prompt so the
+  // agent starts each session with full context of past learnings.
+  let memoryCtx = "";
+  try {
+    const memIdx = path.join(workDir, ".pipilot", "memory", "MEMORY.md");
+    if (fs.existsSync(memIdx)) {
+      const raw = fs.readFileSync(memIdx, "utf8");
+      const lines = raw.split("\n").slice(0, 200).join("\n");
+      const capped = lines.length > 25000 ? lines.slice(0, 25000) : lines;
+      if (capped.trim()) {
+        memoryCtx = `\n## Project Memory (from .pipilot/memory/MEMORY.md)\n${capped}\n\nUse the \`memory\` tool to read topic files, update memories, or record new learnings. Proactively save when you learn about user preferences, project patterns, or when corrected.\n`;
+      }
+    }
+  } catch {}
+
+  const agentSystemPrompt = (agentMode === "plan" ? planSystemPrompt : buildSystemPrompt) + connectorCtx + memoryCtx;
   console.log(`[agent] mode=${agentMode}`);
 
   // Track if we've streamed text to avoid duplication from assistant messages
@@ -3589,7 +3691,7 @@ function listShellProfiles(): ShellProfile[] {
         "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
         "pwsh.exe", // fall back to PATH lookup
       ],
-      args: ["-NoLogo"],
+      args: ["-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass"],
     });
     candidates.push({
       id: "powershell",
@@ -3598,7 +3700,7 @@ function listShellProfiles(): ShellProfile[] {
         path.join(system32, "WindowsPowerShell", "v1.0", "powershell.exe"),
         "powershell.exe",
       ],
-      args: ["-NoLogo"],
+      args: ["-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass"],
     });
     candidates.push({
       id: "cmd",
@@ -3720,7 +3822,14 @@ function createPtyForProject(projectId: string, profileId?: string): pty.IPty {
     cols: 120,
     rows: 30,
     cwd,
-    env: { ...process.env, TERM: "xterm-256color" } as Record<string, string>,
+    env: (() => {
+      // Clean pnpm-injected env vars that cause npm warnings
+      const env = { ...process.env, TERM: "xterm-256color" };
+      delete env.npm_config_globalconfig;
+      delete (env as any)["npm_config_verify-deps-before-run"];
+      delete (env as any)["npm_config__jsr-registry"];
+      return env;
+    })() as Record<string, string>,
   });
 
   return ptyProcess;
