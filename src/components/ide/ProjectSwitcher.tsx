@@ -1,10 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { ChevronDown, Plus, Check, FolderOpen, Trash2 } from "lucide-react";
+import { ChevronDown, Plus, Check, FolderOpen, Trash2, X, Link2 } from "lucide-react";
 import { useProjects } from "@/hooks/useProjects";
+import { useNotifications } from "@/contexts/NotificationContext";
 import { TEMPLATE_INFO, type ProjectTemplate } from "@/lib/project-templates";
+import { PartialDeleteDialog } from "./PartialDeleteDialog";
 
 export function ProjectSwitcher() {
-  const { projects, activeProject, createProject, switchProject, deleteProject } = useProjects();
+  const { projects, activeProject, createProject, switchProject, deleteProject, closeProject } = useProjects();
+  const { addNotification, showToast } = useNotifications();
+  // State for the partial-delete dialog (folder couldn't be removed)
+  const [partialDelete, setPartialDelete] = useState<
+    { path: string; message: string; leftoverCount: number } | null
+  >(null);
   const [open, setOpen] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
@@ -49,6 +56,15 @@ export function ProjectSwitcher() {
 
   return (
     <div ref={dropdownRef} className="relative">
+      {/* Partial-delete dialog: shown when the disk folder is locked */}
+      <PartialDeleteDialog
+        open={!!partialDelete}
+        path={partialDelete?.path || ""}
+        message={partialDelete?.message}
+        leftoverCount={partialDelete?.leftoverCount}
+        onClose={() => setPartialDelete(null)}
+      />
+
       {/* Trigger button */}
       <button
         onClick={() => setOpen((prev) => !prev)}
@@ -117,7 +133,20 @@ export function ProjectSwitcher() {
                   </span>
                   <FolderOpen size={12} style={{ color: "hsl(220 14% 50%)" }} />
                   <span className="truncate flex-1">{project.name}</span>
-                  {project.type && project.type !== "static" && (
+                  {project.type === "linked" && (
+                    <span
+                      title={project.linkedPath || ""}
+                      style={{
+                        fontSize: 8, padding: "1px 4px", borderRadius: 3, marginLeft: 4,
+                        background: "hsl(47 95% 55% / 0.18)",
+                        color: "hsl(47 95% 60%)",
+                        display: "inline-flex", alignItems: "center", gap: 3,
+                      }}
+                    >
+                      <Link2 size={8} /> Linked
+                    </span>
+                  )}
+                  {project.type && project.type !== "static" && project.type !== "linked" && (
                     <span style={{
                       fontSize: 8, padding: "1px 4px", borderRadius: 3, marginLeft: 4,
                       background: project.type === "cloud" ? "hsl(280 65% 55% / 0.2)" : "hsl(142 71% 45% / 0.2)",
@@ -129,15 +158,108 @@ export function ProjectSwitcher() {
                   {projects.length > 1 && (
                     <span
                       className="opacity-0 group-hover:opacity-100 flex-shrink-0"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (confirm(`Delete "${project.name}"?`)) {
-                          deleteProject(project.id).catch(console.error);
-                        }
-                      }}
-                      style={{ color: "hsl(0 84% 60%)", padding: "0 2px", cursor: "pointer" }}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 2 }}
                     >
-                      <Trash2 size={11} />
+                      {/* Close (X) — keeps files on disk. Shown for linked AND
+                          AI-scaffolded (nodebox/cloud) projects. Static projects
+                          have no on-disk files, so this button is hidden — only
+                          the red trash shows, which is effectively a close. */}
+                      {(project.type === "linked" || project.type === "nodebox" || project.type === "cloud") && (
+                        <span
+                          title={
+                            project.type === "linked"
+                              ? "Close linked folder (files on disk are kept)"
+                              : "Close project (keeps files in workspaces/ on disk)"
+                          }
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const confirmMsg = project.type === "linked"
+                              ? `Close linked folder "${project.name}"?\n\nThis only removes the link — the files on disk will NOT be deleted.`
+                              : `Close "${project.name}"?\n\nThe project will be removed from this list, but its files will be kept in workspaces/ on disk.`;
+                            if (!confirm(confirmMsg)) return;
+                            showToast({ type: "info", title: `Closing ${project.name}…` });
+                            try {
+                              await closeProject(project.id);
+                              addNotification({
+                                type: "success",
+                                title: project.type === "linked" ? "Folder closed" : "Project closed",
+                                message: project.type === "linked"
+                                  ? `${project.name} unlinked — files kept on disk`
+                                  : `${project.name} — files kept in workspaces/`,
+                              });
+                            } catch (err) {
+                              console.error("[close project] failed:", err);
+                              addNotification({
+                                type: "error",
+                                title: "Close failed",
+                                message: err instanceof Error ? err.message : String(err),
+                              });
+                            }
+                          }}
+                          style={{
+                            color: "hsl(47 95% 60%)",
+                            padding: "0 2px",
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          <X size={12} />
+                        </span>
+                      )}
+
+                      {/* Delete (Trash) — wipes files on disk. Hidden for
+                          linked projects (we never delete the user's own
+                          files). Shown for static/nodebox/cloud. */}
+                      {project.type !== "linked" && (
+                        <span
+                          title="Delete project (removes files on disk)"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (!confirm(`Delete "${project.name}"?\n\nThis PERMANENTLY removes the project and all its files on disk.`)) return;
+                            showToast({ type: "info", title: `Deleting ${project.name}…` });
+                            try {
+                              const result = await deleteProject(project.id);
+                              if (result && (result as any).partial) {
+                                const r = result as any;
+                                addNotification({
+                                  type: "warning",
+                                  title: "Folder needs manual removal",
+                                  message: `${project.name} was cleared but the folder is locked.`,
+                                  silent: true,
+                                });
+                                setPartialDelete({
+                                  path: r.path,
+                                  message: r.message,
+                                  leftoverCount: r.leftoverCount || 0,
+                                });
+                              } else {
+                                addNotification({
+                                  type: "success",
+                                  title: "Project deleted",
+                                  message: project.name,
+                                });
+                              }
+                            } catch (err) {
+                              console.error("[delete project] failed:", err);
+                              addNotification({
+                                type: "error",
+                                title: "Delete failed",
+                                message: err instanceof Error ? err.message : String(err),
+                              });
+                            }
+                          }}
+                          style={{
+                            color: "hsl(0 84% 60%)",
+                            padding: "0 2px",
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          <Trash2 size={11} />
+                        </span>
+                      )}
                     </span>
                   )}
                 </button>

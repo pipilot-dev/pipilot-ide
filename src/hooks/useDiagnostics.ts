@@ -1,4 +1,4 @@
-import { useCallback, useState, useRef } from "react";
+import { useCallback, useState, useRef, useEffect } from "react";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { useProblems, type Problem } from "@/contexts/ProblemsContext";
 
@@ -116,6 +116,19 @@ export function useDiagnostics() {
       setRunning(false);
     }
   }, [activeProjectId, setProblemsForSource]);
+
+  // Auto-recheck diagnostics every 10 seconds in the background.
+  // Keeps the status bar error/warning counts up-to-date even when the
+  // Problems panel is closed.
+  useEffect(() => {
+    if (!activeProjectId) return;
+    // Initial check after a short delay (let the project load)
+    const initTimer = setTimeout(() => { runChecks(); }, 2000);
+    const interval = setInterval(() => {
+      if (!running) runChecks();
+    }, 10000);
+    return () => { clearTimeout(initTimer); clearInterval(interval); };
+  }, [activeProjectId]); // intentionally exclude runChecks/running to avoid reset loops
 
   return {
     runChecks,

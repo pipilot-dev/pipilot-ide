@@ -66,7 +66,17 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* VSCode-inspired dark theme */
+/* ── IDE-wide font variables ── */
+:root {
+  --ide-font-size: 14px;
+  --ide-font: "Geist Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace;
+}
+
+body {
+  font-family: var(--ide-font);
+}
+
+/* Midnight Studio dark theme — warm neutrals, amber accent */
 :root {
   --button-outline: rgba(0,0,0, .10);
   --badge-outline: rgba(0,0,0, .05);
@@ -74,44 +84,44 @@
   --elevate-1: rgba(0,0,0, .03);
   --elevate-2: rgba(0,0,0, .08);
 
-  --background: 220 13% 18%;
-  --foreground: 220 14% 90%;
-  --border: 220 13% 26%;
-  --card: 220 13% 20%;
-  --card-foreground: 220 14% 90%;
-  --card-border: 220 13% 26%;
-  --sidebar: 220 13% 14%;
-  --sidebar-foreground: 220 14% 80%;
-  --sidebar-border: 220 13% 22%;
-  --sidebar-primary: 207 90% 54%;
+  --background: 240 7% 9%;
+  --foreground: 240 5% 88%;
+  --border: 240 5% 20%;
+  --card: 240 7% 11%;
+  --card-foreground: 240 5% 88%;
+  --card-border: 240 5% 20%;
+  --sidebar: 240 7% 11%;
+  --sidebar-foreground: 240 5% 72%;
+  --sidebar-border: 240 5% 17%;
+  --sidebar-primary: 39 76% 57%;
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 220 13% 22%;
-  --sidebar-accent-foreground: 220 14% 90%;
-  --sidebar-ring: 207 90% 54%;
-  --popover: 220 13% 18%;
-  --popover-foreground: 220 14% 90%;
-  --popover-border: 220 13% 28%;
-  --primary: 207 90% 54%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 220 13% 24%;
-  --secondary-foreground: 220 14% 85%;
-  --muted: 220 13% 22%;
-  --muted-foreground: 220 14% 60%;
-  --accent: 220 13% 26%;
-  --accent-foreground: 220 14% 90%;
-  --destructive: 0 84% 60%;
+  --sidebar-accent: 240 5% 16%;
+  --sidebar-accent-foreground: 240 5% 85%;
+  --sidebar-ring: 39 76% 57%;
+  --popover: 240 7% 11%;
+  --popover-foreground: 240 5% 88%;
+  --popover-border: 240 5% 22%;
+  --primary: 39 76% 57%;
+  --primary-foreground: 240 7% 9%;
+  --secondary: 240 5% 16%;
+  --secondary-foreground: 240 5% 80%;
+  --muted: 240 5% 16%;
+  --muted-foreground: 240 5% 50%;
+  --accent: 240 5% 18%;
+  --accent-foreground: 240 5% 85%;
+  --destructive: 4 72% 51%;
   --destructive-foreground: 0 0% 100%;
-  --input: 220 13% 28%;
-  --ring: 207 90% 54%;
-  --chart-1: 207 90% 54%;
-  --chart-2: 142 71% 45%;
-  --chart-3: 38 92% 50%;
-  --chart-4: 280 65% 60%;
-  --chart-5: 0 84% 60%;
+  --input: 240 5% 18%;
+  --ring: 39 76% 57%;
+  --chart-1: 39 76% 57%;
+  --chart-2: 140 48% 55%;
+  --chart-3: 210 60% 60%;
+  --chart-4: 280 50% 60%;
+  --chart-5: 4 72% 51%;
 
-  --app-font-sans: 'Segoe UI', 'Inter', sans-serif;
+  --app-font-sans: 'DM Sans', 'Plus Jakarta Sans', -apple-system, sans-serif;
   --app-font-serif: Georgia, serif;
-  --app-font-mono: 'Cascadia Code', 'Fira Code', 'Menlo', monospace;
+  --app-font-mono: 'Geist Mono', 'Cascadia Code', 'Fira Code', monospace;
   --radius: .25rem;
 
   --shadow-2xs: 0px 1px 2px 0px rgba(0,0,0,0.3);
@@ -197,13 +207,13 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: hsl(220 13% 28%);
+  background: #3e3e45;
   border-radius: 8px;
   border: 1px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(220 13% 38%);
+  background: #44444d;
   border-radius: 8px;
   border: 1px solid transparent;
   background-clip: padding-box;
@@ -221,9 +231,14 @@
 }
 
 /* Chat markdown styles */
+.chat-message {
+  overflow-x: hidden;
+  max-width: 100%;
+  min-width: 0;
+}
 .chat-message pre {
-  background: hsl(220 13% 11%) !important;
-  border: 1px solid hsl(220 13% 20%);
+  background: #1c1c21 !important;
+  border: 1px solid #2e2e35;
   border-radius: 8px;
   padding: 12px 14px;
   overflow-x: auto;
@@ -237,11 +252,11 @@
   font-size: 0.84em;
 }
 .chat-message p code {
-  background: hsl(220 13% 24%);
+  background: #2e2e35;
   padding: 2px 6px;
   border-radius: 5px;
   font-size: 0.82em;
-  color: hsl(207 90% 72%);
+  color: #6cb6ff;
 }
 .chat-message p {
   margin: 5px 0;
@@ -267,42 +282,48 @@
 .chat-message h2 { font-size: 1.05em; }
 .chat-message h3 { font-size: 0.95em; }
 .chat-message blockquote {
-  border-left: 3px solid hsl(207 90% 45% / 0.4);
+  border-left: 3px solid #e5a63966;
   padding-left: 12px;
   margin: 8px 0;
   color: hsl(220 14% 65%);
   font-style: italic;
 }
 .chat-message a {
-  color: hsl(207 90% 65%);
+  color: #6cb6ff;
   text-decoration: underline;
   text-decoration-color: hsl(207 90% 65% / 0.3);
   text-underline-offset: 2px;
   transition: all 0.15s;
 }
 .chat-message a:hover {
-  color: hsl(207 90% 78%);
+  color: #8eccff;
   text-decoration-color: hsl(207 90% 65% / 0.6);
 }
+/* Wrap tables in a scrollable container so wide tables don't push
+   the entire chat panel into horizontal overflow. */
 .chat-message table {
   border-collapse: collapse;
   margin: 8px 0;
   font-size: 0.82rem;
-  width: 100%;
+  width: max-content;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
 }
 .chat-message th, .chat-message td {
-  border: 1px solid hsl(220 13% 24%);
+  border: 1px solid #2e2e35;
   padding: 6px 10px;
   text-align: left;
+  white-space: nowrap;
 }
 .chat-message th {
-  background: hsl(220 13% 16%);
+  background: #232329;
   font-weight: 600;
   color: hsl(220 14% 85%);
 }
 .chat-message hr {
   border: none;
-  border-top: 1px solid hsl(220 13% 24%);
+  border-top: 1px solid #2e2e35;
   margin: 12px 0;
 }
 .chat-message strong {
@@ -317,8 +338,8 @@
 .activity-bar {
   width: 48px;
   min-width: 48px;
-  background: hsl(220 13% 12%);
-  border-right: 1px solid hsl(220 13% 20%);
+  background: #1c1c21;
+  border-right: 1px solid #2e2e35;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -351,7 +372,7 @@
   top: 8px;
   bottom: 8px;
   width: 2px;
-  background: hsl(207 90% 54%);
+  background: #e5a639;
   border-radius: 0 2px 2px 0;
 }
 
@@ -365,19 +386,18 @@
 }
 .resize-handle:hover,
 .resize-handle.dragging {
-  background: hsl(207 90% 54%);
+  background: #e5a639;
 }
 
 /* Tab bar */
-/* Editor tabs — editorial-terminal aesthetic */
 .editor-tabs {
   display: flex;
   overflow-x: auto;
-  background: #0b0b0e;
-  border-bottom: 1px solid #28282f;
+  background: #16161a;
+  border-bottom: 1px solid #2e2e35;
   height: 38px;
   min-height: 38px;
-  font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+  font-family: var(--app-font-mono);
 }
 .editor-tabs::-webkit-scrollbar {
   height: 0;
@@ -392,45 +412,42 @@
   letter-spacing: 0.01em;
   cursor: pointer;
   white-space: nowrap;
-  color: #5e5e68;
+  color: #6b6b76;
   transition: color 0.15s ease;
   min-width: 100px;
   max-width: 240px;
 }
 .editor-tab + .editor-tab::before {
-  /* Hairline separator between tabs */
   content: "";
   position: absolute;
   left: 0;
   top: 25%;
   bottom: 25%;
   width: 1px;
-  background: #28282f;
+  background: #2e2e35;
 }
 .editor-tab:hover {
-  color: #a8a8b3;
+  color: #a0a0ab;
 }
 .editor-tab.active {
-  color: #f5f5f7;
-  background: #15151b;
+  color: #e2e2e6;
+  background: #1c1c21;
 }
 .editor-tab.active::after {
-  /* Lime indicator strip on top edge of active tab */
   content: "";
   position: absolute;
   left: 0;
   right: 0;
   top: 0;
-  height: 1.5px;
-  background: #c6ff3d;
-  box-shadow: 0 0 8px rgba(198, 255, 61, 0.55);
+  height: 2px;
+  background: #e5a639;
 }
 .editor-tab .close-btn {
   opacity: 0;
   transition: opacity 0.15s, color 0.15s;
   border-radius: 2px;
   padding: 2px;
-  color: #5e5e68;
+  color: #6b6b76;
   background: transparent;
   border: none;
   display: flex;
@@ -442,60 +459,67 @@
   opacity: 1;
 }
 .editor-tab .close-btn:hover {
-  color: #c6ff3d;
+  color: #e5a639;
 }
 
 /* Status bar */
 .status-bar {
   height: 24px;
   min-height: 24px;
-  background: #0b0b0e;
-  border-top: 1px solid #28282f;
+  background: #16161a;
+  border-top: 1px solid #2e2e35;
   display: flex;
   align-items: center;
   gap: 16px;
   padding: 0 14px;
   font-size: 10px;
-  font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
-  letter-spacing: 0.05em;
-  color: #5e5e68;
-  text-transform: uppercase;
+  font-family: var(--app-font-mono);
+  letter-spacing: 0.03em;
+  color: #6b6b76;
 }
 
 /* Breadcrumb */
 .breadcrumb {
   height: 28px;
-  background: #0b0b0e;
-  border-bottom: 1px solid #28282f;
+  background: #16161a;
+  border-bottom: 1px solid #2e2e35;
   display: flex;
   align-items: center;
   padding: 0 16px;
   font-size: 11px;
-  font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
-  color: #5e5e68;
+  font-family: var(--app-font-mono);
+  color: #6b6b76;
   gap: 4px;
 }
 
-/* File tree */
+/* File tree — editorial-terminal aesthetic, mirrors @-attachment menu */
 .file-tree-item {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 0;
-  font-size: 0.82rem;
+  gap: 8px;
+  padding: 4px 8px 4px 6px;
+  font-family: var(--app-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.01em;
   cursor: pointer;
-  border-radius: 2px;
-  color: hsl(220 14% 75%);
+  color: #a0a0ab;
   user-select: none;
-  transition: background 0.1s;
+  border-left: 2px solid transparent;
+  transition: background 0.12s, color 0.12s, border-left-color 0.12s;
 }
 .file-tree-item:hover {
-  background: hsl(220 13% 22%);
-  color: hsl(220 14% 90%);
+  background: #1c1c21;
+  color: #e2e2e6;
+  border-left-color: #e5a63950;
 }
 .file-tree-item.selected {
-  background: hsl(207 90% 40% / 0.3);
-  color: hsl(220 14% 95%);
+  background: #e5a63918;
+  color: #e5a639;
+  border-left-color: #e5a639;
+}
+.file-tree-item.selected:hover {
+  background: #e5a63920;
+  color: #e5a639;
 }
 
 /* Chat streaming cursor */
@@ -507,7 +531,7 @@
   content: '▋';
   animation: blink 0.8s ease-in-out infinite;
   font-size: 0.75em;
-  color: hsl(207 90% 60%);
+  color: #6cb6ff;
   margin-left: 2px;
   vertical-align: -1px;
 }
@@ -532,8 +556,8 @@
 
 /* Pulse glow for active elements */
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 4px hsl(207 90% 50% / 0.2); }
-  50% { box-shadow: 0 0 12px hsl(207 90% 50% / 0.4); }
+  0%, 100% { box-shadow: 0 0 4px #e5a63933; }
+  50% { box-shadow: 0 0 12px #e5a63966; }
 }
 
 /* Global smooth transitions */

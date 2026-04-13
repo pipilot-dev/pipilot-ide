@@ -22,7 +22,12 @@
 import type * as Monaco from "monaco-editor";
 import type { IDisposable, editor as MonacoEditor, Position, IRange } from "monaco-editor";
 
-// Same OpenAI-compatible endpoint that useChat uses
+// Codestral FIM (fill-in-the-middle) — proxied through our Express server
+// to avoid CORS. The server adds the API key.
+const FIM_URL = "/api/codestral/fim";
+const FIM_MODEL = "codestral-latest";
+
+// Fallback: OpenAI-compatible endpoint (used when Codestral is unreachable)
 const LLM_URL = "https://the3rdacademy.com/api/chat/completions";
 const LLM_MODEL = "kilo-auto/free";
 const DEBUG = typeof window !== "undefined" && localStorage.getItem("pipilot:debug-inline-ai") === "1";
@@ -48,6 +53,61 @@ const config = {
  */
 export function configureInlineAI(overrides: Partial<typeof config>) {
   Object.assign(config, overrides);
+}
+
+/**
+ * Read inline AI settings from localStorage (saved by SettingsTabView) and
+ * apply them to the runtime config. Also listens for the
+ * `pipilot:setting-changed` custom event so changes take effect immediately
+ * without a page reload.
+ *
+ * Call once at app startup (e.g. in EditorArea or App).
+ * Returns a cleanup function that removes the event listener.
+ */
+export function applyInlineAISettings(): () => void {
+  function applyFromStorage() {
+    const enabled = localStorage.getItem("pipilot:aiInlineEnabled");
+    const delay = localStorage.getItem("pipilot:aiInlineDelay");
+    const contextLines = localStorage.getItem("pipilot:aiContextLines");
+
+    const overrides: Partial<typeof config> = {};
+
+    if (enabled !== null) {
+      // stored as "true" / "false"
+      overrides.enabled = enabled === "true";
+    }
+    if (delay !== null) {
+      const ms = parseInt(delay, 10);
+      if (!isNaN(ms) && ms >= 0) overrides.keystrokeDebounce = ms;
+    }
+    if (contextLines !== null) {
+      const lines = parseInt(contextLines, 10);
+      if (!isNaN(lines) && lines > 0) {
+        overrides.contextLinesBefore = lines;
+        // Keep after-context proportional (1/3 of before)
+        overrides.contextLinesAfter = Math.max(5, Math.round(lines / 3));
+      }
+    }
+
+    if (Object.keys(overrides).length > 0) {
+      Object.assign(config, overrides);
+      dlog("settings applied from localStorage", overrides);
+    }
+  }
+
+  // Apply immediately on call
+  applyFromStorage();
+
+  // Re-apply whenever any setting changes
+  function onSettingChanged(e: Event) {
+    const key = (e as CustomEvent<{ key: string }>).detail?.key;
+    if (key === "aiInlineEnabled" || key === "aiInlineDelay" || key === "aiContextLines") {
+      applyFromStorage();
+    }
+  }
+
+  window.addEventListener("pipilot:setting-changed", onSettingChanged);
+  return () => window.removeEventListener("pipilot:setting-changed", onSettingChanged);
 }
 
 function dlog(...args: any[]) {
@@ -304,33 +364,59 @@ async function fetchSuggestion(): Promise<void> {
       lines: totalLines,
       chars: fullText.length,
     });
-    const res = await fetch(LLM_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer unused",
-      },
-      body: JSON.stringify({
-        model: LLM_MODEL,
-        messages: [
-          { role: "system", content: buildSystemPrompt(language, useFullFile) },
-          { role: "user", content: `${before}<|cursor|>${after}` },
-        ],
-        temperature: 0,
-        max_tokens: useFullFile ? config.smallFileMaxTokens : config.largeFileMaxTokens,
-        stream: false,
-        direct_kilo: true,
-      }),
-    });
 
-    if (!res.ok) {
-      dlog("fetch error", res.status);
-      return;
+    // Try Codestral FIM first (purpose-built for code completion),
+    // fall back to the generic chat endpoint if it fails.
+    let raw = "";
+    try {
+      const fimRes = await fetch(FIM_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: FIM_MODEL,
+          prompt: before,
+          suffix: after,
+          temperature: 0,
+          max_tokens: useFullFile ? config.smallFileMaxTokens : config.largeFileMaxTokens,
+          stop: ["\n\n\n", "```"],
+        }),
+      });
+      if (fimRes.ok) {
+        const fimData = await fimRes.json();
+        raw = (fimData.choices?.[0]?.message?.content || fimData.choices?.[0]?.text || "").toString();
+        dlog("codestral FIM response", raw.slice(0, 80));
+      } else {
+        dlog("codestral FIM error", fimRes.status, "— falling back to chat endpoint");
+        throw new Error("FIM failed");
+      }
+    } catch {
+      // Fallback to generic chat completion
+      const res = await fetch(LLM_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer unused",
+        },
+        body: JSON.stringify({
+          model: LLM_MODEL,
+          messages: [
+            { role: "system", content: buildSystemPrompt(language, useFullFile) },
+            { role: "user", content: `${before}<|cursor|>${after}` },
+          ],
+          temperature: 0,
+          max_tokens: useFullFile ? config.smallFileMaxTokens : config.largeFileMaxTokens,
+          stream: false,
+          direct_kilo: true,
+        }),
+      });
+      if (!res.ok) {
+        dlog("fallback fetch error", res.status);
+        return;
+      }
+      const data = await res.json();
+      raw = (data.choices?.[0]?.message?.content || "").toString();
     }
 
-    const data = await res.json();
-    // OpenAI-compatible response: { choices: [{ message: { content } }] }
-    let raw = (data.choices?.[0]?.message?.content || "").toString();
     if (!raw.trim()) {
       dlog("empty response");
       return;
@@ -434,15 +520,19 @@ function registerProvider(monaco: typeof Monaco) {
         cacheSize: cache.length,
       });
 
-      // Filter cache for entries relevant to current position. Allow up
-      // to 12 columns of drift on the same line (the user may have typed
-      // a few chars while waiting for the response). Prefer the MOST
-      // RECENT cached entries by reversing.
+      // Filter cache for entries relevant to current position. Only allow
+      // suggestions from the EXACT same line where the cursor column is at
+      // or ahead of the cached anchor (the user typed forward). Suggestions
+      // from previous lines are always stale — they'd cause the cursor to
+      // jump when accepted.
       const relevant = [...cache]
         .reverse()
         .filter((s) => {
           if (s.range.startLineNumber !== position.lineNumber) return false;
-          if (Math.abs(s.range.startColumn - position.column) > 12) return false;
+          // Cursor must be at or ahead of the cached column (user typed forward)
+          // but not more than 12 columns ahead
+          const drift = position.column - s.range.startColumn;
+          if (drift < 0 || drift > 12) return false;
           return true;
         })
         .slice(0, 3); // Top 3 most-recent matches
@@ -503,9 +593,17 @@ export function setupInlineAI(
 
   const disposables: IDisposable[] = [];
 
-  // Trigger debounced fetch whenever the user types
+  // Trigger debounced fetch whenever the user types.
+  // If the change includes a newline (Enter key), flush the cache first —
+  // stale suggestions anchored at the old line would cause the cursor to
+  // jump back when Monaco tries to apply them.
   disposables.push(
-    editor.onDidChangeModelContent(() => {
+    editor.onDidChangeModelContent((e) => {
+      const hasNewline = e.changes.some((c) => c.text.includes("\n"));
+      if (hasNewline) {
+        cache.length = 0;
+        dlog("cache flushed — newline detected");
+      }
       scheduleFetch();
     }),
   );

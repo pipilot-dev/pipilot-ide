@@ -51,13 +51,9 @@ const KEYBOARD_SHORTCUTS = [
   { keys: ["Ctrl", "Enter"], description: "Submit modal answer" },
 ];
 
-// Settings that need to mirror to localStorage so non-React modules
-// (TerminalPanel initial state, ActivityBar, etc.) can read them synchronously
-const LOCALSTORAGE_KEYS = new Set([
-  "terminalDefaultType",
-  "showActivityBadges",
-  "aiInlineEnabled",
-]);
+// ALL settings are mirrored to localStorage so non-React modules
+// (RealTerminal, ActivityBar, inline AI, etc.) can read them synchronously.
+// A custom event is dispatched so live components can react to changes.
 
 export function SettingsTabView() {
   const { get, set } = useSettings();
@@ -81,12 +77,15 @@ export function SettingsTabView() {
       .catch(() => {});
   }, []);
 
-  // Save with visual flash
+  // Save with visual flash — mirrors every setting to localStorage
+  // AND dispatches an event so live consumers (terminal, editor, AI) react.
   const save = async (key: string, value: string) => {
     await set(key, value);
-    if (LOCALSTORAGE_KEYS.has(key)) {
-      try { localStorage.setItem(`pipilot:${key}`, value); } catch {}
-    }
+    try { localStorage.setItem(`pipilot:${key}`, value); } catch {}
+    // Notify non-React consumers (RealTerminal settings cache, etc.)
+    window.dispatchEvent(new CustomEvent("pipilot:setting-changed", {
+      detail: { key, value },
+    }));
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 900);
   };

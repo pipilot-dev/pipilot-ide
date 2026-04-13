@@ -27,7 +27,9 @@ import { exportProjectAsZip } from "@/lib/exportZip";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 import { importFromZip, importFromFolder } from "@/lib/importFiles";
 import { useActiveProject } from "@/contexts/ProjectContext";
+import { useNotifications } from "@/contexts/NotificationContext";
 import { ExtensionMarketplace } from "@/components/extensions/ExtensionMarketplace";
+import { WikiPanel } from "./WikiPanel";
 import { ExtensionSidebarHost } from "@/components/extensions/ExtensionSidebarHost";
 import { RunDebugPanel } from "@/components/ide/RunDebugPanel";
 import { SourceControlPanel } from "@/components/ide/SourceControlPanel";
@@ -165,15 +167,53 @@ interface SidebarPanelProps {
   onRenameFile?: (oldPath: string, newPath: string) => Promise<void>;
   onDeleteFile?: (filePath: string) => Promise<void>;
   onUpdateFileContent?: (filePath: string, content: string) => Promise<void>;
+  onCheckFileExists?: (filePath: string) => Promise<boolean>;
+  onGetFileContent?: (filePath: string) => Promise<string>;
+  /** Lazy-load the immediate children of a folder marked `lazy` (e.g. node_modules). */
+  onExpandLazyFolder?: (folderPath: string) => Promise<void>;
+  /** Shared git API instance from IDELayout — passed to SourceControlPanel
+   * so both the status bar branch picker and the panel share the same state. */
+  git?: import("@/hooks/useRealGit").RealGitApi;
 }
 
-export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSearchFiles, onRunPreview, onOpenTerminal, onOpenCommit, onOpenDiff, onCreateFile, onCreateFolder, onRenameFile, onDeleteFile, onUpdateFileContent }: SidebarPanelProps) {
+const bulkBtnStyle: React.CSSProperties = {
+  padding: "3px 8px",
+  fontFamily: FONTS.mono,
+  fontSize: 9,
+  fontWeight: 500,
+  letterSpacing: "0.1em",
+  textTransform: "uppercase",
+  background: "transparent",
+  color: C.textDim,
+  border: `1px solid ${C.border}`,
+  borderRadius: 2,
+  cursor: "pointer",
+  transition: "color 0.15s",
+};
+
+export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSearchFiles, onRunPreview, onOpenTerminal, onOpenCommit, onOpenDiff, onCreateFile, onCreateFolder, onRenameFile, onDeleteFile, onUpdateFileContent, onCheckFileExists, onExpandLazyFolder, git }: SidebarPanelProps) {
   useEffect(() => { injectFonts(); }, []);
   const { activeProjectId } = useActiveProject();
   const { activeProject } = useProjects();
+  const { addNotification, showToast } = useNotifications();
   const [searchQuery, setSearchQuery] = useState("");
   const [importing, setImporting] = useState(false);
   const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null);
+  const [rootDragOver, setRootDragOver] = useState(false);
+  // Bulk selection — node ids selected via shift/ctrl/cmd-click, drag-select,
+  // or keyboard navigation. Folders can be selected too (matches VSCode).
+  const [selectedSet, setSelectedSet] = useState<Set<string>>(new Set());
+  const [lastClickedFileId, setLastClickedFileId] = useState<string | null>(null);
+  // Focused node — separate from selection. Arrow keys move focus, enter/click
+  // promotes the focused node into the selection.
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+  // Marquee drag-select state. When the user mousedowns on empty space inside
+  // the file tree wrapper and drags, we draw a rectangle and select every
+  // node row that intersects it.
+  const [marquee, setMarquee] = useState<{
+    startX: number; startY: number; endX: number; endY: number; additive: boolean;
+  } | null>(null);
+  const fileTreeWrapperRef = useRef<HTMLDivElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -181,14 +221,41 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
   const [replaceQuery, setReplaceQuery] = useState("");
   const [searchMode, setSearchMode] = useState<SearchMode>("content");
-  const [caseSensitive, setCaseSensitive] = useState(false);
-  const [useRegex, setUseRegex] = useState(false);
+  // Initialise from saved settings (localStorage mirrors IndexedDB via SettingsTabView)
+  const [caseSensitive, setCaseSensitive] = useState(
+    () => localStorage.getItem("pipilot:searchCaseSensitive") === "true"
+  );
+  const [useRegex, setUseRegex] = useState(
+    () => localStorage.getItem("pipilot:searchRegex") === "true"
+  );
+  const [searchMaxResults, setSearchMaxResults] = useState<number>(
+    () => parseInt(localStorage.getItem("pipilot:searchMaxResults") ?? "200", 10) || 200
+  );
+  const [searchExclude, setSearchExclude] = useState<string>(
+    () => localStorage.getItem("pipilot:searchExclude") ?? "node_modules,.git,dist,build,.next"
+  );
   const [showReplace, setShowReplace] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
   const [isSearching, setIsSearching] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // React to settings changes dispatched by SettingsTabView in real-time
+  useEffect(() => {
+    function onSettingChanged(e: Event) {
+      const { key, value } = (e as CustomEvent<{ key: string; value: string }>).detail ?? {};
+      if (key === "searchCaseSensitive") setCaseSensitive(value === "true");
+      if (key === "searchRegex") setUseRegex(value === "true");
+      if (key === "searchMaxResults") {
+        const n = parseInt(value, 10);
+        if (!isNaN(n) && n > 0) setSearchMaxResults(n);
+      }
+      if (key === "searchExclude") setSearchExclude(value ?? "");
+    }
+    window.addEventListener("pipilot:setting-changed", onSettingChanged);
+    return () => window.removeEventListener("pipilot:setting-changed", onSettingChanged);
+  }, []);
 
   // Debounce the search query by 300ms
   useEffect(() => {
@@ -224,7 +291,8 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
             mode: searchMode,
             caseSensitive,
             useRegex,
-            maxResults: 200,
+            maxResults: searchMaxResults,
+            exclude: searchExclude,
           }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -247,7 +315,7 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     return () => {
       cancelled = true;
     };
-  }, [debouncedQuery, searchMode, caseSensitive, useRegex, activeProjectId]);
+  }, [debouncedQuery, searchMode, caseSensitive, useRegex, searchMaxResults, searchExclude, activeProjectId]);
 
   // Count total matches
   const totalMatchCount = useMemo(() => {
@@ -285,10 +353,13 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
   const handleReplace = useCallback(
     async (fileId: string, match: ContentMatch) => {
       try {
-        // Try to get content from in-memory tree first, fall back to DB
+        // Prefer in-memory content from the file tree, fall back to onGetFileContent callback
         const flatFiles = flattenFileTree(files);
         const inMemory = flatFiles.find((f) => f.id === fileId);
-        const content = inMemory?.content ?? (await db.files.get(fileId))?.content;
+        let content = inMemory?.content;
+        if (!content && onGetFileContent) {
+          content = await onGetFileContent(fileId);
+        }
         if (!content) return;
 
         const lines = content.split("\n");
@@ -308,8 +379,6 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
 
         if (onUpdateFileContent) {
           await onUpdateFileContent(fileId, newContent);
-        } else {
-          await db.files.update(fileId, { content: newContent, updatedAt: new Date() });
         }
         // Re-trigger search
         setDebouncedQuery("");
@@ -325,10 +394,13 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
   const handleReplaceInFile = useCallback(
     async (fileId: string) => {
       try {
-        // Try to get content from in-memory tree first, fall back to DB
+        // Prefer in-memory content from the file tree, fall back to onGetFileContent callback
         const flatFiles = flattenFileTree(files);
         const inMemory = flatFiles.find((f) => f.id === fileId);
-        const content = inMemory?.content ?? (await db.files.get(fileId))?.content;
+        let content = inMemory?.content;
+        if (!content && onGetFileContent) {
+          content = await onGetFileContent(fileId);
+        }
         if (!content) return;
 
         let pattern: RegExp;
@@ -341,8 +413,6 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
         const newContent = content.replace(pattern, replaceQuery);
         if (onUpdateFileContent) {
           await onUpdateFileContent(fileId, newContent);
-        } else {
-          await db.files.update(fileId, { content: newContent, updatedAt: new Date() });
         }
         // Re-trigger search
         setDebouncedQuery("");
@@ -458,26 +528,11 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     try {
       if (onCreateFolder) {
         await onCreateFolder(folderPath);
-      } else {
-        const existing = await db.files.get(folderPath);
-        if (existing) {
-          alert(`A file or folder already exists at: ${folderPath}`);
-          return;
-        }
-        await db.files.put({
-          id: folderPath,
-          name: trimmed,
-          type: "folder",
-          parentPath,
-          projectId: activeProjectId,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
       }
     } catch (err) {
       alert(`Failed to create folder: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [activeProjectId, onCreateFolder]);
+  }, [onCreateFolder]);
 
   const handleCtxRename = useCallback((node: FileNode) => {
     setRenamingNodeId(node.id);
@@ -496,54 +551,6 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     try {
       if (onRenameFile) {
         await onRenameFile(oldPath, newPath);
-      } else {
-        const existing = await db.files.get(newPath);
-        if (existing) {
-          alert(`A file or folder already exists at: ${newPath}`);
-          return;
-        }
-
-        const oldFile = await db.files.get(oldPath);
-        if (!oldFile) return;
-
-        if (node.type === "folder") {
-          // Recursively rename folder and all descendants
-          const allFiles = await db.files.toArray();
-          const descendants = allFiles.filter(
-            (f) => f.parentPath === oldPath || f.parentPath.startsWith(oldPath + "/")
-          );
-
-          await db.files.put({
-            ...oldFile,
-            id: newPath,
-            name: newName,
-            updatedAt: new Date(),
-          });
-
-          for (const desc of descendants) {
-            const newDescId = newPath + desc.id.substring(oldPath.length);
-            const newDescParent = newPath + desc.parentPath.substring(oldPath.length);
-            await db.files.put({
-              ...desc,
-              id: newDescId,
-              parentPath: newDescParent,
-              updatedAt: new Date(),
-            });
-            await db.files.delete(desc.id);
-          }
-
-          await db.files.delete(oldPath);
-        } else {
-          const ext = newName.split(".").pop()?.toLowerCase();
-          await db.files.put({
-            ...oldFile,
-            id: newPath,
-            name: newName,
-            language: LANG_MAP[ext ?? ""] ?? "plaintext",
-            updatedAt: new Date(),
-          });
-          await db.files.delete(oldPath);
-        }
       }
     } catch (err) {
       alert(`Rename failed: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -581,14 +588,11 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     const newPath = parentPath ? `${parentPath}/${newName}` : newName;
 
     try {
+      // Get content from in-memory tree for agent mode
+      const flatFiles = flattenFileTree(files);
+      const inMemory = flatFiles.find((f) => f.id === node.id);
       if (onCreateFile) {
-        // Get content from in-memory tree for agent mode
-        const flatFiles = flattenFileTree(files);
-        const inMemory = flatFiles.find((f) => f.id === node.id);
         await onCreateFile(newPath, inMemory?.content ?? node.content ?? "");
-      } else {
-        const original = await db.files.get(node.id);
-        await fileOps.createFile(newPath, original?.content ?? "", original?.projectId);
       }
     } catch (err) {
       alert(`Duplicate failed: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -596,10 +600,465 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
   }, [onCreateFile, files]);
 
   const handleCopyPath = useCallback((node: FileNode) => {
-    navigator.clipboard.writeText(node.id).catch(() => {
-      alert(`Path: ${node.id}`);
+    navigator.clipboard.writeText(node.id)
+      .then(() => showToast({ type: "success", title: "Path copied", message: node.id }))
+      .catch(() => showToast({ type: "warning", title: "Copy failed", message: node.id }));
+  }, [showToast]);
+
+  // ── Bulk multi-select ──
+  // Flat list of ALL visible nodes (files AND folders) for shift-click range
+  // expansion and keyboard navigation. Order matches the rendered tree
+  // (depth-first, folders before their children, only including expanded
+  // folders' children — that mirrors what the user sees).
+  const flatNodeIds = useMemo(() => {
+    const out: string[] = [];
+    function walk(nodes: FileNode[]) {
+      const sorted = [...nodes].sort((a, b) => {
+        if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      for (const n of sorted) {
+        out.push(n.id);
+        if (n.type === "folder" && n.children) walk(n.children);
+      }
+    }
+    walk(files);
+    return out;
+  }, [files]);
+
+  // Pure-file list (kept for ZIP/delete operations that only operate on files)
+  const flatFileIds = useMemo(() => {
+    const out: string[] = [];
+    function walk(nodes: FileNode[]) {
+      for (const n of nodes) {
+        if (n.type === "file") out.push(n.id);
+        if (n.children) walk(n.children);
+      }
+    }
+    walk(files);
+    return out;
+  }, [files]);
+
+  const handleMultiSelect = useCallback((node: FileNode, e: React.MouseEvent) => {
+    setSelectedSet((prev) => {
+      const next = new Set(prev);
+      // Shift-click → range select between last clicked and this one
+      if (e.shiftKey && lastClickedFileId) {
+        const a = flatNodeIds.indexOf(lastClickedFileId);
+        const b = flatNodeIds.indexOf(node.id);
+        if (a >= 0 && b >= 0) {
+          const [from, to] = a < b ? [a, b] : [b, a];
+          for (let i = from; i <= to; i++) next.add(flatNodeIds[i]);
+        } else {
+          next.add(node.id);
+        }
+      } else {
+        // Cmd/Ctrl-click → toggle individual
+        if (next.has(node.id)) next.delete(node.id);
+        else next.add(node.id);
+      }
+      return next;
     });
+    setLastClickedFileId(node.id);
+  }, [lastClickedFileId, flatNodeIds]);
+
+  const handleSelectAll = useCallback(() => {
+    setSelectedSet(new Set(flatNodeIds));
+  }, [flatNodeIds]);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedSet(new Set());
+    setLastClickedFileId(null);
   }, []);
+
+  const handleBulkDelete = useCallback(async () => {
+    if (selectedSet.size === 0) return;
+    const ids = Array.from(selectedSet);
+    if (!confirm(`Delete ${ids.length} file${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) return;
+    for (const id of ids) {
+      try {
+        if (onDeleteFile) await onDeleteFile(id);
+      } catch (err) {
+        console.error("delete failed:", id, err);
+      }
+    }
+    setSelectedSet(new Set());
+  }, [selectedSet, onDeleteFile]);
+
+  const handleBulkCopyPaths = useCallback(() => {
+    if (selectedSet.size === 0) return;
+    const paths = Array.from(selectedSet).join("\n");
+    navigator.clipboard.writeText(paths)
+      .then(() => showToast({
+        type: "success",
+        title: `Copied ${selectedSet.size} path${selectedSet.size === 1 ? "" : "s"}`,
+      }))
+      .catch(() => showToast({
+        type: "warning",
+        title: "Copy failed",
+        message: paths,
+      }));
+  }, [selectedSet, showToast]);
+
+  const handleBulkDownload = useCallback(async () => {
+    if (selectedSet.size === 0) return;
+    if (!activeProjectId) return;
+    showToast({
+      type: "info",
+      title: `Zipping ${selectedSet.size} file${selectedSet.size === 1 ? "" : "s"}…`,
+    });
+    try {
+      const res = await fetch("/api/files/zip-selection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: activeProjectId,
+          paths: Array.from(selectedSet),
+          name: `selection-${selectedSet.size}-files`,
+        }),
+      });
+      if (!res.ok) throw new Error(`zip failed: ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `selection-${selectedSet.size}-files.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      addNotification({
+        type: "success",
+        title: "Download ready",
+        message: `${selectedSet.size} file${selectedSet.size === 1 ? "" : "s"} · ${(blob.size / 1024).toFixed(1)}KB`,
+      });
+    } catch (err) {
+      addNotification({
+        type: "error",
+        title: "Download failed",
+        message: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  }, [selectedSet, activeProjectId, addNotification, showToast]);
+
+  // ── Keyboard navigation for the file tree ──
+  // ⌘A / Ctrl+A → select all
+  // Esc → clear selection
+  // ↑ / ↓ → move focus
+  // Shift + ↑/↓ → extend selection in that direction
+  // Enter → open the focused file (or expand/collapse the focused folder)
+  // Delete → delete selected items
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (view !== "explorer") return;
+      const target = e.target as HTMLElement | null;
+      // Don't hijack inputs / textareas / Monaco
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+
+      // ⌘A — select all
+      if ((e.metaKey || e.ctrlKey) && e.key === "a") {
+        e.preventDefault();
+        handleSelectAll();
+        return;
+      }
+
+      // Esc — clear selection
+      if (e.key === "Escape" && selectedSet.size > 0) {
+        handleClearSelection();
+        return;
+      }
+
+      // ↑ / ↓ — move focus through the visible flat node list
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        if (flatNodeIds.length === 0) return;
+        e.preventDefault();
+        const currentIdx = focusedNodeId ? flatNodeIds.indexOf(focusedNodeId) : -1;
+        let nextIdx: number;
+        if (currentIdx < 0) {
+          nextIdx = e.key === "ArrowDown" ? 0 : flatNodeIds.length - 1;
+        } else {
+          nextIdx = e.key === "ArrowDown"
+            ? Math.min(flatNodeIds.length - 1, currentIdx + 1)
+            : Math.max(0, currentIdx - 1);
+        }
+        const nextId = flatNodeIds[nextIdx];
+        setFocusedNodeId(nextId);
+
+        if (e.shiftKey) {
+          // Extend the selection toward the new focus
+          setSelectedSet((prev) => {
+            const next = new Set(prev);
+            next.add(nextId);
+            return next;
+          });
+        } else {
+          // Plain arrow — replace selection with just the focused node
+          setSelectedSet(new Set([nextId]));
+        }
+        setLastClickedFileId(nextId);
+
+        // Scroll the row into view
+        requestAnimationFrame(() => {
+          const wrapper = fileTreeWrapperRef.current;
+          const row = wrapper?.querySelector<HTMLElement>(`[data-tree-node-id="${CSS.escape(nextId)}"]`);
+          row?.scrollIntoView({ block: "nearest" });
+        });
+        return;
+      }
+
+      // Enter — open the focused file or toggle the focused folder
+      if (e.key === "Enter" && focusedNodeId) {
+        e.preventDefault();
+        // Find the node in the tree
+        const findNode = (nodes: FileNode[]): FileNode | null => {
+          for (const n of nodes) {
+            if (n.id === focusedNodeId) return n;
+            if (n.children) {
+              const found = findNode(n.children);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        const node = findNode(files);
+        if (node) onSelectFile(node);
+        return;
+      }
+
+      // Delete — bulk delete selected items
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedSet.size > 0) {
+        e.preventDefault();
+        handleBulkDelete();
+        return;
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, handleSelectAll, handleClearSelection, selectedSet.size, focusedNodeId, flatNodeIds, files]);
+
+  // ── Marquee drag-to-select ──
+  // Compute which node rows intersect the marquee rectangle and update
+  // the selection set accordingly. Uses data-tree-node-id attributes that
+  // FileTree adds to every row.
+  const updateMarqueeSelection = useCallback(
+    (startX: number, startY: number, endX: number, endY: number, additive: boolean) => {
+      const wrapper = fileTreeWrapperRef.current;
+      if (!wrapper) return;
+      const rectLeft = Math.min(startX, endX);
+      const rectRight = Math.max(startX, endX);
+      const rectTop = Math.min(startY, endY);
+      const rectBottom = Math.max(startY, endY);
+      const wrapperRect = wrapper.getBoundingClientRect();
+
+      const hits = new Set<string>();
+      const rows = wrapper.querySelectorAll<HTMLElement>("[data-tree-node-id]");
+      for (const row of rows) {
+        const r = row.getBoundingClientRect();
+        // Convert wrapper-relative coords to viewport coords
+        const rowTop = r.top - wrapperRect.top + wrapper.scrollTop;
+        const rowBottom = r.bottom - wrapperRect.top + wrapper.scrollTop;
+        const rowLeft = r.left - wrapperRect.left + wrapper.scrollLeft;
+        const rowRight = r.right - wrapperRect.left + wrapper.scrollLeft;
+        // Vertical overlap is enough — file tree rows span the full width
+        if (rowBottom < rectTop || rowTop > rectBottom) continue;
+        if (rowRight < rectLeft || rowLeft > rectRight) continue;
+        const id = row.dataset.treeNodeId;
+        if (id) hits.add(id);
+      }
+
+      setSelectedSet((prev) => {
+        if (additive) {
+          // Cmd/Ctrl held — union with existing selection
+          const next = new Set(prev);
+          for (const id of hits) next.add(id);
+          return next;
+        }
+        return hits;
+      });
+    },
+    [],
+  );
+
+  const handleTreeMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Only start marquee on left button drag from EMPTY space (not on a row)
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-tree-node-id]")) return; // clicked on a row
+    if (target.closest("button")) return;               // clicked on a button
+    if (target.closest("input")) return;                // clicked on an input
+
+    const wrapper = fileTreeWrapperRef.current;
+    if (!wrapper) return;
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const x = e.clientX - wrapperRect.left + wrapper.scrollLeft;
+    const y = e.clientY - wrapperRect.top + wrapper.scrollTop;
+    const additive = e.metaKey || e.ctrlKey || e.shiftKey;
+    setMarquee({ startX: x, startY: y, endX: x, endY: y, additive });
+    if (!additive) {
+      setSelectedSet(new Set());
+      setLastClickedFileId(null);
+    }
+    e.preventDefault();
+  }, []);
+
+  // Track mouse globally while marquee is active
+  useEffect(() => {
+    if (!marquee) return;
+    const handleMove = (e: MouseEvent) => {
+      const wrapper = fileTreeWrapperRef.current;
+      if (!wrapper) return;
+      const wrapperRect = wrapper.getBoundingClientRect();
+      const x = e.clientX - wrapperRect.left + wrapper.scrollLeft;
+      const y = e.clientY - wrapperRect.top + wrapper.scrollTop;
+      setMarquee((prev) => prev ? { ...prev, endX: x, endY: y } : null);
+      updateMarqueeSelection(marquee.startX, marquee.startY, x, y, marquee.additive);
+    };
+    const handleUp = () => setMarquee(null);
+    document.addEventListener("mousemove", handleMove);
+    document.addEventListener("mouseup", handleUp);
+    return () => {
+      document.removeEventListener("mousemove", handleMove);
+      document.removeEventListener("mouseup", handleUp);
+    };
+  }, [marquee, updateMarqueeSelection]);
+
+  // Drag-and-drop UPLOAD: read OS files as base64 and POST to the server.
+  // Works for binary files (images, fonts, archives, etc.) — base64 round-trip
+  // preserves bytes exactly. Folders dragged from the OS are silently skipped
+  // (DataTransfer.files only includes top-level files, not folder entries).
+  const handleUploadFiles = useCallback(async (targetFolderPath: string, fileList: File[]) => {
+    if (!activeProjectId) {
+      addNotification({ type: "warning", title: "No project open", message: "Open or create a project first." });
+      return;
+    }
+    if (fileList.length === 0) return;
+    // Filter: a directory dragged from the OS appears as an entry with size=0
+    // and empty type. We can't read directory contents from a plain drop event
+    // without DataTransferItemList.webkitGetAsEntry, which we'll skip for now.
+    const realFiles = fileList.filter((f) => f.size > 0 || f.type !== "");
+    if (realFiles.length === 0) {
+      addNotification({
+        type: "warning",
+        title: "Folders not supported",
+        message: "Drag individual files into the explorer for now.",
+      });
+      return;
+    }
+
+    setImporting(true);
+    const where = targetFolderPath || "(root)";
+    showToast({
+      type: "info",
+      title: `Uploading ${realFiles.length} file${realFiles.length === 1 ? "" : "s"}…`,
+      message: `→ ${where}`,
+    });
+    try {
+      // Read each file as base64. FileReader.readAsDataURL handles binary fine.
+      const filesPayload = await Promise.all(
+        realFiles.map((file) => new Promise<{ name: string; base64: string }>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            // Strip the "data:.../base64," prefix
+            const base64 = result.includes(",") ? result.split(",")[1] : result;
+            resolve({ name: file.name, base64 });
+          };
+          reader.onerror = () => {
+            console.error(`[upload] FileReader failed for ${file.name}:`, reader.error);
+            reject(reader.error || new Error("FileReader failed"));
+          };
+          reader.readAsDataURL(file);
+        })),
+      );
+
+      const totalBytes = filesPayload.reduce((s, f) => s + (f.base64.length * 3) / 4, 0);
+
+      const res = await fetch("/api/files/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: activeProjectId,
+          targetFolder: targetFolderPath,
+          files: filesPayload,
+        }),
+      });
+      if (res.status === 413) {
+        throw new Error("Files are too large (server limit: 1GB total)");
+      }
+      let data: any = {};
+      try { data = await res.json(); } catch {}
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Upload failed (${res.status})`);
+      }
+      addNotification({
+        type: "success",
+        title: `Uploaded ${data.count} file${data.count === 1 ? "" : "s"}`,
+        message: `${(totalBytes / 1024).toFixed(1)}KB → ${where}`,
+      });
+    } catch (err) {
+      console.error("[upload] failed:", err);
+      addNotification({
+        type: "error",
+        title: "Upload failed",
+        message: err instanceof Error ? err.message : "Unknown error",
+      });
+    } finally {
+      setImporting(false);
+    }
+  }, [activeProjectId, addNotification, showToast]);
+
+  // Drag-and-drop move: rename src to be inside the target folder.
+  const handleMoveFile = useCallback(async (srcPath: string, targetFolderPath: string) => {
+    const basename = srcPath.split("/").pop() || srcPath;
+    const newPath = targetFolderPath ? `${targetFolderPath}/${basename}` : basename;
+    if (newPath === srcPath) return;
+    if (newPath.startsWith(srcPath + "/")) return; // can't move into self/descendant
+    try {
+      if (onRenameFile) {
+        await onRenameFile(srcPath, newPath);
+      }
+    } catch (err) {
+      alert(`Move failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  }, [onRenameFile]);
+
+  // Copy the workspace-relative path (e.g. "src/utils/foo.ts")
+  const handleCopyRelativePath = useCallback((node: FileNode) => {
+    const p = node.id.replace(/^\/+/, "");
+    navigator.clipboard.writeText(p)
+      .then(() => showToast({ type: "success", title: "Relative path copied", message: p }))
+      .catch(() => showToast({ type: "warning", title: "Copy failed", message: p }));
+  }, [showToast]);
+
+  // Copy the absolute disk path. For linked projects we know the base from
+  // activeProject.linkedPath. For non-linked projects we ask the server for
+  // the workspace path so the result is correct on Windows/Mac/Linux.
+  const handleCopyAbsolutePath = useCallback(async (node: FileNode) => {
+    const rel = node.id.replace(/^\/+/, "");
+    let basePath = activeProject?.linkedPath;
+    if (!basePath && activeProjectId) {
+      try {
+        const res = await fetch(`/api/workspaces/info?projectId=${encodeURIComponent(activeProjectId)}`);
+        if (res.ok) {
+          const data = await res.json();
+          basePath = data.absolutePath || data.path;
+        }
+      } catch {}
+    }
+    if (!basePath) {
+      navigator.clipboard.writeText(rel)
+        .then(() => showToast({ type: "success", title: "Path copied", message: rel }))
+        .catch(() => showToast({ type: "warning", title: "Copy failed", message: rel }));
+      return;
+    }
+    const isWin = /^[a-zA-Z]:\\/.test(basePath) || basePath.includes("\\");
+    const sep = isWin ? "\\" : "/";
+    const joined = basePath.replace(/[/\\]+$/, "") + sep + rel.replace(/\//g, sep);
+    navigator.clipboard.writeText(joined)
+      .then(() => showToast({ type: "success", title: "Absolute path copied", message: joined }))
+      .catch(() => showToast({ type: "warning", title: "Copy failed", message: joined }));
+  }, [activeProject, activeProjectId, showToast]);
 
   // Filter files by search query
   const filteredFiles = searchQuery
@@ -675,21 +1134,22 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
             <SidebarIconButton onClick={() => handleCreateFolder("")} title="New Folder (in root)">
               <FolderPlus size={12} strokeWidth={1.6} />
             </SidebarIconButton>
-            <span style={{ width: 1, height: 12, background: C.border, margin: "0 2px" }} />
+          </div>
+
+          {/* Hairline divider */}
+          <div style={{ height: 1, background: C.border, margin: "0 14px" }} />
+
+          {/* Project Switcher + Import/Export */}
+          <div style={{ padding: "8px 14px 4px", display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <ProjectSwitcher />
+            </div>
             <SidebarIconButton onClick={() => folderInputRef.current?.click()} title="Import Folder" disabled={importing}>
               <Upload size={11} strokeWidth={1.6} />
             </SidebarIconButton>
             <SidebarIconButton onClick={handleExport} title="Export as ZIP">
               <Download size={11} strokeWidth={1.6} />
             </SidebarIconButton>
-          </div>
-
-          {/* Hairline divider */}
-          <div style={{ height: 1, background: C.border, margin: "0 14px" }} />
-
-          {/* Project Switcher */}
-          <div style={{ padding: "8px 14px 4px" }}>
-            <ProjectSwitcher />
           </div>
 
           {/* File search input */}
@@ -741,7 +1201,113 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
                 Workspace
               </span>
             </div>
-            <div className="pb-2 overflow-y-auto" style={{ maxHeight: "calc(100vh - 220px)" }}>
+
+            {/* Bulk-selection action strip — visible when files are multi-selected */}
+            {selectedSet.size > 0 && (
+              <div style={{
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "8px 14px",
+                margin: "0 8px 6px",
+                background: C.accentDim,
+                border: `1px solid ${C.accentLine}`,
+                borderRadius: 3,
+              }}>
+                <span style={{
+                  fontFamily: FONTS.mono, fontSize: 9, fontWeight: 600,
+                  letterSpacing: "0.12em", textTransform: "uppercase",
+                  color: C.accent,
+                }}>
+                  {String(selectedSet.size).padStart(2, "0")} selected
+                </span>
+                <div style={{ flex: 1 }} />
+                <button
+                  onClick={handleSelectAll}
+                  title="Select all (⌘A)"
+                  style={bulkBtnStyle}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
+                >
+                  All
+                </button>
+                <button
+                  onClick={handleBulkDownload}
+                  title="Download as ZIP"
+                  style={bulkBtnStyle}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
+                >
+                  ↓ ZIP
+                </button>
+                <button
+                  onClick={handleBulkDelete}
+                  title="Delete selected"
+                  style={bulkBtnStyle}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "#ff9b9b"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
+                >
+                  Delete
+                </button>
+                <button
+                  onClick={handleClearSelection}
+                  title="Clear selection (Esc)"
+                  style={{ ...bulkBtnStyle, padding: "2px 4px" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            <div
+              ref={fileTreeWrapperRef}
+              className="pb-2 overflow-y-auto"
+              style={{
+                maxHeight: "calc(100vh - 220px)",
+                position: "relative",
+                userSelect: marquee ? "none" : undefined,
+                ...(rootDragOver && {
+                  background: C.accentDim,
+                  boxShadow: `inset 0 0 0 1px ${C.accent}`,
+                }),
+              }}
+              onMouseDown={handleTreeMouseDown}
+              onDragOver={(e) => {
+                if (e.dataTransfer.types.includes("Files")) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "copy";
+                  setRootDragOver(true);
+                }
+              }}
+              onDragLeave={(e) => {
+                if (e.currentTarget === e.target) setRootDragOver(false);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setRootDragOver(false);
+                const externalFiles = Array.from(e.dataTransfer.files || []);
+                if (externalFiles.length > 0) {
+                  handleUploadFiles("", externalFiles);
+                }
+              }}
+            >
+              {/* Marquee selection rectangle overlay */}
+              {marquee && (
+                <div
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    left: Math.min(marquee.startX, marquee.endX),
+                    top: Math.min(marquee.startY, marquee.endY),
+                    width: Math.abs(marquee.endX - marquee.startX),
+                    height: Math.abs(marquee.endY - marquee.startY),
+                    background: `${C.accent}1a`,
+                    border: `1px solid ${C.accent}88`,
+                    borderRadius: 2,
+                    pointerEvents: "none",
+                    zIndex: 50,
+                  }}
+                />
+              )}
               <FileTree
                 nodes={filteredFiles}
                 selectedFileId={selectedFileId}
@@ -752,9 +1318,21 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
                 onDelete={handleCtxDelete}
                 onDuplicate={handleDuplicate}
                 onCopyPath={handleCopyPath}
+                onCopyRelativePath={handleCopyRelativePath}
+                onCopyAbsolutePath={handleCopyAbsolutePath}
+                onMoveFile={handleMoveFile}
+                onUploadFiles={handleUploadFiles}
+                selectedSet={selectedSet}
+                onMultiSelect={handleMultiSelect}
+                onClearSelection={() => setSelectedSet(new Set())}
+                focusedNodeId={focusedNodeId}
+                onBulkDelete={handleBulkDelete}
+                onBulkDownload={handleBulkDownload}
+                onBulkCopyPaths={handleBulkCopyPaths}
                 renamingNodeId={renamingNodeId}
                 onRenameSubmit={handleRenameSubmit}
                 onRenameCancel={handleRenameCancel}
+                onExpandLazyFolder={onExpandLazyFolder}
               />
             </div>
           </div>
@@ -1078,7 +1656,7 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
       )}
 
       {view === "source-control" && (
-        <SourceControlPanel onOpenCommit={onOpenCommit} onOpenDiff={onOpenDiff} />
+        <SourceControlPanel onOpenCommit={onOpenCommit} onOpenDiff={onOpenDiff} git={git} />
       )}
 
       {view === "debug" && (
@@ -1089,7 +1667,11 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
         <ExtensionMarketplace />
       )}
 
-      {view && !["explorer", "search", "source-control", "debug", "extensions"].includes(view) && (
+      {view === "wiki" && (
+        <WikiPanel activeTabId={selectedFileId} />
+      )}
+
+      {view && !["explorer", "search", "source-control", "debug", "extensions", "wiki"].includes(view) && (
         <ExtensionSidebarHost panelId={view} />
       )}
     </div>

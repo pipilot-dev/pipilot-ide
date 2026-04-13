@@ -191,6 +191,71 @@ export const availableTools: Tool[] = [
     icon: 'Globe',
     category: 'web',
   },
+  // ── Web / Research ──
+  {
+    id: 'research_search',
+    name: 'Web Search',
+    description: 'Search the web using DuckDuckGo and Jina AI. Returns search results with titles, URLs, and snippets.',
+    icon: 'Globe',
+    category: 'web',
+  },
+  {
+    id: 'research_extract',
+    name: 'Extract URL',
+    description: 'Extract and summarize content from any URL using Jina AI Reader.',
+    icon: 'FileText',
+    category: 'web',
+  },
+  // ── IDE Tools (custom MCP) ──
+  {
+    id: 'get_diagnostics',
+    name: 'Diagnostics',
+    description: 'Run diagnostics (TypeScript, Python, Go, Rust, PHP, Ruby) and return errors/warnings',
+    icon: 'Stethoscope',
+    category: 'dev',
+  },
+  {
+    id: 'manage_dev_server',
+    name: 'Dev Server',
+    description: 'Start, stop, restart, or check status of the project dev server',
+    icon: 'Server',
+    category: 'dev',
+  },
+  {
+    id: 'get_dev_server_logs',
+    name: 'Dev Logs',
+    description: 'Read recent dev server output to see build errors and compilation warnings',
+    icon: 'ScrollText',
+    category: 'dev',
+  },
+  {
+    id: 'search_npm',
+    name: 'npm Search',
+    description: 'Search the npm registry for packages by keyword before installing',
+    icon: 'Package',
+    category: 'web',
+  },
+  {
+    id: 'update_project_context',
+    name: 'Project Context',
+    description: 'Scan workspace and return framework, file tree, dependencies, config files',
+    icon: 'RefreshCw',
+    category: 'project',
+  },
+  {
+    id: 'frontend_design_guide',
+    name: 'Design Guide',
+    description: 'Analyze CSS, Tailwind config, and design files to extract the visual design system',
+    icon: 'Palette',
+    category: 'dev',
+  },
+  {
+    id: 'analyze_ui',
+    name: 'Analyze UI',
+    description: 'Static HTML/CSS/JSX analysis for UI structure, styles, layout — works without vision',
+    icon: 'ScanSearch',
+    category: 'dev',
+  },
   // ── Special ──
   {
     id: 'discover_tools',

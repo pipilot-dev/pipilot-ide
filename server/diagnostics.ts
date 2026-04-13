@@ -11,10 +11,12 @@
 
 import { spawn, exec } from "child_process";
 import { promisify } from "util";
+import { createRequire } from "module";
 import path from "path";
 import fs from "fs";
 
 const execAsync = promisify(exec);
+const require = createRequire(import.meta.url);
 
 export interface Diagnostic {
   file: string;       // workspace-relative path
@@ -23,7 +25,17 @@ export interface Diagnostic {
   severity: "error" | "warning" | "info";
   code?: string;      // e.g. "TS2304" or "no-unused-vars"
   message: string;
-  source: "typescript" | "eslint" | "json" | "syntax";
+  source: "typescript" | "eslint" | "json" | "syntax" | "python" | "go" | "rust" | "php" | "ruby";
+}
+
+/** Check whether a binary exists on PATH (cross-platform) */
+function commandExists(cmd: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const which = isWindows ? "where" : "which";
+    const proc = spawn(which, [cmd], { shell: false });
+    proc.on("exit", (code) => resolve(code === 0));
+    proc.on("error", () => resolve(false));
+  });
 }
 
 const isWindows = process.platform === "win32";
@@ -106,48 +118,97 @@ function runCommand(
   });
 }
 
-// ─── TypeScript ──────────────────────────────────────────────────
+// ─── Dependency installation ─────────────────────────────────────
+
+interface InstallResult {
+  installed: boolean;       // true if we ran an install in this call
+  alreadyPresent: boolean;  // true if node_modules was already there
+  packageManager: "pnpm" | "yarn" | "npm" | null;
+  durationMs: number;
+  error?: string;
+}
+
+/** Detect which package manager the project uses based on lockfile */
+function detectPackageManager(workDir: string): "pnpm" | "yarn" | "npm" | null {
+  if (fs.existsSync(path.join(workDir, "pnpm-lock.yaml"))) return "pnpm";
+  if (fs.existsSync(path.join(workDir, "yarn.lock"))) return "yarn";
+  if (fs.existsSync(path.join(workDir, "package-lock.json"))) return "npm";
+  if (fs.existsSync(path.join(workDir, "package.json"))) return "npm"; // default
+  return null;
+}
+
+/** Track in-flight installs so we don't kick off two installs for one project */
+const inFlightInstalls = new Map<string, Promise<InstallResult>>();
 
 /**
- * Parse `tsc --pretty false` output. Lines look like:
- *   src/foo.ts(10,5): error TS2304: Cannot find name 'foo'.
- *   src/foo.ts:10:5 - error TS2304: Cannot find name 'foo'.
- * Continuation/context lines are ignored for now.
+ * Ensure node_modules exists for a project. If package.json is present and
+ * node_modules is missing (or empty), runs the project's package manager.
+ *
+ * Without this, TypeScript can't resolve any imports — every `import 'react'`
+ * becomes a TS2307 "Cannot find module" error and the diagnostics list is
+ * dominated by noise instead of real bugs.
  */
-function parseTscOutput(output: string, workDir: string): Diagnostic[] {
-  const diagnostics: Diagnostic[] = [];
-  const lines = output.split(/\r?\n/);
-
-  // Format A: file.ts(line,col): error TSxxxx: message
-  const reA = /^(.+?)\((\d+),(\d+)\):\s+(error|warning|info)\s+(TS\d+):\s+(.+)$/;
-  // Format B: file.ts:line:col - error TSxxxx: message (with --pretty true)
-  const reB = /^(.+?):(\d+):(\d+)\s+-\s+(error|warning|info)\s+(TS\d+):\s+(.+)$/;
-
-  for (const line of lines) {
-    let match = line.match(reA) || line.match(reB);
-    if (!match) continue;
-
-    let [, filePath, lineNum, colNum, severity, code, message] = match;
-
-    // Normalize path: relative to workDir, forward slashes
-    if (path.isAbsolute(filePath)) {
-      filePath = path.relative(workDir, filePath);
-    }
-    filePath = filePath.replace(/\\/g, "/");
-
-    diagnostics.push({
-      file: filePath,
-      line: parseInt(lineNum) || 1,
-      column: parseInt(colNum) || 1,
-      severity: (severity as Diagnostic["severity"]) || "error",
-      code,
-      message: message.trim(),
-      source: "typescript",
-    });
+export async function ensureNodeModules(workDir: string): Promise<InstallResult> {
+  const start = Date.now();
+  const pkgPath = path.join(workDir, "package.json");
+  if (!fs.existsSync(pkgPath)) {
+    return { installed: false, alreadyPresent: false, packageManager: null, durationMs: 0 };
   }
 
-  return diagnostics;
+  const nmPath = path.join(workDir, "node_modules");
+  // "Present" = directory exists AND has at least one entry that isn't .package-lock.json
+  let alreadyPresent = false;
+  if (fs.existsSync(nmPath)) {
+    try {
+      const entries = fs.readdirSync(nmPath).filter((e) => !e.startsWith("."));
+      alreadyPresent = entries.length > 0;
+    } catch {}
+  }
+
+  const pm = detectPackageManager(workDir);
+  if (alreadyPresent) {
+    return { installed: false, alreadyPresent: true, packageManager: pm, durationMs: Date.now() - start };
+  }
+  if (!pm) {
+    return { installed: false, alreadyPresent: false, packageManager: null, durationMs: Date.now() - start };
+  }
+
+  // Dedupe concurrent installs for same workDir
+  const key = path.resolve(workDir);
+  const existing = inFlightInstalls.get(key);
+  if (existing) return existing;
+
+  const promise = (async (): Promise<InstallResult> => {
+    // pnpm/yarn/npm — install command. Use --no-audit/--no-fund for npm to keep it quick.
+    const args =
+      pm === "pnpm" ? ["install", "--prefer-offline", "--ignore-scripts"]
+      : pm === "yarn" ? ["install", "--prefer-offline", "--ignore-scripts"]
+      : ["install", "--prefer-offline", "--no-audit", "--no-fund", "--ignore-scripts"];
+
+    const cmd = isWindows ? `${pm}.cmd` : pm;
+    const result = await runCommand(cmd, args, workDir, 5 * 60_000); // 5 min cap
+
+    if (result.code !== 0) {
+      return {
+        installed: false,
+        alreadyPresent: false,
+        packageManager: pm,
+        durationMs: Date.now() - start,
+        error: (result.stderr || result.stdout || "install failed").slice(0, 2000),
+      };
+    }
+    return { installed: true, alreadyPresent: false, packageManager: pm, durationMs: Date.now() - start };
+  })();
+
+  inFlightInstalls.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlightInstalls.delete(key);
+  }
 }
+
+// ─── TypeScript ──────────────────────────────────────────────────
 
 /** Detect if the project has a tsconfig.json or jsconfig.json */
 function hasTsConfig(workDir: string): boolean {
@@ -158,41 +219,139 @@ function hasJsConfig(workDir: string): boolean {
   return fs.existsSync(path.join(workDir, "jsconfig.json"));
 }
 
-/** Run tsc --noEmit on the workspace, using tsconfig.json or jsconfig.json */
+/**
+ * Load the TypeScript module — prefer the project's own version if it has
+ * one in node_modules (so we match the exact version the project expects),
+ * otherwise fall back to the server-bundled typescript dependency.
+ */
+function loadTypeScript(workDir: string): typeof import("typescript") | null {
+  // Try project's own copy first
+  try {
+    const localPath = path.join(workDir, "node_modules", "typescript");
+    if (fs.existsSync(localPath)) {
+      // require.resolve to get the entry point, then require it
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      return require(localPath);
+    }
+  } catch {}
+  // Fallback to server-bundled
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("typescript");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run TypeScript type checking using the COMPILER API directly (no spawn).
+ *
+ * This is the same approach Dyad uses — much faster than spawning `tsc`
+ * because there's no process startup, no string parsing, and we get
+ * structured Diagnostic objects with precise line/column info.
+ *
+ * Loads the project's own typescript when available so we use the exact
+ * version the project depends on, otherwise falls back to the bundled one.
+ */
 export async function runTypeScriptCheck(workDir: string): Promise<Diagnostic[]> {
-  // tsc accepts jsconfig.json via -p flag, since it's just a tsconfig with
-  // allowJs defaulted on and checkJs defaulted off.
   const hasTs = hasTsConfig(workDir);
   const hasJs = hasJsConfig(workDir);
-  if (!hasTs && !hasJs) {
-    return [];
+  if (!hasTs && !hasJs) return [];
+
+  // Make sure node_modules exists so TS can resolve imports — without this
+  // every `import 'react'` becomes a TS2307 and floods the diagnostics list.
+  await ensureNodeModules(workDir).catch(() => {});
+
+  const ts = loadTypeScript(workDir);
+  if (!ts) return [];
+
+  // Resolve the right config file
+  const configFileName = hasTs ? "tsconfig.json" : "jsconfig.json";
+  const configPath = path.join(workDir, configFileName);
+
+  // Parse the config — ts.parseJsonConfigFileContent does extends resolution,
+  // include/exclude expansion, all the things tsc does on startup.
+  const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
+  if (configFile.error) {
+    const d = formatTsDiagnostic(ts, configFile.error, workDir);
+    return d ? [d] : [];
   }
 
-  const localTsc = findLocalBin(workDir, "tsc");
-  // Build args based on which config we have
-  const args = ["--noEmit", "--pretty", "false"];
-  if (!hasTs && hasJs) {
-    args.push("-p", "jsconfig.json");
+  const parsed = ts.parseJsonConfigFileContent(
+    configFile.config,
+    ts.sys,
+    workDir,
+    {},
+    configPath,
+  );
+
+  if (parsed.errors.length > 0) {
+    const errs = parsed.errors
+      .map((e) => formatTsDiagnostic(ts, e, workDir))
+      .filter((d): d is Diagnostic => d !== null);
+    if (errs.length > 0) return errs;
   }
 
-  let result;
-  if (localTsc) {
-    result = await runCommand(
-      process.execPath,
-      [localTsc, ...args],
-      workDir,
-      120000,
-    );
+  // Create the program — this is the heavy step but it caches well
+  // when called repeatedly with the same files.
+  const program = ts.createProgram({
+    rootNames: parsed.fileNames,
+    options: parsed.options,
+  });
+
+  // Get all diagnostics — syntactic + semantic + global
+  const allDiagnostics = ts.getPreEmitDiagnostics(program);
+
+  return allDiagnostics
+    .map((d) => formatTsDiagnostic(ts, d, workDir))
+    .filter((d): d is Diagnostic => d !== null);
+}
+
+/** Convert a TypeScript Diagnostic into our common Diagnostic shape */
+function formatTsDiagnostic(
+  ts: typeof import("typescript"),
+  d: import("typescript").Diagnostic,
+  workDir: string,
+): Diagnostic | null {
+  // Severity mapping
+  let severity: Diagnostic["severity"] = "error";
+  if (d.category === ts.DiagnosticCategory.Warning) severity = "warning";
+  else if (d.category === ts.DiagnosticCategory.Suggestion) severity = "info";
+  else if (d.category === ts.DiagnosticCategory.Message) severity = "info";
+
+  let line = 1;
+  let column = 1;
+  let filePath = "";
+
+  if (d.file && d.start !== undefined) {
+    const pos = d.file.getLineAndCharacterOfPosition(d.start);
+    line = pos.line + 1;
+    column = pos.character + 1;
+    filePath = d.file.fileName;
+    // Make path workspace-relative with forward slashes
+    if (path.isAbsolute(filePath)) {
+      filePath = path.relative(workDir, filePath);
+    }
+    filePath = filePath.replace(/\\/g, "/");
+    // Skip diagnostics from node_modules — we don't want to flood the panel
+    if (filePath.includes("node_modules/")) return null;
   } else {
-    result = await runCommand(
-      isWindows ? "npx.cmd" : "npx",
-      ["tsc", ...args],
-      workDir,
-      120000,
-    );
+    // Global diagnostic with no file — skip if it's a config issue we don't care about
+    return null;
   }
 
-  return parseTscOutput(result.stdout + "\n" + result.stderr, workDir);
+  // Flatten the message — TS messages can be a chain
+  const message = ts.flattenDiagnosticMessageText(d.messageText, "\n");
+
+  return {
+    file: filePath,
+    line,
+    column,
+    severity,
+    code: `TS${d.code}`,
+    message,
+    source: "typescript",
+  };
 }
 
 // ─── ESLint ──────────────────────────────────────────────────────
@@ -359,17 +518,20 @@ export async function runJsSyntaxCheck(workDir: string): Promise<Diagnostic[]> {
 }
 
 /**
- * Fallback TypeScript check when the project has .ts/.tsx files but no
- * tsconfig.json. We synthesize a minimal config in a temp file and run
- * tsc against it.
+ * Fallback TypeScript check via compiler API when the project has
+ * .ts/.tsx files but no tsconfig.json. Builds a Program in-memory with
+ * sensible defaults and runs the same diagnostic extraction.
  */
 export async function runTypeScriptFallback(workDir: string): Promise<Diagnostic[]> {
-  // Find any .ts/.tsx files in the workspace
+  const ts = loadTypeScript(workDir);
+  if (!ts) return [];
+
+  // Find .ts/.tsx files in the workspace (cap at 200)
   const skipDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "out"]);
   const tsFiles: string[] = [];
 
   function findTs(dir: string, rel: string) {
-    if (tsFiles.length > 100) return; // cap
+    if (tsFiles.length > 200) return;
     let entries: string[];
     try { entries = fs.readdirSync(dir); } catch { return; }
     for (const entry of entries) {
@@ -382,7 +544,7 @@ export async function runTypeScriptFallback(workDir: string): Promise<Diagnostic
         findTs(full, relPath);
       } else if (stat.isFile()) {
         const ext = path.extname(entry).toLowerCase();
-        if (ext === ".ts" || ext === ".tsx") tsFiles.push(relPath);
+        if (ext === ".ts" || ext === ".tsx") tsFiles.push(full);
       }
     }
   }
@@ -390,49 +552,32 @@ export async function runTypeScriptFallback(workDir: string): Promise<Diagnostic
 
   if (tsFiles.length === 0) return [];
 
-  // Need tsc — try local first, then global
-  const localTsc = findLocalBin(workDir, "tsc");
-  if (!localTsc) {
-    // No local tsc and no tsconfig — we can't check TS files
-    return [];
-  }
-
-  // Write a synthesized tsconfig to a temp file in the workspace
-  const tempConfig = path.join(workDir, ".pipilot-tsconfig.json");
-  const config = {
-    compilerOptions: {
-      target: "esnext",
-      module: "esnext",
-      moduleResolution: "node",
-      jsx: "preserve",
-      esModuleInterop: true,
-      skipLibCheck: true,
-      allowJs: true,
-      noEmit: true,
-      strict: false,
-      isolatedModules: true,
-      resolveJsonModule: true,
-    },
-    include: tsFiles,
-    exclude: ["node_modules"],
+  // Use the compiler API directly with sensible default options
+  const compilerOptions: import("typescript").CompilerOptions = {
+    target: ts.ScriptTarget.ESNext,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    jsx: ts.JsxEmit.Preserve,
+    lib: ["lib.dom.d.ts", "lib.esnext.d.ts"],
+    allowJs: true,
+    checkJs: false,
+    skipLibCheck: true,
+    strict: false,
+    noEmit: true,
+    esModuleInterop: true,
+    resolveJsonModule: true,
+    isolatedModules: true,
   };
-  try {
-    fs.writeFileSync(tempConfig, JSON.stringify(config, null, 2));
-  } catch {
-    return [];
-  }
 
-  try {
-    const result = await runCommand(
-      process.execPath,
-      [localTsc, "--noEmit", "--pretty", "false", "-p", ".pipilot-tsconfig.json"],
-      workDir,
-      120000,
-    );
-    return parseTscOutput(result.stdout + "\n" + result.stderr, workDir);
-  } finally {
-    try { fs.unlinkSync(tempConfig); } catch {}
-  }
+  const program = ts.createProgram({
+    rootNames: tsFiles,
+    options: compilerOptions,
+  });
+
+  const allDiagnostics = ts.getPreEmitDiagnostics(program);
+  return allDiagnostics
+    .map((d) => formatTsDiagnostic(ts, d, workDir))
+    .filter((d): d is Diagnostic => d !== null);
 }
 
 // ─── JSON syntax ─────────────────────────────────────────────────
@@ -493,11 +638,324 @@ export async function runJsonCheck(workDir: string): Promise<Diagnostic[]> {
   return diagnostics;
 }
 
+// ─── Generic helpers for non-JS languages ───────────────────────
+
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", ".next", "out",
+  ".cache", ".vite", "coverage", ".turbo", ".vercel",
+  "__pycache__", ".venv", "venv", "env", ".mypy_cache", ".pytest_cache",
+  "target", "vendor",
+]);
+
+function findFilesByExt(workDir: string, exts: Set<string>, cap = 500): string[] {
+  const out: string[] = [];
+  function walk(dir: string, rel: string) {
+    if (out.length >= cap) return;
+    let entries: string[];
+    try { entries = fs.readdirSync(dir); } catch { return; }
+    for (const entry of entries) {
+      if (out.length >= cap) return;
+      if (SKIP_DIRS.has(entry)) continue;
+      const full = path.join(dir, entry);
+      const relPath = rel ? `${rel}/${entry}` : entry;
+      let stat: fs.Stats;
+      try { stat = fs.statSync(full); } catch { continue; }
+      if (stat.isDirectory()) walk(full, relPath);
+      else if (stat.isFile()) {
+        const ext = path.extname(entry).toLowerCase();
+        if (exts.has(ext)) out.push(relPath);
+      }
+    }
+  }
+  walk(workDir, "");
+  return out;
+}
+
+function fileExistsAny(workDir: string, names: string[]): boolean {
+  return names.some((n) => fs.existsSync(path.join(workDir, n)));
+}
+
+// ─── Python ──────────────────────────────────────────────────────
+
+interface PyrightDiagnostic {
+  file: string;
+  severity: "error" | "warning" | "information";
+  message: string;
+  range: { start: { line: number; character: number } };
+  rule?: string;
+}
+
+interface PyrightOutput {
+  generalDiagnostics: PyrightDiagnostic[];
+  summary?: { errorCount: number; warningCount: number };
+}
+
+/** Find pyright in the project's venv or on PATH */
+async function findPyright(workDir: string): Promise<{ cmd: string; args: string[] } | null> {
+  // 1. Local node_modules (if installed via npm)
+  const localNode = findLocalBin(workDir, "pyright");
+  if (localNode) return { cmd: process.execPath, args: [localNode] };
+
+  // 2. Project venv
+  const venvCandidates = isWindows
+    ? ["venv\\Scripts\\pyright.exe", ".venv\\Scripts\\pyright.exe"]
+    : ["venv/bin/pyright", ".venv/bin/pyright"];
+  for (const c of venvCandidates) {
+    const full = path.join(workDir, c);
+    if (fs.existsSync(full)) return { cmd: full, args: [] };
+  }
+
+  // 3. Global pyright on PATH
+  if (await commandExists(isWindows ? "pyright.cmd" : "pyright")) {
+    return { cmd: isWindows ? "pyright.cmd" : "pyright", args: [] };
+  }
+  return null;
+}
+
+/**
+ * Run Python type checking. Prefers pyright (fast, structured JSON output);
+ * falls back to per-file `python -m py_compile` for syntax-only checks if
+ * pyright isn't available.
+ */
+export async function runPythonCheck(workDir: string): Promise<Diagnostic[]> {
+  const pyFiles = findFilesByExt(workDir, new Set([".py"]), 500);
+  if (pyFiles.length === 0) return [];
+
+  // Prefer pyright
+  const pr = await findPyright(workDir);
+  if (pr) {
+    const result = await runCommand(
+      pr.cmd,
+      [...pr.args, "--outputjson", "."],
+      workDir,
+      120_000,
+    );
+    try {
+      // pyright always exits non-zero when diagnostics exist; that's expected.
+      const jsonStart = result.stdout.indexOf("{");
+      if (jsonStart < 0) return [];
+      const parsed = JSON.parse(result.stdout.slice(jsonStart)) as PyrightOutput;
+      const out: Diagnostic[] = [];
+      for (const d of parsed.generalDiagnostics || []) {
+        let filePath = d.file;
+        if (path.isAbsolute(filePath)) filePath = path.relative(workDir, filePath);
+        filePath = filePath.replace(/\\/g, "/");
+        if (filePath.includes("node_modules/") || filePath.includes("/.venv/") || filePath.includes("/venv/")) continue;
+        out.push({
+          file: filePath,
+          line: d.range.start.line + 1,
+          column: d.range.start.character + 1,
+          severity: d.severity === "information" ? "info" : d.severity,
+          code: d.rule,
+          message: d.message.split("\n")[0],
+          source: "python",
+        });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  // Fallback: py_compile for syntax errors only
+  const py = isWindows ? "python" : "python3";
+  if (!(await commandExists(py))) return [];
+
+  const out: Diagnostic[] = [];
+  const BATCH = 8;
+  for (let i = 0; i < pyFiles.length; i += BATCH) {
+    const batch = pyFiles.slice(i, i + BATCH);
+    const results = await Promise.all(
+      batch.map((rel) =>
+        runCommand(py, ["-m", "py_compile", rel], workDir, 10_000),
+      ),
+    );
+    for (let j = 0; j < batch.length; j++) {
+      const res = results[j];
+      const rel = batch[j];
+      if (res.code === 0) continue;
+      const err = res.stderr + res.stdout;
+      // Match: File "foo.py", line 5
+      const locMatch = err.match(/line (\d+)/);
+      const msgMatch = err.match(/(SyntaxError|IndentationError|TabError):\s*(.+)/);
+      out.push({
+        file: rel,
+        line: locMatch ? parseInt(locMatch[1]) : 1,
+        column: 1,
+        severity: "error",
+        code: msgMatch ? msgMatch[1] : "syntax",
+        message: msgMatch ? msgMatch[2].trim() : err.trim().split("\n").slice(-1)[0],
+        source: "python",
+      });
+    }
+  }
+  return out;
+}
+
+// ─── Go ──────────────────────────────────────────────────────────
+
+/**
+ * Run `go vet ./...` for the project. Outputs are line-based:
+ *   path/file.go:12:5: message
+ */
+export async function runGoCheck(workDir: string): Promise<Diagnostic[]> {
+  if (!fileExistsAny(workDir, ["go.mod"])) return [];
+  if (!(await commandExists("go"))) return [];
+
+  // `go vet ./...` covers the common bug-detection rules.
+  const result = await runCommand("go", ["vet", "./..."], workDir, 120_000);
+  const out: Diagnostic[] = [];
+  // go vet writes to stderr
+  const lines = (result.stderr + "\n" + result.stdout).split(/\r?\n/);
+  // Pattern: ./path/file.go:line:col: message
+  const re = /^(?:\.\/)?(.+?\.go):(\d+):(\d+):\s*(.+)$/;
+  for (const line of lines) {
+    const m = line.match(re);
+    if (!m) continue;
+    out.push({
+      file: m[1].replace(/\\/g, "/"),
+      line: parseInt(m[2]),
+      column: parseInt(m[3]),
+      severity: "warning",
+      message: m[4],
+      source: "go",
+    });
+  }
+  return out;
+}
+
+// ─── Rust ────────────────────────────────────────────────────────
+
+interface CargoMessage {
+  reason: string;
+  message?: {
+    level: "error" | "warning" | "note" | "help";
+    message: string;
+    code?: { code: string } | null;
+    spans: Array<{
+      file_name: string;
+      line_start: number;
+      column_start: number;
+      is_primary: boolean;
+    }>;
+  };
+}
+
+/**
+ * Run `cargo check --message-format json` and parse the diagnostic stream.
+ * Skips compile if no Cargo.toml at root.
+ */
+export async function runRustCheck(workDir: string): Promise<Diagnostic[]> {
+  if (!fileExistsAny(workDir, ["Cargo.toml"])) return [];
+  if (!(await commandExists("cargo"))) return [];
+
+  const result = await runCommand(
+    "cargo",
+    ["check", "--message-format", "json", "--quiet"],
+    workDir,
+    300_000,
+  );
+  const out: Diagnostic[] = [];
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let msg: CargoMessage;
+    try { msg = JSON.parse(line); } catch { continue; }
+    if (msg.reason !== "compiler-message" || !msg.message) continue;
+    const m = msg.message;
+    if (m.level !== "error" && m.level !== "warning") continue;
+    const primary = m.spans.find((s) => s.is_primary) || m.spans[0];
+    if (!primary) continue;
+    out.push({
+      file: primary.file_name.replace(/\\/g, "/"),
+      line: primary.line_start,
+      column: primary.column_start,
+      severity: m.level,
+      code: m.code?.code,
+      message: m.message,
+      source: "rust",
+    });
+  }
+  return out;
+}
+
+// ─── PHP ─────────────────────────────────────────────────────────
+
+/** Per-file `php -l` syntax check. */
+export async function runPhpCheck(workDir: string): Promise<Diagnostic[]> {
+  const phpFiles = findFilesByExt(workDir, new Set([".php"]), 300);
+  if (phpFiles.length === 0) return [];
+  if (!(await commandExists("php"))) return [];
+
+  const out: Diagnostic[] = [];
+  const BATCH = 8;
+  for (let i = 0; i < phpFiles.length; i += BATCH) {
+    const batch = phpFiles.slice(i, i + BATCH);
+    const results = await Promise.all(
+      batch.map((rel) => runCommand("php", ["-l", rel], workDir, 10_000)),
+    );
+    for (let j = 0; j < batch.length; j++) {
+      const res = results[j];
+      const rel = batch[j];
+      if (res.code === 0) continue;
+      // PHP Parse error: ... in foo.php on line 5
+      const m = (res.stdout + res.stderr).match(/(?:Parse error|Fatal error):\s*(.+?)\s+in\s+.+?\s+on line\s+(\d+)/i);
+      if (!m) continue;
+      out.push({
+        file: rel,
+        line: parseInt(m[2]),
+        column: 1,
+        severity: "error",
+        message: m[1].trim(),
+        source: "php",
+      });
+    }
+  }
+  return out;
+}
+
+// ─── Ruby ────────────────────────────────────────────────────────
+
+/** Per-file `ruby -c` syntax check. */
+export async function runRubyCheck(workDir: string): Promise<Diagnostic[]> {
+  const rbFiles = findFilesByExt(workDir, new Set([".rb"]), 300);
+  if (rbFiles.length === 0) return [];
+  if (!(await commandExists("ruby"))) return [];
+
+  const out: Diagnostic[] = [];
+  const BATCH = 8;
+  for (let i = 0; i < rbFiles.length; i += BATCH) {
+    const batch = rbFiles.slice(i, i + BATCH);
+    const results = await Promise.all(
+      batch.map((rel) => runCommand("ruby", ["-c", rel], workDir, 10_000)),
+    );
+    for (let j = 0; j < batch.length; j++) {
+      const res = results[j];
+      const rel = batch[j];
+      if (res.code === 0) continue;
+      // ruby -c output: foo.rb:5: syntax error, unexpected ...
+      const m = (res.stderr + res.stdout).match(/^(.+?):(\d+):\s*(.+)$/m);
+      if (!m) continue;
+      out.push({
+        file: rel,
+        line: parseInt(m[2]),
+        column: 1,
+        severity: "error",
+        message: m[3].trim(),
+        source: "ruby",
+      });
+    }
+  }
+  return out;
+}
+
 // ─── Aggregator ──────────────────────────────────────────────────
 
 export async function runAllChecks(workDir: string): Promise<{
   diagnostics: Diagnostic[];
-  ran: { typescript: boolean; eslint: boolean; json: boolean; syntax: boolean };
+  ran: {
+    typescript: boolean; eslint: boolean; json: boolean; syntax: boolean;
+    python: boolean; go: boolean; rust: boolean; php: boolean; ruby: boolean;
+  };
   durationMs: number;
 }> {
   const start = Date.now();
@@ -525,8 +983,19 @@ export async function runAllChecks(workDir: string): Promise<{
   // JSON: always
   const jsonCheck = runJsonCheck(workDir).catch(() => []);
 
-  const [tsDiags, syntaxDiags, eslintDiags, jsonDiags] = await Promise.all([
+  // Other languages — each one early-exits cheaply if not applicable
+  const pyCheck   = runPythonCheck(workDir).catch(() => []);
+  const goCheck   = runGoCheck(workDir).catch(() => []);
+  const rustCheck = runRustCheck(workDir).catch(() => []);
+  const phpCheck  = runPhpCheck(workDir).catch(() => []);
+  const rubyCheck = runRubyCheck(workDir).catch(() => []);
+
+  const [
+    tsDiags, syntaxDiags, eslintDiags, jsonDiags,
+    pyDiags, goDiags, rustDiags, phpDiags, rubyDiags,
+  ] = await Promise.all([
     tsCheck, syntaxCheck, eslintCheck, jsonCheck,
+    pyCheck, goCheck, rustCheck, phpCheck, rubyCheck,
   ]);
 
   // Dedupe: if a file already has a TS error, don't add a syntax error for it
@@ -534,7 +1003,10 @@ export async function runAllChecks(workDir: string): Promise<{
   const filesWithTsErrors = new Set(tsDiags.map((d) => d.file));
   const filteredSyntax = syntaxDiags.filter((d) => !filesWithTsErrors.has(d.file));
 
-  const all = [...tsDiags, ...filteredSyntax, ...eslintDiags, ...jsonDiags];
+  const all = [
+    ...tsDiags, ...filteredSyntax, ...eslintDiags, ...jsonDiags,
+    ...pyDiags, ...goDiags, ...rustDiags, ...phpDiags, ...rubyDiags,
+  ];
 
   return {
     diagnostics: all,
@@ -543,6 +1015,11 @@ export async function runAllChecks(workDir: string): Promise<{
       eslint: projectHasEslint,
       json: true,
       syntax: true,
+      python: pyDiags.length > 0 || findFilesByExt(workDir, new Set([".py"]), 1).length > 0,
+      go: fileExistsAny(workDir, ["go.mod"]),
+      rust: fileExistsAny(workDir, ["Cargo.toml"]),
+      php: findFilesByExt(workDir, new Set([".php"]), 1).length > 0,
+      ruby: findFilesByExt(workDir, new Set([".rb"]), 1).length > 0,
     },
     durationMs: Date.now() - start,
   };

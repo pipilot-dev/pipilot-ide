@@ -14,6 +14,12 @@ export interface FileNode {
   content?: string;
   children?: FileNode[];
   expanded?: boolean;
+  /**
+   * Folder hasn't been loaded yet. The UI should call loadFolderChildren()
+   * the first time the user expands it. Used for heavy folders like
+   * `node_modules` that we want to lazy-load like VSCode does.
+   */
+  lazy?: boolean;
 }
 
 export interface FileChangeEvent {
@@ -224,6 +230,26 @@ export function useFileSystem() {
           result = parts.join("\n\n");
           break;
         }
+        case "research_search": {
+          const { searchWeb, formatSearchResults } = await import("@/lib/research");
+          const query = args.query as string;
+          if (!query) result = "Error: query is required";
+          else {
+            const searchResults = await searchWeb(query);
+            result = formatSearchResults(searchResults);
+          }
+          break;
+        }
+        case "research_extract": {
+          const { extractUrl, formatExtractedContent } = await import("@/lib/research");
+          const url = args.url as string;
+          if (!url) result = "Error: url is required";
+          else {
+            const content = await extractUrl(url);
+            result = formatExtractedContent(content);
+          }
+          break;
+        }
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -242,6 +268,10 @@ export function useFileSystem() {
     return fileOps.readFile(path);
   }, []);
 
+  // No-op for local IndexedDB projects — they don't have node_modules.
+  // Provided so callers can use a single API regardless of fs backend.
+  const loadFolderChildren = useCallback(async (_folderPath: string) => {}, []);
+
   return {
     files,
     isReady,
@@ -249,6 +279,7 @@ export function useFileSystem() {
     executeTool,
     updateFileContent,
     getFileContent,
+    loadFolderChildren,
     activeProjectId,
   };
 }

@@ -124,6 +124,39 @@ export function useFileSystemRemote() {
     }
   }, [activeProjectId]);
 
+  /**
+   * Lazy-load the children of a folder (used for `node_modules` and any
+   * subfolder under it). Replaces the placeholder children in the tree
+   * with the real listing and clears the `lazy` flag so it isn't
+   * re-fetched on subsequent toggles.
+   */
+  const loadFolderChildren = useCallback(async (folderPath: string): Promise<void> => {
+    try {
+      const res = await fetch(
+        `/api/files/list-dir?projectId=${encodeURIComponent(activeProjectId)}&path=${encodeURIComponent(folderPath)}`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const children: FileNode[] = data.children || [];
+
+      // Walk the tree and replace the matching folder's children
+      function patch(nodes: FileNode[]): FileNode[] {
+        return nodes.map((n) => {
+          if (n.id === folderPath) {
+            return { ...n, children, lazy: false };
+          }
+          if (n.children) {
+            return { ...n, children: patch(n.children) };
+          }
+          return n;
+        });
+      }
+      setFiles((prev) => patch(prev));
+    } catch (err) {
+      console.error("[useFileSystemRemote] loadFolderChildren failed:", err);
+    }
+  }, [activeProjectId]);
+
   // Tool executor — file ops go to server, browser tools stay client-side
   const executeTool = useCallback(
     async (name: string, args: Record<string, unknown>): Promise<string> => {
@@ -256,6 +289,20 @@ export function useFileSystemRemote() {
           searchTree(files);
           return results.length > 0 ? results.join("\n") : "No matches found";
         }
+        case "research_search": {
+          const { searchWeb, formatSearchResults } = await import("@/lib/research");
+          const query = args.query as string;
+          if (!query) return "Error: query is required";
+          const results = await searchWeb(query);
+          return formatSearchResults(results);
+        }
+        case "research_extract": {
+          const { extractUrl, formatExtractedContent } = await import("@/lib/research");
+          const url = args.url as string;
+          if (!url) return "Error: url is required";
+          const content = await extractUrl(url);
+          return formatExtractedContent(content);
+        }
         default:
           return `Unknown tool: ${name}`;
       }
@@ -270,6 +317,7 @@ export function useFileSystemRemote() {
     executeTool,
     updateFileContent,
     getFileContent,
+    loadFolderChildren,
     activeProjectId,
   };
 }

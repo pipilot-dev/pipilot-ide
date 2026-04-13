@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent } from "react";
-import { Plus, X, Trash2, Monitor } from "lucide-react";
+import { Plus, X, Trash2, Terminal as TerminalIcon, ChevronDown } from "lucide-react";
 import { db } from "@/lib/db";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { XTerminal } from "@/components/ide/XTerminal";
 import { RealTerminal } from "@/components/ide/RealTerminal";
+import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 
 interface TerminalLine {
   id: number;
@@ -21,6 +22,14 @@ interface ShellTab {
   cwd: string; // current working directory within the virtual workspace
   nextLineId: number;
   initialCommand?: string; // for real shells: command to run on connect
+  profile?: string; // for real shells: shell profile id (bash / pwsh / cmd / ...)
+}
+
+interface ShellProfileInfo {
+  id: string;
+  label: string;
+  command: string;
+  available: boolean;
 }
 
 function createNodeShell(id: string, index: number): ShellTab {
@@ -36,10 +45,10 @@ function createNodeShell(id: string, index: number): ShellTab {
   };
 }
 
-function createRealShell(id: string, index: number, initialCommand?: string): ShellTab {
+function createRealShell(id: string, index: number, initialCommand?: string, profile?: string, profileLabel?: string): ShellTab {
   return {
     id,
-    name: `shell ${index}`,
+    name: profileLabel ? `${profileLabel.toLowerCase()} ${index}` : `shell ${index}`,
     type: "real",
     lines: [],
     history: [],
@@ -47,6 +56,7 @@ function createRealShell(id: string, index: number, initialCommand?: string): Sh
     cwd: "",
     nextLineId: 0,
     initialCommand,
+    profile,
   };
 }
 
@@ -57,7 +67,7 @@ function createShell(id: string, index: number): ShellTab {
     type: "virtual",
     lines: [
       { id: 0, type: "info", text: `PiPilot IDE Terminal — Shell ${index}` },
-      { id: 1, type: "info", text: "Type 'help' for commands. This terminal operates on the virtual workspace (IndexedDB).\n" },
+      { id: 1, type: "info", text: "Type 'help' for commands. This terminal operates on the virtual workspace.\n" },
     ],
     history: [],
     historyIndex: -1,
@@ -66,7 +76,7 @@ function createShell(id: string, index: number): ShellTab {
   };
 }
 
-export function TerminalPanel() {
+export function TerminalPanel({ onClose }: { onClose?: () => void }) {
   const { activeProjectId } = useActiveProject();
   // Default shell type from settings (real | virtual | node) — read from
   // localStorage so we have a synchronous value at initial mount.
@@ -888,6 +898,26 @@ export function TerminalPanel() {
   const nodeCounter = useRef(0);
   const realCounter = useRef(0);
 
+  // ── Shell profiles ── fetched once from the server
+  const [profiles, setProfiles] = useState<ShellProfileInfo[]>([]);
+  const [defaultProfile, setDefaultProfile] = useState<string | null>(null);
+  const [platform, setPlatform] = useState<string>("");
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/terminal/profiles")
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setProfiles(data.profiles || []);
+        setDefaultProfile(data.default || null);
+        setPlatform(data.platform || "");
+      })
+      .catch((err) => {
+        console.warn("[terminal] failed to fetch profiles", err);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   const addShell = () => {
     shellCounter.current++;
     const id = `shell-${shellCounter.current}`;
@@ -902,10 +932,10 @@ export function TerminalPanel() {
     setActiveShellId(id);
   };
 
-  const addRealShell = (initialCommand?: string) => {
+  const addRealShell = (initialCommand?: string, profile?: string, profileLabel?: string) => {
     realCounter.current++;
     const id = `real-${Date.now()}-${realCounter.current}`;
-    setShells((prev) => [...prev, createRealShell(id, realCounter.current, initialCommand)]);
+    setShells((prev) => [...prev, createRealShell(id, realCounter.current, initialCommand, profile, profileLabel)]);
     setActiveShellId(id);
     return id;
   };
@@ -950,127 +980,294 @@ export function TerminalPanel() {
 
   const prompt = activeShell?.cwd ? `${activeShell.cwd} $` : "$";
 
+  useEffect(() => { injectFonts(); }, []);
+
   const lineColor = (type: TerminalLine["type"]) => {
     switch (type) {
-      case "error": return "hsl(0 84% 65%)";
-      case "input": return "hsl(220 14% 55%)";
-      case "info": return "hsl(207 90% 65%)";
-      case "success": return "hsl(142 71% 60%)";
-      default: return "hsl(220 14% 80%)";
+      case "error": return C.error;
+      case "input": return C.textDim;
+      case "info": return C.info;
+      case "success": return "#a8ff7a";
+      default: return C.text;
     }
   };
 
-  return (
-    <div
-      className="flex flex-col"
-      style={{ height: "100%", background: "hsl(220 13% 10%)", overflow: "hidden" }}
-    >
-      {/* Tab bar */}
-      <div
-        className="flex items-center gap-0 border-b"
-        style={{
-          height: 28,
-          minHeight: 28,
-          background: "hsl(220 13% 13%)",
-          borderColor: "hsl(220 13% 20%)",
-        }}
-      >
-        {shells.map((shell) => (
-          <button
-            key={shell.id}
-            className="flex items-center gap-1.5 px-3 text-xs transition-colors group"
-            style={{
-              height: "100%",
-              color: activeShellId === shell.id ? "hsl(220 14% 90%)" : "hsl(220 14% 55%)",
-              background: activeShellId === shell.id ? "hsl(220 13% 10%)" : "transparent",
-              borderBottom: activeShellId === shell.id ? "1px solid hsl(207 90% 54%)" : "1px solid transparent",
-            }}
-            onClick={() => setActiveShellId(shell.id)}
-          >
-            <span className="font-mono">{shell.name}</span>
-            {shells.length > 1 && (
-              <span
-                className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-400"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeShell(shell.id);
-                }}
-              >
-                <X size={10} />
-              </span>
-            )}
-          </button>
-        ))}
+  const SHELL_TYPE_COLOR: Record<ShellTab["type"], string> = {
+    virtual: C.info,
+    node: "#a8ff7a",
+    real: C.accent,
+  };
+  const SHELL_TYPE_LABEL: Record<ShellTab["type"], string> = {
+    virtual: "VIRT",
+    node: "NODE",
+    real: "SH",
+  };
 
-        <div style={{ position: "relative" }}>
-          <button
-            className="flex items-center justify-center w-7 h-full transition-colors hover:bg-white/5"
-            style={{ color: "hsl(220 14% 50%)" }}
-            onClick={(e) => { e.stopPropagation(); setShowNewMenu(!showNewMenu); }}
-            title="New Terminal"
-          >
-            <Plus size={13} />
-          </button>
-          {showNewMenu && (
-            <div style={{
-              position: "absolute", top: "100%", left: 0, zIndex: 100,
-              background: "hsl(220 13% 18%)", border: "1px solid hsl(220 13% 25%)",
-              borderRadius: 6, padding: 4, minWidth: 160,
-              boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
-            }}>
-              <button
-                onClick={() => { addShell(); setShowNewMenu(false); }}
-                style={{
-                  display: "block", width: "100%", textAlign: "left",
-                  padding: "6px 10px", fontSize: 11, color: "hsl(220 14% 80%)",
-                  background: "transparent", border: "none", cursor: "pointer",
-                  borderRadius: 4,
-                }}
-                onMouseEnter={e => (e.currentTarget.style.background = "hsl(220 13% 25%)")}
-                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-              >
-                Virtual Shell (file ops)
-              </button>
-              <button
-                onClick={() => { addNodeShell(); setShowNewMenu(false); }}
-                style={{
-                  display: "block", width: "100%", textAlign: "left",
-                  padding: "6px 10px", fontSize: 11, color: "hsl(142 71% 60%)",
-                  background: "transparent", border: "none", cursor: "pointer",
-                  borderRadius: 4,
-                }}
-                onMouseEnter={e => (e.currentTarget.style.background = "hsl(220 13% 25%)")}
-                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-              >
-                Node.js Terminal (run JS files)
-              </button>
-              <button
-                onClick={() => { addRealShell(); setShowNewMenu(false); }}
-                style={{
-                  display: "block", width: "100%", textAlign: "left",
-                  padding: "6px 10px", fontSize: 11, color: "hsl(207 90% 65%)",
-                  background: "transparent", border: "none", cursor: "pointer",
-                  borderRadius: 4,
-                }}
-                onMouseEnter={e => (e.currentTarget.style.background = "hsl(220 13% 25%)")}
-                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-              >
-                System Shell (real terminal)
-              </button>
-            </div>
-          )}
+  return (
+    <div style={{
+      height: "100%",
+      background: C.bg,
+      display: "flex", flexDirection: "column",
+      fontFamily: FONTS.sans,
+      borderTop: `1px solid ${C.border}`,
+      overflow: "hidden",
+    }}>
+      {/* ── Header ── compact editorial strip */}
+      <div style={{
+        display: "flex", alignItems: "center",
+        height: 34, minHeight: 34,
+        padding: "0 12px",
+        borderBottom: `1px solid ${C.border}`,
+        background: C.surface,
+        flexShrink: 0,
+        gap: 0,
+      }}>
+        {/* Editorial section label */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8,
+          flexShrink: 0, marginRight: 12,
+        }}>
+          <span style={{
+            width: 5, height: 5, borderRadius: "50%",
+            background: C.accent,
+            boxShadow: `0 0 6px ${C.accent}80`,
+          }} />
+          <span style={{
+            fontFamily: FONTS.mono, fontSize: 9, fontWeight: 600,
+            letterSpacing: "0.18em", textTransform: "uppercase",
+            color: C.text,
+          }}>
+            Terminal
+          </span>
         </div>
 
-        <div className="flex-1" />
+        {/* Separator */}
+        <div style={{
+          width: 1, height: 14,
+          background: C.border,
+          flexShrink: 0, marginRight: 8,
+        }} />
 
-        <button
-          className="flex items-center justify-center w-7 h-full transition-colors hover:bg-white/5"
-          style={{ color: "hsl(220 14% 40%)" }}
-          onClick={() => updateShell(activeShellId, (s) => ({ ...s, lines: [], nextLineId: 0 }))}
-          title="Clear"
-        >
-          <Trash2 size={12} />
-        </button>
+        {/* Shell tabs — compact underline style */}
+        <div style={{
+          display: "flex", gap: 0, flex: 1, minWidth: 0,
+          overflowX: "auto", overflowY: "hidden",
+          height: "100%", alignItems: "stretch",
+        }}>
+          {shells.map((shell) => {
+            const active = activeShellId === shell.id;
+            const typeColor = SHELL_TYPE_COLOR[shell.type];
+            return (
+              <button
+                key={shell.id}
+                onClick={() => setActiveShellId(shell.id)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 5,
+                  padding: "0 10px",
+                  fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+                  letterSpacing: "0.06em",
+                  background: "transparent",
+                  color: active ? C.text : C.textDim,
+                  border: "none",
+                  borderBottom: active ? `2px solid ${typeColor}` : "2px solid transparent",
+                  cursor: "pointer",
+                  transition: "all 0.12s",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                  height: "100%",
+                }}
+                onMouseEnter={(e) => {
+                  if (!active) {
+                    e.currentTarget.style.color = C.text;
+                    e.currentTarget.style.borderBottomColor = `${C.border}`;
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!active) {
+                    e.currentTarget.style.color = C.textDim;
+                    e.currentTarget.style.borderBottomColor = "transparent";
+                  }
+                }}
+              >
+                <span style={{ color: typeColor, fontWeight: 700, fontSize: 8 }}>
+                  {SHELL_TYPE_LABEL[shell.type]}
+                </span>
+                <span>{shell.name}</span>
+                {shells.length > 1 && (
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeShell(shell.id);
+                    }}
+                    style={{
+                      display: "inline-flex", alignItems: "center",
+                      marginLeft: 2, padding: 1,
+                      color: C.textFaint, cursor: "pointer",
+                      borderRadius: 2, transition: "all 0.12s",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = C.error;
+                      e.currentTarget.style.background = `${C.error}18`;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = C.textFaint;
+                      e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <X size={9} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Action icons — tight cluster */}
+        <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0, marginLeft: 8 }}>
+          {/* New shell */}
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowNewMenu(!showNewMenu); }}
+              title="New terminal"
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 26, height: 26,
+                background: showNewMenu ? C.surfaceAlt : "transparent",
+                border: "none", borderRadius: 3,
+                color: showNewMenu ? C.accent : C.textDim,
+                cursor: "pointer", transition: "all 0.12s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = C.surfaceAlt;
+                e.currentTarget.style.color = C.accent;
+              }}
+              onMouseLeave={(e) => {
+                if (!showNewMenu) {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = C.textDim;
+                }
+              }}
+            >
+              <Plus size={13} />
+            </button>
+            {showNewMenu && (
+              <div style={{
+                position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 100,
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 3, padding: "4px 0", minWidth: 240,
+                maxHeight: 380, overflowY: "auto",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+              }}>
+                {profiles.filter((p) => p.available).length === 0 ? (
+                  <div style={{
+                    padding: "8px 14px",
+                    fontFamily: FONTS.mono, fontSize: 9,
+                    color: C.textFaint, fontStyle: "italic",
+                  }}>
+                    Loading shells…
+                  </div>
+                ) : (
+                  profiles.filter((p) => p.available).map((prof) => {
+                    const isDefault = prof.id === defaultProfile;
+                    return (
+                      <button
+                        key={prof.id}
+                        onClick={() => {
+                          addRealShell(undefined, prof.id, prof.label);
+                          setShowNewMenu(false);
+                        }}
+                        title={prof.command}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 10,
+                          width: "100%",
+                          padding: "7px 14px",
+                          fontFamily: FONTS.mono, fontSize: 10,
+                          background: "transparent",
+                          color: C.textMid,
+                          border: "none",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          letterSpacing: "0.04em",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = C.surfaceAlt;
+                          e.currentTarget.style.color = C.accent;
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                          e.currentTarget.style.color = C.textMid;
+                        }}
+                      >
+                        <TerminalIcon size={12} style={{ flexShrink: 0, opacity: 0.6 }} />
+                        <span style={{ flex: 1 }}>
+                          {prof.label}
+                        </span>
+                        {isDefault && (
+                          <span style={{
+                            fontSize: 7, fontWeight: 700,
+                            padding: "2px 5px", borderRadius: 2,
+                            background: `${C.accent}18`,
+                            color: C.accent,
+                            letterSpacing: "0.08em",
+                          }}>
+                            DEFAULT
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Clear */}
+          <button
+            onClick={() => updateShell(activeShellId, (s) => ({ ...s, lines: [], nextLineId: 0 }))}
+            title="Clear terminal"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 26, height: 26,
+              background: "transparent", border: "none", borderRadius: 3,
+              color: C.textDim, cursor: "pointer", transition: "all 0.12s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = C.surfaceAlt;
+              e.currentTarget.style.color = C.text;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = C.textDim;
+            }}
+          >
+            <Trash2 size={12} />
+          </button>
+
+          {/* Close / minimize */}
+          {onClose && (
+            <button
+              onClick={onClose}
+              title="Hide terminal"
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 26, height: 26,
+                background: "transparent", border: "none", borderRadius: 3,
+                color: C.textDim, cursor: "pointer", transition: "all 0.12s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = C.surfaceAlt;
+                e.currentTarget.style.color = C.text;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.color = C.textDim;
+              }}
+            >
+              <ChevronDown size={13} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Terminal output — render ALL real shells, hide inactive ones, so
@@ -1087,6 +1284,7 @@ export function TerminalPanel() {
             sessionId={s.id}
             projectId={activeProjectId}
             initialCommand={s.initialCommand}
+            profile={s.profile}
             onExit={() => { /* keep tab */ }}
           />
         </div>
@@ -1099,34 +1297,69 @@ export function TerminalPanel() {
       ) : activeShell?.type === "virtual" ? (
         <div
           ref={scrollRef}
-          className="px-3 py-2 font-mono text-xs leading-5 cursor-text"
-          style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
           onClick={() => inputRef.current?.focus()}
+          style={{
+            flex: 1, minHeight: 0, overflowY: "auto",
+            padding: "14px 16px",
+            fontFamily: FONTS.mono,
+            fontSize: 11,
+            lineHeight: 1.55,
+            cursor: "text",
+            background: C.bg,
+          }}
         >
           {activeShell?.lines.map((line) => (
             <div
               key={line.id}
-              className="whitespace-pre-wrap break-all"
-              style={{ color: lineColor(line.type) }}
+              style={{
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+                color: lineColor(line.type),
+                // Subtle left accent for input lines so the user's
+                // commands stand out from program output.
+                borderLeft: line.type === "input" ? `2px solid ${C.accentLine}` : "none",
+                paddingLeft: line.type === "input" ? 8 : 0,
+                marginLeft: line.type === "input" ? -10 : 0,
+              }}
             >
               {line.text}
             </div>
           ))}
 
-          {/* Input line */}
-          <div className="flex items-center gap-1.5">
-            <span style={{ color: "hsl(142 71% 60%)" }} className="flex-shrink-0 select-none">
+          {/* Input line — editorial prompt + caret */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8,
+            marginTop: 4,
+            borderLeft: `2px solid ${C.accent}`,
+            paddingLeft: 8,
+            marginLeft: -10,
+          }}>
+            <span style={{
+              color: C.accent,
+              flexShrink: 0,
+              userSelect: "none",
+              fontWeight: 600,
+              letterSpacing: "0.04em",
+            }}>
               {prompt}
             </span>
             <input
               ref={inputRef}
-              className="flex-1 bg-transparent outline-none font-mono text-xs caret-white"
-              style={{ color: "hsl(220 14% 92%)" }}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               spellCheck={false}
               autoComplete="off"
+              style={{
+                flex: 1,
+                background: "transparent",
+                outline: "none",
+                border: "none",
+                fontFamily: FONTS.mono,
+                fontSize: 11,
+                color: C.text,
+                caretColor: C.accent,
+              }}
             />
           </div>
         </div>

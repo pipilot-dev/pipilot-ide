@@ -1,73 +1,235 @@
+/**
+ * QueuePanel — editorial-terminal styled view of the local message queue.
+ * Mirrors TodoPanel's look so they sit together as a coherent stack
+ * above the chat input.
+ *
+ * The queue is owned by useAgentChat (localStorage-backed) and passed in
+ * as a controlled list — no more polling the disabled server-side queue.
+ */
+
 import { useState, useEffect } from "react";
-import { ListOrdered, Clock, X } from "lucide-react";
+import { ChevronDown, ChevronRight, X, Send } from "lucide-react";
+import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 
 interface QueuePanelProps {
-  projectId: string;
-  isStreaming: boolean;
+  queue?: string[];
+  onRemove?: (index: number) => void;
+  onClear?: () => void;
 }
 
-export function QueuePanel({ projectId, isStreaming }: QueuePanelProps) {
-  const [queue, setQueue] = useState<string[]>([]);
+export function QueuePanel({ queue, onRemove, onClear }: QueuePanelProps) {
   const [expanded, setExpanded] = useState(true);
+  useEffect(() => { injectFonts(); }, []);
 
-  // Poll queue status every 3 seconds while streaming
-  useEffect(() => {
-    if (!isStreaming || !projectId) return;
+  // Defensive: callers may pass undefined during HMR/initial load
+  const safeQueue = queue ?? [];
+  const safeRemove = onRemove ?? (() => {});
+  const safeClear = onClear ?? (() => {});
 
-    async function checkQueue() {
-      try {
-        const res = await fetch(`/api/agent/queue?projectId=${encodeURIComponent(projectId)}`);
-        if (res.ok) {
-          const data = await res.json();
-          setQueue(data.queue || []);
-        }
-      } catch {}
-    }
-
-    checkQueue();
-    const interval = setInterval(checkQueue, 3000);
-    return () => clearInterval(interval);
-  }, [projectId, isStreaming]);
-
-  // Clear when not streaming
-  useEffect(() => {
-    if (!isStreaming) setQueue([]);
-  }, [isStreaming]);
-
-  if (queue.length === 0) return null;
+  if (safeQueue.length === 0) return null;
 
   return (
-    <div style={{ borderTop: "1px solid hsl(220 13% 22%)", background: "hsl(220 13% 13%)" }}>
+    <div
+      style={{
+        borderTop: `1px solid ${C.border}`,
+        background: C.surface,
+        fontFamily: FONTS.sans,
+      }}
+    >
+      {/* ── Header ── */}
       <button
         onClick={() => setExpanded(!expanded)}
         style={{
-          width: "100%", display: "flex", alignItems: "center", gap: 8,
-          padding: "5px 12px", border: "none", background: "transparent",
-          cursor: "pointer", color: "hsl(220 14% 70%)", fontSize: 11,
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "10px 14px",
+          border: "none",
+          background: "transparent",
+          cursor: "pointer",
+          color: C.text,
+          textAlign: "left",
         }}
       >
-        <ListOrdered size={12} style={{ color: "hsl(38 92% 50%)" }} />
-        <span style={{ fontWeight: 600 }}>Queue</span>
-        <span style={{ color: "hsl(38 92% 50%)", fontSize: 10 }}>
-          {queue.length} pending
+        <span
+          aria-hidden
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: C.accent,
+            boxShadow: `0 0 8px ${C.accent}80`,
+            flexShrink: 0,
+          }}
+        />
+        <span
+          style={{
+            fontFamily: FONTS.mono,
+            fontSize: 9,
+            fontWeight: 500,
+            letterSpacing: "0.18em",
+            textTransform: "uppercase",
+            color: C.accent,
+            flexShrink: 0,
+          }}
+        >
+          / Q
         </span>
+        <span
+          style={{
+            fontFamily: FONTS.mono,
+            fontSize: 9,
+            fontWeight: 500,
+            letterSpacing: "0.18em",
+            textTransform: "uppercase",
+            color: C.text,
+            flexShrink: 0,
+          }}
+        >
+          Queued
+        </span>
+        <span
+          style={{
+            fontFamily: FONTS.mono,
+            fontSize: 9,
+            color: C.textDim,
+            letterSpacing: "0.05em",
+            flexShrink: 0,
+          }}
+        >
+          ({String(safeQueue.length).padStart(2, "0")})
+        </span>
+
+        <div style={{ flex: 1 }} />
+
+        <span
+          onClick={(e) => {
+            e.stopPropagation();
+            safeClear();
+          }}
+          style={{
+            fontFamily: FONTS.mono,
+            fontSize: 9,
+            fontWeight: 500,
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            color: C.textDim,
+            padding: "2px 8px",
+            borderRadius: 2,
+            cursor: "pointer",
+            transition: "color 0.15s",
+            flexShrink: 0,
+          }}
+          onMouseEnter={(e) => {
+            (e.target as HTMLElement).style.color = "#ff9b9b";
+          }}
+          onMouseLeave={(e) => {
+            (e.target as HTMLElement).style.color = C.textDim;
+          }}
+        >
+          clear
+        </span>
+
+        {expanded ? (
+          <ChevronDown size={11} style={{ color: C.textDim, flexShrink: 0 }} />
+        ) : (
+          <ChevronRight size={11} style={{ color: C.textDim, flexShrink: 0 }} />
+        )}
       </button>
 
+      {/* ── Queue list ── */}
       {expanded && (
-        <div style={{ padding: "0 12px 6px" }}>
-          {queue.map((msg, i) => (
+        <div
+          style={{
+            padding: "0 0 8px",
+            maxHeight: 200,
+            overflowY: "auto",
+            borderTop: `1px solid ${C.border}`,
+          }}
+        >
+          {safeQueue.map((item, i) => (
             <div
               key={i}
               style={{
-                display: "flex", alignItems: "center", gap: 6,
-                padding: "3px 0", fontSize: 10, color: "hsl(220 14% 55%)",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                padding: "7px 16px 7px 18px",
+                borderLeft: `2px solid ${i === 0 ? C.accent : C.accentLine}`,
+                borderBottom: i === safeQueue.length - 1 ? "none" : `1px solid ${C.border}`,
+                background: i === 0 ? C.accentDim : "transparent",
+                transition: "background 0.15s",
               }}
             >
-              <Clock size={10} style={{ flexShrink: 0, color: "hsl(38 92% 50%)" }} />
-              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {msg.length > 60 ? msg.slice(0, 60) + "..." : msg}
+              <span
+                style={{
+                  fontFamily: FONTS.mono,
+                  fontSize: 9,
+                  color: i === 0 ? C.accent : C.textFaint,
+                  flexShrink: 0,
+                  marginTop: 3,
+                  minWidth: 16,
+                }}
+              >
+                {String(i + 1).padStart(2, "0")}
               </span>
-              <span style={{ color: "hsl(220 14% 35%)", flexShrink: 0 }}>#{i + 1}</span>
+
+              <span style={{ flexShrink: 0, marginTop: 1 }}>
+                <Send
+                  size={11}
+                  style={{ color: i === 0 ? C.accent : C.textDim }}
+                />
+              </span>
+
+              <span
+                style={{
+                  flex: 1,
+                  fontFamily: FONTS.sans,
+                  fontSize: 12,
+                  color: i === 0 ? C.text : C.textMid,
+                  lineHeight: 1.5,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {item}
+              </span>
+
+              <button
+                onClick={() => safeRemove(i)}
+                title="Remove from queue"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 18,
+                  height: 18,
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: 2,
+                  color: C.textDim,
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  marginTop: 1,
+                  opacity: 0.5,
+                  transition: "opacity 0.15s, color 0.15s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.opacity = "1";
+                  e.currentTarget.style.color = "#ff9b9b";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.opacity = "0.5";
+                  e.currentTarget.style.color = C.textDim;
+                }}
+              >
+                <X size={10} />
+              </button>
             </div>
           ))}
         </div>

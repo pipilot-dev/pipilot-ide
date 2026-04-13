@@ -12,9 +12,10 @@ interface SeedFile {
   content: string;
 }
 
-export type ProjectTemplate = "static" | "node" | "vite-react" | "nextjs" | "express";
+export type ProjectTemplate = "blank" | "static" | "node" | "vite-react" | "nextjs" | "express";
 
 export const TEMPLATE_INFO: Record<ProjectTemplate, { label: string; description: string; color: string }> = {
+  blank: { label: "Blank", description: "Empty workspace, no files", color: "hsl(0 0% 60%)" },
   static: { label: "HTML/CSS/JS", description: "Static site with Tailwind CDN", color: "hsl(207 90% 54%)" },
   node: { label: "Node.js", description: "Basic Node.js project", color: "hsl(142 71% 45%)" },
   "vite-react": { label: "Vite + React", description: "React app with Vite, HMR, Tailwind", color: "hsl(191 91% 50%)" },
@@ -26,6 +27,8 @@ export function getSeedFiles(name: string, template: ProjectTemplate): SeedFile[
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
   switch (template) {
+    case "blank":
+      return [];
     case "vite-react":
       return viteReactTemplate(name, slug);
     case "nextjs":

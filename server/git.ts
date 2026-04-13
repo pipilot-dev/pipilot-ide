@@ -354,11 +354,23 @@ export async function gitCurrentBranch(workDir: string): Promise<string> {
   return stdout.trim() || "HEAD";
 }
 
-/** List all branches */
+/** List all branches. On a fresh repo with no commits, `git branch --list`
+ * returns nothing even though HEAD points at a branch (e.g. "main"). In
+ * that case, fall back to reading the current branch from HEAD so the
+ * branch picker always shows at least the active branch. */
 export async function gitBranches(workDir: string): Promise<string[]> {
   const { stdout, code } = await runGit(workDir, ["branch", "--list", "--format=%(refname:short)"]);
-  if (code !== 0) return [];
-  return stdout.split("\n").map(s => s.trim()).filter(Boolean);
+  const branches = code === 0
+    ? stdout.split("\n").map(s => s.trim()).filter(Boolean)
+    : [];
+  // Fresh repo (no commits yet): inject the current branch from HEAD
+  if (branches.length === 0) {
+    const current = await gitCurrentBranch(workDir);
+    if (current && current !== "HEAD") {
+      branches.push(current);
+    }
+  }
+  return branches;
 }
 
 /** Get commit log */
@@ -447,9 +459,11 @@ export async function gitPull(workDir: string, remote = "origin", branch?: strin
   return { success: code === 0, message: stdout + stderr };
 }
 
-/** Create a new branch */
+/** Create a new branch. Uses `checkout -b` instead of `branch` so it
+ * works even on fresh repos with no commits (where `git branch` fails
+ * with "not a valid object name"). */
 export async function gitCreateBranch(workDir: string, name: string): Promise<{ success: boolean; message: string }> {
-  const { stderr, code } = await runGit(workDir, ["branch", name]);
+  const { stderr, code } = await runGit(workDir, ["checkout", "-b", name]);
   return { success: code === 0, message: stderr || `Branch ${name} created` };
 }
 

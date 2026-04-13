@@ -1,10 +1,21 @@
+/**
+ * ProblemsPanel — editorial-terminal styled diagnostics panel.
+ *
+ * Features:
+ *  - Resizable (drag handle is in IDELayout)
+ *  - Re-check (server-side diagnostics)
+ *  - Ask AI to Fix — auto-attaches up to 100 problems and primes the chat
+ *    panel with a "fix these" prompt
+ */
+
 import { useState, useMemo, useEffect } from "react";
 import {
   AlertCircle, AlertTriangle, Info, Trash2, X, RefreshCw, Loader2,
-  ChevronDown, ChevronRight, FileText,
+  ChevronDown, ChevronRight, FileText, Sparkles,
 } from "lucide-react";
 import { useProblems, type Problem } from "@/contexts/ProblemsContext";
 import { useDiagnostics } from "@/hooks/useDiagnostics";
+import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 
 interface ProblemsPanelProps {
   onClose: () => void;
@@ -12,14 +23,22 @@ interface ProblemsPanelProps {
 }
 
 const SOURCE_COLORS: Record<string, string> = {
-  typescript: "hsl(207 90% 60%)",
-  eslint: "hsl(280 75% 65%)",
-  json: "hsl(38 92% 60%)",
-  syntax: "hsl(142 71% 55%)",
-  preview: "hsl(0 70% 65%)",
-  terminal: "hsl(220 14% 60%)",
-  editor: "hsl(220 14% 60%)",
+  typescript: "#7ad6ff",
+  eslint:     "#c6a6ff",
+  json:       "#ffb86b",
+  syntax:     "#a8ff7a",
+  python:     "#ffd96b",
+  go:         "#7adfff",
+  rust:       "#ff9b6b",
+  php:        "#c6a6ff",
+  ruby:       "#ff7a8e",
+  preview:    "#ff7a8e",
+  terminal:   "#a8a8b3",
+  editor:     "#a8a8b3",
 };
+
+/** Cap to keep the agent's context window safe */
+export const MAX_PROBLEMS_FOR_AI = 100;
 
 export function ProblemsPanel({ onClose, onNavigateToFile }: ProblemsPanelProps) {
   const { problems, clearProblems, errorCount, warningCount } = useProblems();
@@ -29,6 +48,8 @@ export function ProblemsPanel({ onClose, onNavigateToFile }: ProblemsPanelProps)
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   const [autoRunOnce, setAutoRunOnce] = useState(false);
 
+  useEffect(() => { injectFonts(); }, []);
+
   // Auto-run checks once when the panel first opens
   useEffect(() => {
     if (!autoRunOnce) {
@@ -37,13 +58,11 @@ export function ProblemsPanel({ onClose, onNavigateToFile }: ProblemsPanelProps)
     }
   }, [autoRunOnce, runChecks]);
 
-  // Apply severity filter
   const filtered = useMemo(() => {
     if (filter === "all") return problems;
     return problems.filter((p) => p.type === filter);
   }, [problems, filter]);
 
-  // Group by file
   const grouped = useMemo(() => {
     const map = new Map<string, Problem[]>();
     const noFile: Problem[] = [];
@@ -55,7 +74,6 @@ export function ProblemsPanel({ onClose, onNavigateToFile }: ProblemsPanelProps)
         noFile.push(p);
       }
     }
-    // Sort each file's problems by line
     for (const arr of map.values()) {
       arr.sort((a, b) => (a.line || 0) - (b.line || 0));
     }
@@ -74,123 +92,326 @@ export function ProblemsPanel({ onClose, onNavigateToFile }: ProblemsPanelProps)
   const typeIcon = (type: string) => {
     const sz = 11;
     switch (type) {
-      case "error": return <AlertCircle size={sz} style={{ color: "hsl(0 84% 60%)", flexShrink: 0 }} />;
-      case "warning": return <AlertTriangle size={sz} style={{ color: "hsl(38 92% 60%)", flexShrink: 0 }} />;
-      default: return <Info size={sz} style={{ color: "hsl(207 90% 60%)", flexShrink: 0 }} />;
+      case "error":   return <AlertCircle size={sz} style={{ color: C.error, flexShrink: 0 }} />;
+      case "warning": return <AlertTriangle size={sz} style={{ color: C.warn, flexShrink: 0 }} />;
+      default:        return <Info size={sz} style={{ color: C.info, flexShrink: 0 }} />;
     }
+  };
+
+  /**
+   * Build a compact textual representation of the problems list and dispatch
+   * a `pipilot:attach-problems` event that ChatPanel listens for. The event
+   * payload becomes an attachment pill so the user can review (and remove)
+   * before sending.
+   */
+  const handleAskAi = () => {
+    if (filtered.length === 0) return;
+    const total = filtered.length;
+    const truncated = total > MAX_PROBLEMS_FOR_AI;
+    const slice = truncated ? filtered.slice(0, MAX_PROBLEMS_FOR_AI) : filtered;
+
+    // Group by file for a more readable digest
+    const byFile = new Map<string, Problem[]>();
+    const noFile: Problem[] = [];
+    for (const p of slice) {
+      if (p.file) {
+        if (!byFile.has(p.file)) byFile.set(p.file, []);
+        byFile.get(p.file)!.push(p);
+      } else noFile.push(p);
+    }
+
+    const lines: string[] = [];
+    lines.push(`# Diagnostics report — ${slice.length} of ${total} problem${total === 1 ? "" : "s"}`);
+    if (truncated) lines.push(`(truncated to first ${MAX_PROBLEMS_FOR_AI} for context safety)`);
+    lines.push("");
+
+    for (const [file, items] of byFile.entries()) {
+      lines.push(`## ${file}`);
+      for (const p of items) {
+        const loc = p.line ? `:${p.line}${p.column ? `:${p.column}` : ""}` : "";
+        const code = p.code ? ` [${p.code}]` : "";
+        lines.push(`- ${p.type.toUpperCase()}${code} (${p.source})${loc} — ${p.message}`);
+      }
+      lines.push("");
+    }
+    if (noFile.length > 0) {
+      lines.push(`## (no file)`);
+      for (const p of noFile) {
+        lines.push(`- ${p.type.toUpperCase()} (${p.source}) — ${p.message}`);
+      }
+    }
+
+    const content = lines.join("\n");
+    window.dispatchEvent(new CustomEvent("pipilot:attach-problems", {
+      detail: {
+        id: "__problems__",
+        count: slice.length,
+        totalCount: total,
+        truncated,
+        content,
+        prefill:
+          truncated
+            ? `Please fix these ${slice.length} problems (truncated from ${total}). Start with errors first, then warnings.`
+            : `Please fix these ${slice.length} problem${slice.length === 1 ? "" : "s"}. Start with errors first, then warnings.`,
+      },
+    }));
   };
 
   const totalShown = filtered.length;
 
   return (
     <div style={{
-      height: 240, borderTop: "1px solid hsl(220 13% 25%)",
-      background: "hsl(220 13% 14%)",
+      height: "100%",
+      background: C.bg,
       display: "flex", flexDirection: "column",
+      fontFamily: FONTS.sans,
+      borderTop: `1px solid ${C.border}`,
     }}>
-      {/* Header */}
+      {/* ── Header ── */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "4px 12px", borderBottom: "1px solid hsl(220 13% 22%)",
-        background: "hsl(220 13% 16%)",
+        padding: "10px 16px",
+        borderBottom: `1px solid ${C.border}`,
+        background: C.surface,
+        flexShrink: 0,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11 }}>
-          <span style={{ fontWeight: 600, color: "hsl(220 14% 75%)" }}>Problems</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
+          {/* Editorial section label */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: "50%",
+              background: errorCount > 0 ? C.error : warningCount > 0 ? C.warn : C.accent,
+              boxShadow: `0 0 8px ${errorCount > 0 ? C.error : warningCount > 0 ? C.warn : C.accent}80`,
+              flexShrink: 0,
+            }} />
+            <span style={{
+              fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+              letterSpacing: "0.18em", textTransform: "uppercase",
+              color: C.accent,
+            }}>
+              / P
+            </span>
+            <span style={{
+              fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+              letterSpacing: "0.18em", textTransform: "uppercase",
+              color: C.text,
+            }}>
+              Problems
+            </span>
+            <span style={{
+              fontFamily: FONTS.mono, fontSize: 9,
+              color: C.textDim, letterSpacing: "0.05em",
+            }}>
+              ({String(problems.length).padStart(2, "0")})
+            </span>
+          </div>
 
           {/* Filter pills */}
-          <div style={{ display: "flex", gap: 2 }}>
-            {[
-              { id: "all", label: `All (${problems.length})`, color: "hsl(220 14% 70%)" },
-              { id: "error", label: errorCount.toString(), icon: <AlertCircle size={9} />, color: "hsl(0 84% 65%)" },
-              { id: "warning", label: warningCount.toString(), icon: <AlertTriangle size={9} />, color: "hsl(38 92% 60%)" },
-            ].map((f) => (
-              <button
-                key={f.id}
-                onClick={() => setFilter(f.id as any)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 3,
-                  padding: "2px 8px", fontSize: 10, fontWeight: 600,
-                  background: filter === f.id ? "hsl(220 13% 24%)" : "transparent",
-                  color: f.color,
-                  border: `1px solid ${filter === f.id ? f.color + "40" : "transparent"}`,
-                  borderRadius: 3, cursor: "pointer",
-                }}
-              >
-                {f.icon}
-                {f.label}
-              </button>
-            ))}
+          <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+            {([
+              { id: "all" as const, label: "ALL", count: problems.length, color: C.textMid },
+              { id: "error" as const, label: "ERR", count: errorCount, icon: <AlertCircle size={9} />, color: C.error },
+              { id: "warning" as const, label: "WARN", count: warningCount, icon: <AlertTriangle size={9} />, color: C.warn },
+            ]).map((f) => {
+              const active = filter === f.id;
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => setFilter(f.id)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5,
+                    padding: "3px 9px",
+                    fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+                    letterSpacing: "0.1em",
+                    background: active ? C.surfaceAlt : "transparent",
+                    color: active ? f.color : C.textDim,
+                    border: `1px solid ${active ? f.color + "66" : C.border}`,
+                    borderRadius: 3, cursor: "pointer",
+                    transition: "all 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!active) {
+                      e.currentTarget.style.borderColor = C.borderHover;
+                      e.currentTarget.style.color = C.text;
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!active) {
+                      e.currentTarget.style.borderColor = C.border;
+                      e.currentTarget.style.color = C.textDim;
+                    }
+                  }}
+                >
+                  {f.icon}
+                  <span>{f.label}</span>
+                  <span style={{ color: active ? f.color : C.textFaint }}>
+                    {String(f.count).padStart(2, "0")}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           {lastResult && (
-            <span style={{ color: "hsl(220 14% 40%)", fontSize: 10 }}>
-              {lastResult.durationMs}ms
+            <span style={{
+              fontFamily: FONTS.mono, fontSize: 9, color: C.textFaint,
+              letterSpacing: "0.05em",
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}>
+              // {lastResult.durationMs}ms
               {lastResult.ran.typescript && " · ts"}
               {lastResult.ran.eslint && " · eslint"}
+              {lastResult.ran.python && " · py"}
+              {lastResult.ran.go && " · go"}
+              {lastResult.ran.rust && " · rust"}
               {lastResult.ran.json && " · json"}
             </span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 4 }}>
+
+        {/* Actions */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          {/* AI fix */}
+          <button
+            onClick={handleAskAi}
+            disabled={filtered.length === 0}
+            title={
+              filtered.length === 0
+                ? "No problems to send"
+                : `Send ${Math.min(filtered.length, MAX_PROBLEMS_FOR_AI)} problem${filtered.length === 1 ? "" : "s"} to PiPilot Agent`
+            }
+            style={{
+              display: "flex", alignItems: "center", gap: 6,
+              padding: "5px 12px",
+              fontFamily: FONTS.mono, fontSize: 9, fontWeight: 600,
+              letterSpacing: "0.12em", textTransform: "uppercase",
+              background: filtered.length === 0 ? "transparent" : C.accent,
+              color: filtered.length === 0 ? C.textDim : C.bg,
+              border: `1px solid ${filtered.length === 0 ? C.border : C.accent}`,
+              borderRadius: 3,
+              cursor: filtered.length === 0 ? "not-allowed" : "pointer",
+              transition: "all 0.15s",
+            }}
+          >
+            <Sparkles size={10} />
+            AI Fix
+          </button>
+
+          {/* Re-check */}
           <button
             onClick={runChecks}
             disabled={running}
             title="Re-check (run linters)"
             style={{
-              display: "flex", alignItems: "center", gap: 4,
-              background: "hsl(207 90% 45% / 0.15)",
-              color: running ? "hsl(220 14% 40%)" : "hsl(207 90% 65%)",
-              border: "1px solid hsl(207 90% 50% / 0.3)",
-              borderRadius: 4, padding: "3px 8px",
-              fontSize: 10, fontWeight: 600,
+              display: "flex", alignItems: "center", gap: 6,
+              padding: "5px 12px",
+              fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+              letterSpacing: "0.12em", textTransform: "uppercase",
+              background: "transparent",
+              color: running ? C.textDim : C.textMid,
+              border: `1px solid ${C.border}`,
+              borderRadius: 3,
               cursor: running ? "not-allowed" : "pointer",
+              transition: "all 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              if (!running) {
+                e.currentTarget.style.borderColor = C.accentLine;
+                e.currentTarget.style.color = C.accent;
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!running) {
+                e.currentTarget.style.borderColor = C.border;
+                e.currentTarget.style.color = C.textMid;
+              }
             }}
           >
-            {running ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-            {running ? "Checking..." : "Re-check"}
+            {running ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+            {running ? "Checking" : "Re-check"}
           </button>
-          <button onClick={() => clearProblems()} title="Clear All"
-            style={{ background: "none", border: "none", color: "hsl(220 14% 50%)", cursor: "pointer", padding: 4 }}>
-            <Trash2 size={12} />
+
+          {/* Clear */}
+          <button
+            onClick={() => clearProblems()}
+            title="Clear all"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 24, height: 24,
+              background: "transparent", border: "none", borderRadius: 3,
+              color: C.textDim, cursor: "pointer",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = C.surfaceAlt; e.currentTarget.style.color = C.text; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.textDim; }}
+          >
+            <Trash2 size={11} />
           </button>
-          <button onClick={onClose} title="Close"
-            style={{ background: "none", border: "none", color: "hsl(220 14% 50%)", cursor: "pointer", padding: 4 }}>
-            <X size={12} />
+
+          {/* Close */}
+          <button
+            onClick={onClose}
+            title="Close"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 24, height: 24,
+              background: "transparent", border: "none", borderRadius: 3,
+              color: C.textDim, cursor: "pointer",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = C.surfaceAlt; e.currentTarget.style.color = C.text; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.textDim; }}
+          >
+            <X size={11} />
           </button>
         </div>
       </div>
 
-      {/* Error from running checks */}
+      {/* Diagnostics error */}
       {diagError && (
         <div style={{
-          padding: "4px 12px", fontSize: 10,
-          background: "hsl(0 84% 50% / 0.1)", color: "hsl(0 84% 75%)",
-          borderBottom: "1px solid hsl(0 84% 50% / 0.2)",
+          padding: "8px 16px",
+          fontSize: 11, fontFamily: FONTS.mono,
+          background: "#ff6b6b12",
+          color: "#ff9b9b",
+          borderBottom: `1px solid #ff6b6b33`,
+          flexShrink: 0,
         }}>
-          Diagnostics error: {diagError}
+          // ERROR: {diagError}
         </div>
       )}
 
-      {/* Seed report — shown briefly when config files were auto-added */}
+      {/* Seed report */}
       {lastSeedReport && lastSeedReport.added.length > 0 && (
         <div style={{
-          padding: "4px 12px", fontSize: 10,
-          background: "hsl(142 71% 45% / 0.1)", color: "hsl(142 71% 70%)",
-          borderBottom: "1px solid hsl(142 71% 45% / 0.2)",
+          padding: "8px 16px",
+          fontSize: 11, fontFamily: FONTS.mono,
+          background: C.accentDim,
+          color: C.accent,
+          borderBottom: `1px solid ${C.accentLine}`,
+          flexShrink: 0,
         }}>
-          Detected <strong>{lastSeedReport.framework}</strong> project — added: {lastSeedReport.added.join(", ")}
+          // Detected <strong>{lastSeedReport.framework}</strong> — added: {lastSeedReport.added.join(", ")}
         </div>
       )}
 
-      {/* Problems list */}
-      <div style={{ flex: 1, overflowY: "auto" }}>
+      {/* ── Problems list ── */}
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
         {totalShown === 0 ? (
-          <div style={{ padding: 24, textAlign: "center", color: "hsl(220 14% 40%)", fontSize: 11 }}>
-            {running ? "Running checks..." : "No problems detected"}
+          <div style={{
+            padding: "60px 24px", textAlign: "center",
+            fontFamily: FONTS.sans, fontSize: 13, color: C.textDim,
+            lineHeight: 1.6,
+          }}>
+            <div style={{
+              fontFamily: FONTS.mono, fontSize: 9,
+              letterSpacing: "0.18em", color: C.textFaint,
+              marginBottom: 10,
+            }}>
+              {running ? "// CHECKING…" : "// CLEAN"}
+            </div>
+            {running ? "Running language checks…" : "No problems detected."}
           </div>
         ) : (
           <>
-            {/* Files with problems */}
             {grouped.byFile.map(([file, items]) => {
               const isCollapsed = collapsedFiles.has(file);
               const fileErrors = items.filter((p) => p.type === "error").length;
@@ -200,32 +421,49 @@ export function ProblemsPanel({ onClose, onNavigateToFile }: ProblemsPanelProps)
                   <button
                     onClick={() => toggleFile(file)}
                     style={{
-                      display: "flex", alignItems: "center", gap: 6,
-                      width: "100%", padding: "4px 12px",
-                      background: "hsl(220 13% 16%)",
+                      display: "flex", alignItems: "center", gap: 8,
+                      width: "100%", padding: "8px 16px",
+                      background: C.surface,
                       border: "none", cursor: "pointer", textAlign: "left",
-                      borderBottom: "1px solid hsl(220 13% 19%)",
+                      borderBottom: `1px solid ${C.border}`,
+                      fontFamily: FONTS.mono,
                     }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "hsl(220 13% 19%)"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "hsl(220 13% 16%)"; }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = C.surfaceAlt; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = C.surface; }}
                   >
-                    {isCollapsed ? <ChevronRight size={11} style={{ color: "hsl(220 14% 50%)" }} /> : <ChevronDown size={11} style={{ color: "hsl(220 14% 50%)" }} />}
-                    <FileText size={11} style={{ color: "hsl(207 90% 60%)" }} />
-                    <span style={{ fontSize: 11, color: "hsl(220 14% 85%)", fontFamily: "monospace" }}>{file}</span>
+                    {isCollapsed
+                      ? <ChevronRight size={11} style={{ color: C.textDim, flexShrink: 0 }} />
+                      : <ChevronDown size={11} style={{ color: C.accent, flexShrink: 0 }} />}
+                    <FileText size={11} style={{ color: C.textDim, flexShrink: 0 }} />
                     <span style={{
-                      marginLeft: 4, padding: "0 5px", fontSize: 9,
-                      background: "hsl(220 13% 22%)", color: "hsl(220 14% 60%)",
-                      borderRadius: 8,
+                      fontSize: 11, color: C.text, fontFamily: FONTS.mono,
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1,
                     }}>
-                      {items.length}
+                      {file}
+                    </span>
+                    <span style={{
+                      padding: "1px 7px", fontSize: 9, fontFamily: FONTS.mono,
+                      background: C.bg, color: C.textDim,
+                      border: `1px solid ${C.border}`, borderRadius: 2,
+                      flexShrink: 0,
+                    }}>
+                      {String(items.length).padStart(2, "0")}
                     </span>
                     {fileErrors > 0 && (
-                      <span style={{ display: "flex", alignItems: "center", gap: 2, color: "hsl(0 84% 65%)", fontSize: 10 }}>
+                      <span style={{
+                        display: "flex", alignItems: "center", gap: 3,
+                        color: C.error, fontSize: 10, fontFamily: FONTS.mono,
+                        flexShrink: 0,
+                      }}>
                         <AlertCircle size={9} /> {fileErrors}
                       </span>
                     )}
                     {fileWarns > 0 && (
-                      <span style={{ display: "flex", alignItems: "center", gap: 2, color: "hsl(38 92% 60%)", fontSize: 10 }}>
+                      <span style={{
+                        display: "flex", alignItems: "center", gap: 3,
+                        color: C.warn, fontSize: 10, fontFamily: FONTS.mono,
+                        flexShrink: 0,
+                      }}>
                         <AlertTriangle size={9} /> {fileWarns}
                       </span>
                     )}
@@ -236,35 +474,54 @@ export function ProblemsPanel({ onClose, onNavigateToFile }: ProblemsPanelProps)
                       key={p.id}
                       onClick={() => p.file && onNavigateToFile?.(p.file, p.line, p.column)}
                       style={{
-                        display: "flex", alignItems: "flex-start", gap: 8,
-                        padding: "3px 12px 3px 32px", fontSize: 11,
+                        display: "flex", alignItems: "flex-start", gap: 10,
+                        padding: "6px 16px 6px 38px",
                         cursor: "pointer",
-                        borderBottom: "1px solid hsl(220 13% 17%)",
+                        borderBottom: `1px solid ${C.border}`,
+                        borderLeft: "2px solid transparent",
+                        transition: "background 0.12s, border-left-color 0.12s",
                       }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "hsl(220 13% 18%)"; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLElement).style.background = C.surfaceAlt;
+                        (e.currentTarget as HTMLElement).style.borderLeftColor = C.accentLine;
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLElement).style.background = "transparent";
+                        (e.currentTarget as HTMLElement).style.borderLeftColor = "transparent";
+                      }}
                     >
                       {typeIcon(p.type)}
-                      <span style={{ flex: 1, color: "hsl(220 14% 78%)", lineHeight: 1.4 }}>
+                      <span style={{
+                        flex: 1,
+                        fontFamily: FONTS.sans, fontSize: 12,
+                        color: C.text, lineHeight: 1.5, minWidth: 0,
+                      }}>
                         {p.message}
                       </span>
                       {p.code && (
                         <span style={{
-                          color: "hsl(220 14% 50%)", fontSize: 10, fontFamily: "monospace",
-                          padding: "0 4px", background: "hsl(220 13% 19%)", borderRadius: 3,
+                          fontFamily: FONTS.mono, fontSize: 9,
+                          color: C.textDim,
+                          padding: "1px 6px",
+                          background: C.bg,
+                          border: `1px solid ${C.border}`,
+                          borderRadius: 2,
+                          flexShrink: 0,
                         }}>
                           {p.code}
                         </span>
                       )}
                       <span style={{
-                        color: "hsl(220 14% 50%)", flexShrink: 0, fontSize: 10,
-                        fontFamily: "monospace",
+                        fontFamily: FONTS.mono, fontSize: 9,
+                        color: C.textFaint, flexShrink: 0,
                       }}>
-                        [Ln {p.line || "?"}{p.column ? `, Col ${p.column}` : ""}]
+                        {p.line ? `${p.line}${p.column ? `:${p.column}` : ""}` : "—"}
                       </span>
                       <span style={{
-                        color: SOURCE_COLORS[p.source] || "hsl(220 14% 50%)",
-                        flexShrink: 0, fontSize: 9, fontWeight: 600,
+                        fontFamily: FONTS.mono, fontSize: 9,
+                        letterSpacing: "0.05em",
+                        color: SOURCE_COLORS[p.source] || C.textDim,
+                        flexShrink: 0,
                       }}>
                         {p.source}
                       </span>
@@ -279,16 +536,23 @@ export function ProblemsPanel({ onClose, onNavigateToFile }: ProblemsPanelProps)
               <div
                 key={p.id}
                 style={{
-                  display: "flex", alignItems: "flex-start", gap: 8,
-                  padding: "4px 12px", fontSize: 11,
-                  borderBottom: "1px solid hsl(220 13% 19%)",
+                  display: "flex", alignItems: "flex-start", gap: 10,
+                  padding: "8px 16px",
+                  borderBottom: `1px solid ${C.border}`,
                 }}
               >
                 {typeIcon(p.type)}
-                <span style={{ flex: 1, color: "hsl(220 14% 70%)" }}>{p.message}</span>
                 <span style={{
-                  color: SOURCE_COLORS[p.source] || "hsl(220 14% 50%)",
-                  fontSize: 9, fontWeight: 600,
+                  flex: 1, fontFamily: FONTS.sans, fontSize: 12,
+                  color: C.textMid, lineHeight: 1.5,
+                }}>
+                  {p.message}
+                </span>
+                <span style={{
+                  fontFamily: FONTS.mono, fontSize: 9,
+                  letterSpacing: "0.05em",
+                  color: SOURCE_COLORS[p.source] || C.textDim,
+                  flexShrink: 0,
                 }}>
                   {p.source}
                 </span>

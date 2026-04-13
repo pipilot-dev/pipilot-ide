@@ -1,6 +1,11 @@
-import { useState, useEffect, useRef } from "react";
-import { FileCode2, FileJson, FileText, FileType, Search } from "lucide-react";
+/**
+ * CommandPalette — editorial-terminal styled file search (⌘P).
+ */
+
+import { useState, useEffect, useRef, useMemo } from "react";
+import { FileCode2, FileJson, FileText, FileType, Search, ArrowUp, ArrowDown, CornerDownLeft } from "lucide-react";
 import { FileNode } from "@/hooks/useFileSystem";
+import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 
 interface CommandPaletteProps {
   files: FileNode[];
@@ -8,21 +13,14 @@ interface CommandPaletteProps {
   onClose: () => void;
 }
 
-function getFileIcon(name: string) {
+function getFileIcon(name: string, color: string) {
   const ext = name.split(".").pop()?.toLowerCase();
   switch (ext) {
-    case "tsx":
-    case "jsx":
-      return <FileCode2 size={14} className="text-blue-400" />;
-    case "ts":
-    case "js":
-      return <FileCode2 size={14} className="text-yellow-400" />;
-    case "json":
-      return <FileJson size={14} className="text-yellow-300" />;
-    case "css":
-      return <FileType size={14} className="text-blue-400" />;
-    default:
-      return <FileText size={14} className="text-gray-400" />;
+    case "tsx": case "jsx": return <FileCode2 size={12} style={{ color }} />;
+    case "ts": case "js": case "mjs": return <FileCode2 size={12} style={{ color }} />;
+    case "json": return <FileJson size={12} style={{ color }} />;
+    case "css": case "scss": return <FileType size={12} style={{ color }} />;
+    default: return <FileText size={12} style={{ color }} />;
   }
 }
 
@@ -30,34 +28,35 @@ export function CommandPalette({ files, onSelectFile, onClose }: CommandPaletteP
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  const filtered = files.filter(
-    (f) =>
-      f.name.toLowerCase().includes(query.toLowerCase()) ||
-      f.id.toLowerCase().includes(query.toLowerCase())
-  );
+  useEffect(() => { injectFonts(); }, []);
 
+  const filtered = useMemo(() => {
+    if (!query.trim()) return files.slice(0, 60);
+    const q = query.toLowerCase();
+    return files
+      .filter((f) => f.name.toLowerCase().includes(q) || f.id.toLowerCase().includes(q))
+      .slice(0, 60);
+  }, [files, query]);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => { setSelectedIndex(0); }, [query]);
+
+  // Keep selected item in view
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [query]);
+    const list = listRef.current;
+    if (!list) return;
+    const sel = list.querySelector<HTMLElement>(`[data-idx="${selectedIndex}"]`);
+    sel?.scrollIntoView({ block: "nearest" });
+  }, [selectedIndex]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      } else if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1));
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSelectedIndex((i) => Math.max(i - 1, 0));
-      } else if (e.key === "Enter" && filtered[selectedIndex]) {
-        onSelectFile(filtered[selectedIndex]);
-      }
+      if (e.key === "Escape") { e.preventDefault(); onClose(); }
+      else if (e.key === "ArrowDown") { e.preventDefault(); setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1)); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); setSelectedIndex((i) => Math.max(i - 1, 0)); }
+      else if (e.key === "Enter" && filtered[selectedIndex]) { e.preventDefault(); onSelectFile(filtered[selectedIndex]); }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -65,72 +64,202 @@ export function CommandPalette({ files, onSelectFile, onClose }: CommandPaletteP
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
-      onClick={onClose}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: "fixed", inset: 0, zIndex: 9999,
+        display: "flex", alignItems: "flex-start", justifyContent: "center",
+        paddingTop: "14vh",
+        background: "rgba(0, 0, 0, 0.65)",
+        backdropFilter: "blur(6px)",
+        fontFamily: FONTS.sans,
+      }}
     >
-      {/* Backdrop */}
-      <div className="fixed inset-0" style={{ background: "rgba(0,0,0,0.5)" }} />
-
-      {/* Palette */}
       <div
-        className="relative w-full max-w-lg rounded-lg border shadow-xl overflow-hidden"
-        style={{
-          background: "hsl(220 13% 18%)",
-          borderColor: "hsl(220 13% 28%)",
-        }}
         onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 620, maxWidth: "92vw",
+          background: C.surface,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10, overflow: "hidden",
+          boxShadow: "0 24px 64px rgba(0, 0, 0, 0.7)",
+          display: "flex", flexDirection: "column",
+          position: "relative",
+        }}
       >
+        {/* Glow */}
         <div
-          className="flex items-center gap-2 px-3 py-2 border-b"
-          style={{ borderColor: "hsl(220 13% 24%)" }}
-        >
-          <Search size={14} style={{ color: "hsl(220 14% 50%)" }} />
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: -100, right: -100,
+            width: 280, height: 280,
+            background: `radial-gradient(circle, ${C.accent}10 0%, transparent 70%)`,
+            pointerEvents: "none",
+          }}
+        />
+
+        {/* ── Editorial label strip ── */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 12,
+          padding: "12px 18px 10px",
+          borderBottom: `1px solid ${C.border}`,
+          position: "relative",
+        }}>
+          <span style={{
+            fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+            letterSpacing: "0.18em", textTransform: "uppercase", color: C.accent,
+          }}>
+            / Q
+          </span>
+          <span style={{
+            fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+            letterSpacing: "0.18em", textTransform: "uppercase", color: C.textDim,
+          }}>
+            Quick Open
+          </span>
+          <div style={{ flex: 1 }} />
+          <span style={{
+            fontFamily: FONTS.mono, fontSize: 9, color: C.textFaint,
+            letterSpacing: "0.05em",
+          }}>
+            {String(filtered.length).padStart(2, "0")} / {String(files.length).padStart(2, "0")}
+          </span>
+        </div>
+
+        {/* ── Search input ── */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 12,
+          padding: "16px 22px",
+          borderBottom: `1px solid ${C.border}`,
+          position: "relative",
+        }}>
+          <Search size={14} style={{ color: C.textDim, flexShrink: 0 }} />
           <input
             ref={inputRef}
-            className="flex-1 bg-transparent text-sm outline-none"
-            style={{ color: "hsl(220 14% 90%)" }}
-            placeholder="Search files by name..."
+            placeholder="search files…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-          />
-          <kbd
-            className="text-xs px-1.5 py-0.5 rounded"
             style={{
-              background: "hsl(220 13% 24%)",
-              color: "hsl(220 14% 55%)",
-              border: "1px solid hsl(220 13% 30%)",
+              flex: 1,
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              fontFamily: FONTS.mono,
+              fontSize: 13,
+              color: C.text,
+              caretColor: C.accent,
+              letterSpacing: "0.01em",
             }}
-          >
-            Esc
+          />
+          <kbd style={{
+            padding: "3px 7px",
+            fontFamily: FONTS.mono, fontSize: 9,
+            background: C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 3,
+            color: C.textDim,
+          }}>
+            ESC
           </kbd>
         </div>
 
-        <div className="max-h-72 overflow-y-auto py-1">
-          {filtered.length === 0 && (
-            <div className="px-4 py-6 text-center text-xs" style={{ color: "hsl(220 14% 50%)" }}>
-              No files found
+        {/* ── Result list ── */}
+        <div ref={listRef} style={{ maxHeight: 360, overflowY: "auto", padding: "6px 0" }}>
+          {filtered.length === 0 ? (
+            <div style={{
+              padding: "40px 24px", textAlign: "center",
+              fontFamily: FONTS.sans, fontSize: 12, color: C.textDim,
+            }}>
+              <div style={{
+                fontFamily: FONTS.mono, fontSize: 9,
+                letterSpacing: "0.18em", color: C.textFaint,
+                marginBottom: 6,
+              }}>
+                // NO MATCHES
+              </div>
+              No files match <span style={{ color: C.text }}>"{query}"</span>
             </div>
-          )}
-          {filtered.map((file, i) => (
-            <button
-              key={file.id}
-              className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors"
-              style={{
-                background: i === selectedIndex ? "hsl(207 90% 40% / 0.2)" : "transparent",
-                color: "hsl(220 14% 85%)",
-              }}
-              onClick={() => onSelectFile(file)}
-              onMouseEnter={() => setSelectedIndex(i)}
-            >
-              {getFileIcon(file.name)}
-              <span className="text-sm">{file.name}</span>
-              <span className="text-xs ml-auto truncate max-w-[200px]" style={{ color: "hsl(220 14% 45%)" }}>
-                {file.id}
-              </span>
-            </button>
-          ))}
+          ) : filtered.map((file, i) => {
+            const isSelected = i === selectedIndex;
+            const dir = file.id.includes("/") ? file.id.slice(0, file.id.lastIndexOf("/")) : "";
+            return (
+              <button
+                key={file.id}
+                data-idx={i}
+                onClick={() => onSelectFile(file)}
+                onMouseEnter={() => setSelectedIndex(i)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 12,
+                  width: "100%", padding: "8px 22px",
+                  background: isSelected ? C.surfaceAlt : "transparent",
+                  borderLeft: `2px solid ${isSelected ? C.accent : "transparent"}`,
+                  border: "none",
+                  textAlign: "left", cursor: "pointer",
+                  fontFamily: FONTS.mono,
+                  fontSize: 11,
+                  color: isSelected ? C.text : C.textMid,
+                }}
+              >
+                {getFileIcon(file.name, isSelected ? C.accent : C.textDim)}
+                <span style={{
+                  flex: 1,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>
+                  {file.name}
+                </span>
+                {dir && (
+                  <span style={{
+                    fontFamily: FONTS.mono, fontSize: 10,
+                    color: C.textFaint,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    maxWidth: 280,
+                  }}>
+                    {dir}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* ── Footer hint strip ── */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 18,
+          padding: "10px 22px",
+          borderTop: `1px solid ${C.border}`,
+          background: C.surfaceAlt,
+          fontFamily: FONTS.mono, fontSize: 9,
+          color: C.textDim,
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+        }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ display: "inline-flex", gap: 2 }}>
+              <kbd style={footKbdStyle}><ArrowUp size={9} /></kbd>
+              <kbd style={footKbdStyle}><ArrowDown size={9} /></kbd>
+            </span>
+            navigate
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <kbd style={footKbdStyle}><CornerDownLeft size={9} /></kbd>
+            open
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <kbd style={footKbdStyle}>esc</kbd>
+            close
+          </span>
         </div>
       </div>
     </div>
   );
 }
+
+const footKbdStyle: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  minWidth: 18, padding: "2px 5px",
+  background: C.bg,
+  border: `1px solid ${C.border}`,
+  borderRadius: 2,
+  fontFamily: FONTS.mono, fontSize: 9,
+  color: C.textMid,
+};

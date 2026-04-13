@@ -89,6 +89,34 @@ export default defineConfig({
         target: "http://localhost:3001",
         changeOrigin: true,
       },
+      "/api/mcp": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+      "/api/connectors": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+      "/api/agents": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+      "/api/wiki": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+      "/api/codestral": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyRes", (proxyRes) => {
+            if (proxyRes.headers["content-type"]?.includes("text/event-stream")) {
+              proxyRes.headers["cache-control"] = "no-cache";
+              proxyRes.headers["x-accel-buffering"] = "no";
+            }
+          });
+        },
+      },
       "/api/agent": {
         target: "http://localhost:3001",
         changeOrigin: true,

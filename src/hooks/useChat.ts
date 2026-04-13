@@ -4,7 +4,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { streamText, tool, stepCountIs } from "ai";
 import { z } from "zod";
 
-export type ChatMode = "chat" | "agent" | "claude-agent";
+export type ChatMode = "agent" | "plan";
 
 export interface ToolCallInfo {
   id: string;
@@ -82,6 +82,8 @@ export interface WorkspaceContext {
   fileTree: string;
   projectType: string;
   dependencies: string;
+  /** Paths of files currently open in the editor, active tab first. */
+  openTabs?: string[];
 }
 
 // ─── System Prompt ───────────────────────────────────────────────────────────

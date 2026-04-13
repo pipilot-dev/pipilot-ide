@@ -99,26 +99,99 @@ export function useAgentChat(
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [mode, setMode] = useState<ChatMode>("claude-agent");
+  // True while we're calling the summarizer to compress older messages.
+  // The chat panel renders a shimmer status row when this is on.
+  const [isOptimizingContext, setIsOptimizingContext] = useState(false);
+  const [mode, setMode] = useState<ChatMode>("agent");
   const [todos, setTodos] = useState<{ content: string; activeForm?: string; status: "pending" | "in_progress" | "completed" }[]>([]);
   const [pendingQuestion, setPendingQuestion] = useState<{ requestId: string; questions: any[] } | null>(null);
+  // Frontend message queue. Persisted in localStorage so it survives reloads
+  // and isn't shared with the broken server-side queue. Each project gets
+  // its own list keyed by `pipilot:queue:<projectId>`.
+  const [messageQueue, setMessageQueue] = useState<string[]>([]);
+  // ── Multi-session support ──
+  // Each project can have multiple chat sessions. The active one is
+  // remembered in localStorage so reloading the IDE returns you to the
+  // same conversation. Default session id is `agent-<projectId>`.
+  const [currentSessionId, setCurrentSessionId] = useState<string>("");
+  const currentSessionIdRef = useRef<string>("");
+  currentSessionIdRef.current = currentSessionId;
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const contextRef = useRef<WorkspaceContext | undefined>(workspaceContext);
   const checkpointManagerRef = useRef<CheckpointManager | undefined>(checkpointManager);
   const projectIdRef = useRef(projectId);
+  const queueRef = useRef<string[]>([]);
   messagesRef.current = messages;
   contextRef.current = workspaceContext;
   checkpointManagerRef.current = checkpointManager;
   projectIdRef.current = projectId;
+  queueRef.current = messageQueue;
 
-  // Load messages from IndexedDB on project change (same as useChat)
+  // ── Queue persistence ──
+  const queueKey = (pid: string | undefined) => `pipilot:queue:${pid || "default"}`;
+
+  // Load queue from localStorage when project changes
+  useEffect(() => {
+    if (!projectId) { setMessageQueue([]); return; }
+    try {
+      const raw = localStorage.getItem(queueKey(projectId));
+      setMessageQueue(raw ? JSON.parse(raw) : []);
+    } catch {
+      setMessageQueue([]);
+    }
+  }, [projectId]);
+
+  // Persist queue to localStorage on every change
   useEffect(() => {
     if (!projectId) return;
-    const sessionId = `agent-${projectId}`;
+    try {
+      if (messageQueue.length > 0) {
+        localStorage.setItem(queueKey(projectId), JSON.stringify(messageQueue));
+      } else {
+        localStorage.removeItem(queueKey(projectId));
+      }
+    } catch {}
+  }, [messageQueue, projectId]);
+
+  // ── Active session resolution ──
+  // When the project changes, restore the last-active session from
+  // localStorage. If none, use the default `agent-<projectId>`.
+  // Also ensure the chatSessions row exists so the picker has something
+  // to show even before the user sends a message.
+  const sessionPrefKey = (pid: string) => `pipilot:active-session:${pid}`;
+  useEffect(() => {
+    if (!projectId) { setCurrentSessionId(""); return; }
+    let nextId = `agent-${projectId}`;
+    try {
+      const stored = localStorage.getItem(sessionPrefKey(projectId));
+      if (stored) nextId = stored;
+    } catch {}
+    setCurrentSessionId(nextId);
+    // Ensure a chatSessions row exists for this id
+    (async () => {
+      try {
+        const existing = await db.chatSessions.get(nextId);
+        if (!existing) {
+          await db.chatSessions.put({
+            id: nextId,
+            name: "New Chat",
+            projectId,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+      } catch {}
+    })();
+  }, [projectId]);
+
+  // Load messages from IndexedDB whenever the active session changes.
+  // Each project can have multiple sessions; switching swaps the message list.
+  useEffect(() => {
+    if (!currentSessionId) return;
     db.chatMessages
       .where("sessionId")
-      .equals(sessionId)
+      .equals(currentSessionId)
       .sortBy("timestamp")
       .then((dbMsgs) => {
         const loaded: ChatMessage[] = dbMsgs.map((m) => ({
@@ -127,108 +200,177 @@ export function useAgentChat(
           content: m.content,
           timestamp: m.timestamp,
           toolCalls: m.toolCalls ? JSON.parse(m.toolCalls) : undefined,
+          parts: m.parts ? JSON.parse(m.parts) : undefined,
           tool_call_id: m.tool_call_id,
         }));
         setMessages(loaded);
       })
       .catch(console.error);
-  }, [projectId]);
+  }, [currentSessionId]);
 
-  // On mount — replay buffered events and auto-resume the session
-  const hasResumedRef = useRef(false);
+  // ── Detect interrupted stream after page refresh ──
+  // On page refresh the server aborts the running agent and preserves the
+  // event buffer. When the client reloads, it fetches the buffer via
+  // /api/agent/replay and rebuilds the last assistant message with full
+  // text + tool pills, then marks it as interrupted. The user sees exactly
+  // what the agent was doing and can continue with a follow-up message.
   useEffect(() => {
-    if (!projectId || hasResumedRef.current) return;
-    hasResumedRef.current = true;
+    if (!projectId || isStreaming) return;
+    let cancelled = false;
 
-    async function checkAndResume() {
+    (async () => {
       try {
         const res = await fetch(`/api/agent/replay?projectId=${encodeURIComponent(projectId)}`);
-        if (!res.ok) return;
         const data = await res.json();
+        // Only process if there are buffered events and the stream is NOT
+        // still active (we aborted it on disconnect). Also skip if we've
+        // already processed this buffer (check if the last assistant msg
+        // already has content from IDB persistence).
+        if (cancelled || !data.events || data.events.length === 0 || data.isActive) return;
 
-        if (data.events && data.events.length > 0) {
-          // Replay buffered events as a resumed message
-          const resumeId = generateId();
-          const replayParts: any[] = [];
-          const replayToolCalls: any[] = [];
-          let replayContent = "";
+        // Check the IDB-loaded messages — if the last assistant message
+        // already looks complete (not streaming, has content), the IDB
+        // save captured the state and we don't need the buffer.
+        const currentMsgs = messagesRef.current;
+        const lastAssistant = [...currentMsgs].reverse().find((m) => m.role === "assistant");
+        if (lastAssistant && !lastAssistant.streaming && lastAssistant.content) return;
 
-          for (const event of data.events) {
-            if (event.type === "text" && event.data) {
-              replayContent += event.data;
-              const lastPart = replayParts[replayParts.length - 1];
-              if (lastPart && lastPart.type === "text") {
-                lastPart.content = (lastPart.content || "") + event.data;
-              } else {
-                replayParts.push({ type: "text", content: event.data });
+        console.log(`[agent] Rebuilding interrupted stream from ${data.events.length} buffered events`);
+
+        // Rebuild the assistant message from the buffer events
+        let content = "";
+        const toolCalls: any[] = [];
+        const parts: any[] = [];
+        const toolIdSet = new Set<string>();
+
+        for (const event of data.events) {
+          switch (event.type) {
+            case "text":
+              if (event.data) {
+                content += event.data;
+                const lastPart = parts[parts.length - 1];
+                if (lastPart && lastPart.type === "text") {
+                  lastPart.content = (lastPart.content || "") + event.data;
+                } else {
+                  parts.push({ type: "text", content: event.data });
+                }
               }
-            } else if (event.type === "tool_use") {
-              const toolId = event.id || generateId();
-              replayToolCalls.push({
+              break;
+            case "tool_use": {
+              const toolId = event.id || `buf-${toolCalls.length}`;
+              if (toolIdSet.has(toolId)) {
+                // Update existing with richer input
+                const existing = toolCalls.find((tc) => tc.id === toolId);
+                if (existing && event.input) {
+                  existing.arguments = JSON.stringify(event.input);
+                }
+                break;
+              }
+              toolIdSet.add(toolId);
+              let cleanInput = event.input;
+              if (cleanInput && typeof cleanInput === "object") {
+                cleanInput = { ...cleanInput };
+                for (const key of ["file_path", "path", "command"]) {
+                  if (typeof cleanInput[key] === "string") {
+                    cleanInput[key] = cleanInput[key]
+                      .replace(/^.*[\/\\]workspaces[\/\\][^\/\\]+[\/\\]/, "")
+                      .replace(/\\/g, "/");
+                  }
+                }
+              }
+              toolCalls.push({
                 id: toolId,
                 name: event.name || "Tool",
-                arguments: event.input ? JSON.stringify(event.input) : "{}",
-                status: "done" as const,
+                arguments: cleanInput ? JSON.stringify(cleanInput) : "{}",
+                status: "running" as const,
               });
-              replayParts.push({ type: "tool", toolCallId: toolId });
-            } else if (event.type === "tool_result") {
-              const tc = replayToolCalls.find((t: any) => t.id === event.tool_use_id);
-              if (tc) tc.result = event.result?.substring(0, 2000);
+              parts.push({ type: "tool" as const, toolCallId: toolId });
+              break;
+            }
+            case "tool_result": {
+              let resultText = typeof event.result === "string" ? event.result : JSON.stringify(event.result);
+              if (resultText) {
+                resultText = resultText.replace(/[A-Z]:\\[^\s]*?workspaces[\\\/][^\\\/\s]+[\\\/]/g, "");
+                resultText = resultText.replace(/\/[^\s]*?workspaces\/[^\/\s]+\//g, "");
+              }
+              const tc = toolCalls.find((t) => t.id === event.tool_use_id);
+              if (tc) {
+                tc.result = (resultText || "").substring(0, 2000);
+                tc.status = "done";
+              }
+              break;
             }
           }
-
-          if (replayContent || replayToolCalls.length > 0) {
-            // Mark as interrupted if the agent is no longer active —
-            // user will see a "Continue / Tell PiPilot something else" prompt
-            // instead of auto-resuming.
-            setMessages((prev) => [...prev, {
-              id: resumeId,
-              role: "assistant" as const,
-              content: replayContent || "(Resumed session)",
-              timestamp: new Date(),
-              toolCalls: replayToolCalls,
-              parts: replayParts,
-              interrupted: !data.isActive,
-            }]);
-          } else if (!data.isActive) {
-            // No partial content but session was interrupted — still show the prompt
-            setMessages((prev) => [...prev, {
-              id: resumeId,
-              role: "assistant" as const,
-              content: "",
-              timestamp: new Date(),
-              interrupted: true,
-            }]);
-          }
         }
-        // Note: removed auto-continue. User must explicitly click Continue
-        // or send a new message via the interruption UI.
-      } catch {}
-    }
 
-    checkAndResume();
+        if (!content && toolCalls.length === 0) return;
+
+        // Append an interruption notice so the user knows what happened
+        content += "\n\n---\n*Stream interrupted by page refresh. The agent's work up to this point is shown above. Send a follow-up message to continue.*";
+
+        setMessages((prev) => {
+          // Find the last assistant message and replace its content with
+          // the rebuilt buffer data (authoritative, has full tool pills)
+          const lastIdx = prev.map((m) => m.role).lastIndexOf("assistant");
+          if (lastIdx >= 0) {
+            const updated = [...prev];
+            updated[lastIdx] = {
+              ...updated[lastIdx],
+              content,
+              toolCalls,
+              parts,
+              streaming: false,
+            };
+            return updated;
+          }
+          // No assistant message — create one with the rebuilt content
+          return [...prev, {
+            id: `interrupted-${Date.now()}`,
+            role: "assistant" as const,
+            content,
+            streaming: false,
+            timestamp: new Date(),
+            toolCalls,
+            parts,
+          }];
+        });
+      } catch (err) {
+        console.warn("[agent] Replay check failed:", err);
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Persist messages to IndexedDB (debounced, same as useChat)
+  // Persist messages to IndexedDB — including streaming messages so partial
+  // responses survive page refreshes or interrupted streams. Debounced at
+  // 500ms during streaming (frequent small updates) and 1500ms when idle.
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => {
-    if (!projectId || messages.length === 0) return;
+    if (!projectId || !currentSessionId || messages.length === 0) return;
     clearTimeout(saveTimeoutRef.current);
+    const hasStreaming = messages.some((m) => m.streaming);
+    const delay = hasStreaming ? 500 : 1500;
     saveTimeoutRef.current = setTimeout(() => {
-      const sessionId = `agent-${projectId}`;
-      const nonStreamingMsgs = messages.filter((m) => !m.streaming);
-      if (nonStreamingMsgs.length === 0) return;
+      const sessionId = currentSessionId;
+      // Save ALL messages including currently-streaming ones. For a
+      // streaming message we snapshot its current content/parts/toolCalls
+      // so that if the stream is interrupted, the partial response is
+      // still available after reload.
+      const toSave = messages.filter((m) => m.content || m.toolCalls?.length || m.parts?.length);
+      if (toSave.length === 0) return;
       db.chatMessages
         .where("sessionId")
         .equals(sessionId)
         .delete()
         .then(() => {
           return db.chatMessages.bulkPut(
-            nonStreamingMsgs.map((m) => ({
+            toSave.map((m) => ({
               id: m.id,
               role: m.role,
               content: m.content,
               toolCalls: m.toolCalls ? JSON.stringify(m.toolCalls) : undefined,
+              parts: m.parts ? JSON.stringify(m.parts) : undefined,
               tool_call_id: m.tool_call_id,
               sessionId,
               timestamp: m.timestamp,
@@ -236,29 +378,17 @@ export function useAgentChat(
           );
         })
         .catch(console.error);
-    }, 1000);
-  }, [messages, projectId]);
+    }, delay);
+  }, [messages, projectId, currentSessionId]);
 
   const sendMessage = useCallback(async (userContent: string) => {
     if (!userContent.trim()) return;
 
-    // If agent is busy, queue the message on the server
+    // If agent is busy, push to the LOCAL queue (server-side queue is disabled
+    // because it kept piling up duplicates). The queue auto-drains when the
+    // current stream completes — see the `done` SSE event handler below.
     if (isStreaming) {
-      const pid = projectIdRef.current || "";
-      try {
-        await fetch("/api/agent/queue", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ projectId: pid, prompt: userContent }),
-        });
-        // Show the queued message in chat
-        setMessages((prev) => [...prev, {
-          id: generateId(),
-          role: "user" as const,
-          content: userContent + "\n\n*(queued — will run after current task)*",
-          timestamp: new Date(),
-        }]);
-      } catch {}
+      setMessageQueue((prev) => [...prev, userContent]);
       return;
     }
 
@@ -272,14 +402,24 @@ export function useAgentChat(
     };
     setMessages((prev) => [...prev, userMsg]);
 
-    // Create checkpoint before
-    if (checkpointManagerRef.current) {
-      try {
-        await checkpointManagerRef.current.createCheckpoint(
-          `Before: ${userContent.slice(0, 50)}`,
-          `before-${userMsg.id}`
-        );
-      } catch {}
+    // ── AI session title generation ──
+    // If this is the first user message in the current session, ask the
+    // a0 LLM to generate a short descriptive title and update the session.
+    // Runs in the background — never blocks the agent request.
+    const sidForTitle = currentSessionIdRef.current;
+    if (sidForTitle && messagesRef.current.length === 0) {
+      (async () => {
+        try {
+          const session = await db.chatSessions.get(sidForTitle);
+          if (!session || session.name === "New Chat" || !session.name) {
+            const { generateChatTitle } = await import("@/lib/a0llm");
+            const title = await generateChatTitle(userContent);
+            if (title) {
+              await db.chatSessions.update(sidForTitle, { name: title, updatedAt: new Date() });
+            }
+          }
+        } catch {}
+      })();
     }
 
     const assistantId = generateId();
@@ -292,6 +432,17 @@ export function useAgentChat(
       toolCalls: [],
       parts: [],
     }]);
+
+    // Create checkpoint in background — never blocks the thinking bubble
+    // or the POST to the agent. If it fails, streaming still proceeds.
+    if (checkpointManagerRef.current) {
+      checkpointManagerRef.current
+        .createCheckpoint(
+          `Before: ${userContent.slice(0, 50)}`,
+          `before-${userMsg.id}`
+        )
+        .catch(() => {});
+    }
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -328,15 +479,32 @@ Before coding, commit to a BOLD aesthetic direction:
 
 NEVER use generic AI aesthetics. No design should be the same. Vary between light/dark, different fonts, different aesthetics. Match implementation complexity to the vision — maximalist designs need elaborate code, minimalist designs need precision and restraint.`;
 
-      const systemPrompt = ctx
-        ? `Project: ${ctx.projectType}\nFile tree:\n${ctx.fileTree}\n\n${designGuide}`
+      // Build open-tabs context: tells the agent which files the user is
+      // currently looking at so it can prioritize them without being told.
+      let openTabsBlock = "";
+      if (ctx?.openTabs && ctx.openTabs.length > 0) {
+        const activeLabel = ctx.openTabs[0];
+        const others = ctx.openTabs.slice(1);
+        openTabsBlock = `\n\nOpen editor tabs (${ctx.openTabs.length}):\n` +
+          `  Active: ${activeLabel}\n` +
+          (others.length > 0 ? others.map((t) => `  - ${t}`).join("\n") : "");
+      }
+
+      const baseSystemPrompt = ctx
+        ? `Project: ${ctx.projectType}\nFile tree:\n${ctx.fileTree}${openTabsBlock}\n\n${designGuide}`
         : designGuide;
 
-      // POST to agent server
+      // Context compaction is handled server-side by the Agent SDK's
+      // built-in /compact command. The server auto-triggers it when the
+      // conversation gets long. No client-side summarization needed.
+      const systemPrompt = baseSystemPrompt;
+
+      // POST to agent server. `mode` controls whether the agent runs in
+      // normal build mode or in plan-only mode (research + plan, no edits).
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: userContent, systemPrompt, projectId: pid }),
+        body: JSON.stringify({ prompt: userContent, systemPrompt, projectId: pid, mode }),
         signal: controller.signal,
       });
 
@@ -383,6 +551,15 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
                 break;
 
               case "assistant":
+              case "compact_boundary":
+                // The SDK compacted the conversation history. Show a brief
+                // shimmer so the user knows context was optimized.
+                setIsOptimizingContext(true);
+                setTimeout(() => setIsOptimizingContext(false), 1500);
+                console.log("[chat] conversation compacted by SDK",
+                  event.compact_metadata ? `(${event.compact_metadata.pre_tokens} tokens before)` : "");
+                break;
+
               case "content_block_start":
               case "content_block_delta":
               case "user":
@@ -590,35 +767,176 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [isStreaming]);
+  }, [isStreaming, mode]);
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
     setIsStreaming(false);
   }, []);
 
+  // ── Queue actions ──
+  const removeFromQueue = useCallback((index: number) => {
+    setMessageQueue((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const clearQueue = useCallback(() => {
+    setMessageQueue([]);
+  }, []);
+
+  // ── Auto-drain the queue when streaming completes ──
+  // When isStreaming flips to false and there's something in the queue,
+  // pop the head and send it. The recursive sendMessage call handles the
+  // streaming flag, so the chain self-perpetuates until the queue is empty.
+  const drainingRef = useRef(false);
+  useEffect(() => {
+    if (isStreaming) return;
+    if (messageQueue.length === 0) return;
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    // Pop the first message and send it. Defer one tick so React commits
+    // the state update before sendMessage reads it.
+    const next = messageQueue[0];
+    setMessageQueue((prev) => prev.slice(1));
+    setTimeout(() => {
+      drainingRef.current = false;
+      sendMessage(next);
+    }, 60);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming, messageQueue]);
+
   const clearMessages = useCallback(() => {
     setMessages([]);
+    // Also clear any queued messages — the user explicitly chose a clean slate.
+    setMessageQueue([]);
     const pid = projectIdRef.current;
+    const sid = currentSessionIdRef.current;
+    if (sid) {
+      db.chatMessages.where("sessionId").equals(sid).delete().catch(console.error);
+      // Drop the cached conversation summary too
+      import("@/lib/conversationSummary").then((m) => m.clearConversationSummaryCache(sid)).catch(() => {});
+    }
     if (pid) {
-      db.chatMessages.where("sessionId").equals(`agent-${pid}`).delete().catch(console.error);
+      try { localStorage.removeItem(queueKey(pid)); } catch {}
     }
   }, []);
+
+  // ── Multi-session management ──
+  const createSession = useCallback(async (name?: string): Promise<string> => {
+    const pid = projectIdRef.current;
+    if (!pid) return "";
+    const id = `agent-${pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const now = new Date();
+    await db.chatSessions.put({
+      id,
+      name: name || "New Chat",
+      projectId: pid,
+      createdAt: now,
+      updatedAt: now,
+    });
+    // Switch to it immediately. Persist as the active session.
+    setCurrentSessionId(id);
+    try { localStorage.setItem(sessionPrefKey(pid), id); } catch {}
+    setMessages([]);
+    return id;
+  }, []);
+
+  const switchSession = useCallback((sessionId: string) => {
+    const pid = projectIdRef.current;
+    if (!pid || !sessionId) return;
+    setCurrentSessionId(sessionId);
+    try { localStorage.setItem(sessionPrefKey(pid), sessionId); } catch {}
+  }, []);
+
+  const renameSession = useCallback(async (sessionId: string, name: string) => {
+    try {
+      await db.chatSessions.update(sessionId, { name, updatedAt: new Date() });
+    } catch {}
+  }, []);
+
+  const deleteSession = useCallback(async (sessionId: string) => {
+    const pid = projectIdRef.current;
+    if (!pid || !sessionId) return;
+    // Don't allow deleting the last remaining session — wipe it instead.
+    const allForProject = await db.chatSessions.where("projectId").equals(pid).toArray();
+    if (allForProject.length <= 1) {
+      // Just clear messages for the current session
+      await db.chatMessages.where("sessionId").equals(sessionId).delete().catch(() => {});
+      setMessages([]);
+      return;
+    }
+    try {
+      await db.chatMessages.where("sessionId").equals(sessionId).delete();
+      await db.chatSessions.delete(sessionId);
+    } catch {}
+    // If we deleted the active session, switch to another one
+    if (currentSessionIdRef.current === sessionId) {
+      const next = allForProject.find((s) => s.id !== sessionId);
+      if (next) switchSession(next.id);
+    }
+  }, [switchSession]);
 
   const deleteMessage = useCallback((messageId: string) => {
     setMessages((prev) => prev.filter((m) => m.id !== messageId));
   }, []);
 
-  const revertToMessage = useCallback(async (messageId: string) => {
-    if (!checkpointManagerRef.current) return;
+  /**
+   * Revert the project state back to when the user sent `messageId`:
+   *   1. Capture the original user-message content (so the chat input can
+   *      be prefilled and the user can re-send / edit it)
+   *   2. Restore the disk snapshot taken right before that message
+   *   3. Slice the in-memory message list to remove that message and
+   *      everything after it
+   *   4. Delete the corresponding rows from IndexedDB so the truncation
+   *      survives reloads
+   *
+   * Returns the original message content so the caller can prefill it
+   * into the chat input.
+   */
+  const revertToMessage = useCallback(async (messageId: string): Promise<string | null> => {
+    if (!checkpointManagerRef.current) return null;
+
+    // 1. Find the user message in the current list and capture its content
+    const target = messagesRef.current.find((m) => m.id === messageId);
+    const originalContent = target?.content || null;
+
+    // 2. Find + restore the "before" checkpoint
     const checkpointId = await checkpointManagerRef.current.findCheckpointBeforeMessage(messageId);
     if (checkpointId) {
-      await checkpointManagerRef.current.restoreToCheckpoint(checkpointId);
-      setMessages((prev) => {
-        const idx = prev.findIndex((m) => m.id === messageId);
-        return idx >= 0 ? prev.slice(0, idx) : prev;
-      });
+      try {
+        await checkpointManagerRef.current.restoreToCheckpoint(checkpointId);
+      } catch (err) {
+        console.error("[revert] checkpoint restore failed:", err);
+      }
+    } else {
+      console.warn("[revert] no checkpoint found for message", messageId, "— input will still be prefilled");
     }
+
+    // 3. Slice messages: drop the user message and everything after.
+    //    Capture the IDs we removed so we can also delete them from IndexedDB.
+    let removedIds: string[] = [];
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === messageId);
+      if (idx < 0) return prev;
+      removedIds = prev.slice(idx).map((m) => m.id);
+      return prev.slice(0, idx);
+    });
+
+    // 4. Delete the dropped messages from IndexedDB so they don't come back
+    //    on the next session load. Use the ACTIVE session id, not the legacy
+    //    `agent-<projectId>` key.
+    const sid = currentSessionIdRef.current;
+    if (sid && removedIds.length > 0) {
+      try {
+        await db.chatMessages
+          .where("sessionId").equals(sid)
+          .and((m) => removedIds.includes(m.id))
+          .delete();
+      } catch (err) {
+        console.warn("[revert] failed to delete messages from IDB:", err);
+      }
+    }
+
+    return originalContent;
   }, []);
 
   const answerQuestion = useCallback(async (requestId: string, answers: Record<string, string>) => {
@@ -664,5 +982,16 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
     answerQuestion,
     continueInterrupted,
     dismissInterruption,
+    messageQueue,
+    removeFromQueue,
+    clearQueue,
+    // Status
+    isOptimizingContext,
+    // Multi-session
+    currentSessionId,
+    createSession,
+    switchSession,
+    renameSession,
+    deleteSession,
   };
 }

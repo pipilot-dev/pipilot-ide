@@ -1,8 +1,14 @@
+/**
+ * FolderPicker — editorial-terminal styled disk-folder browser.
+ * Used for File → Open Folder.
+ */
+
 import { useState, useEffect, useCallback } from "react";
 import {
-  Folder, FolderOpen, ChevronLeft, Home, HardDrive, Loader2, X,
+  Folder, ChevronLeft, Home, HardDrive, Loader2, X,
   Check, Package, ChevronRight,
 } from "lucide-react";
+import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 
 interface FolderPickerProps {
   open: boolean;
@@ -10,36 +16,18 @@ interface FolderPickerProps {
   onPick: (absolutePath: string) => void | Promise<void>;
 }
 
-interface FsEntry {
-  name: string;
-  path: string;
-  hasPackageJson?: boolean;
-}
-
+interface FsEntry { name: string; path: string; hasPackageJson?: boolean }
 interface FsListing {
   path: string;
   parent: string | null;
   folders: FsEntry[];
   separator: string;
 }
-
 interface HomeInfo {
   home: string;
   separator: string;
   entries: { name: string; path: string }[];
 }
-
-const COLORS = {
-  bg: "hsl(220 13% 16%)",
-  panelBg: "hsl(220 13% 12%)",
-  text: "hsl(220 14% 90%)",
-  textMuted: "hsl(220 14% 60%)",
-  textDim: "hsl(220 14% 40%)",
-  accent: "hsl(207 90% 60%)",
-  accentBg: "hsl(207 90% 50% / 0.15)",
-  border: "hsl(220 13% 26%)",
-  hoverBg: "hsl(220 13% 22%)",
-};
 
 export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
   const [home, setHome] = useState<HomeInfo | null>(null);
@@ -48,7 +36,8 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
 
-  // Fetch home / drives on mount
+  useEffect(() => { injectFonts(); }, []);
+
   useEffect(() => {
     if (!open) return;
     setError(null);
@@ -57,7 +46,6 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
       .then((r) => r.json())
       .then((data: HomeInfo) => {
         setHome(data);
-        // Auto-load home as the initial listing
         loadPath(data.home);
       })
       .catch((err) => setError(err.message));
@@ -97,7 +85,7 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
 
   if (!open) return null;
 
-  // Format the current path nicely with breadcrumbs
+  // Breadcrumbs from current path
   const sep = listing?.separator || "/";
   const breadcrumbs: { name: string; path: string }[] = [];
   if (listing) {
@@ -113,57 +101,104 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
 
   return (
     <div
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       style={{
         position: "fixed", inset: 0, zIndex: 9999,
-        background: "rgba(0, 0, 0, 0.6)",
+        background: "rgba(0, 0, 0, 0.65)",
+        backdropFilter: "blur(6px)",
         display: "flex", alignItems: "center", justifyContent: "center",
+        fontFamily: FONTS.sans,
       }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div style={{
-        width: 720, height: 540, padding: 0,
+        width: 760, height: 560,
+        background: C.surface,
+        border: `1px solid ${C.border}`,
         borderRadius: 10, overflow: "hidden",
-        background: COLORS.bg,
-        border: `1px solid ${COLORS.border}`,
-        boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+        boxShadow: "0 24px 64px rgba(0, 0, 0, 0.7)",
         display: "flex", flexDirection: "column",
+        position: "relative",
       }}>
-        {/* Header */}
+        {/* Faint accent glow */}
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: -120, right: -120,
+            width: 320, height: 320,
+            background: `radial-gradient(circle, ${C.accent}10 0%, transparent 70%)`,
+            pointerEvents: "none",
+          }}
+        />
+
+        {/* ── Header — editorial label + display title ── */}
         <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "14px 18px",
-          borderBottom: `1px solid ${COLORS.border}`,
+          display: "flex", alignItems: "flex-start", justifyContent: "space-between",
+          padding: "22px 28px 18px",
+          borderBottom: `1px solid ${C.border}`,
+          position: "relative",
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <FolderOpen size={18} style={{ color: COLORS.accent }} />
-            <h3 style={{ fontSize: 14, fontWeight: 600, color: COLORS.text, margin: 0 }}>
-              Open Folder
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+              <span style={{
+                fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+                letterSpacing: "0.18em", textTransform: "uppercase", color: C.accent,
+              }}>
+                / FS
+              </span>
+              <span style={{
+                fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+                letterSpacing: "0.18em", textTransform: "uppercase", color: C.textDim,
+              }}>
+                Open Folder
+              </span>
+            </div>
+            <h3 style={{
+              fontFamily: FONTS.display, fontSize: 28, fontWeight: 400,
+              lineHeight: 1, color: C.text, margin: 0,
+            }}>
+              choose a <span style={{ fontStyle: "italic", color: C.accent }}>folder</span>
+              <span style={{ color: C.accent }}>.</span>
             </h3>
           </div>
           <button
             onClick={onClose}
-            style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", padding: 4 }}
+            style={{
+              background: "none", border: "none",
+              color: C.textDim, cursor: "pointer", padding: 6,
+              borderRadius: 4,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = C.surfaceAlt; e.currentTarget.style.color = C.text; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.textDim; }}
           >
-            <X size={16} />
+            <X size={14} />
           </button>
         </div>
 
-        {/* Breadcrumb / location bar */}
+        {/* ── Breadcrumb bar ── */}
         <div style={{
           display: "flex", alignItems: "center", gap: 6,
-          padding: "8px 14px",
-          background: COLORS.panelBg,
-          borderBottom: `1px solid ${COLORS.border}`,
-          minHeight: 36,
+          padding: "10px 18px",
+          background: C.surfaceAlt,
+          borderBottom: `1px solid ${C.border}`,
+          minHeight: 38,
         }}>
           <button
             disabled={!listing?.parent}
             onClick={() => listing?.parent && loadPath(listing.parent)}
             style={{
               background: "none", border: "none",
-              color: listing?.parent ? COLORS.text : COLORS.textDim,
+              color: listing?.parent ? C.textMid : C.textFaint,
               cursor: listing?.parent ? "pointer" : "not-allowed",
               padding: 4, display: "flex", alignItems: "center",
+              borderRadius: 3,
+            }}
+            onMouseEnter={(e) => {
+              if (listing?.parent) { e.currentTarget.style.background = C.surface; e.currentTarget.style.color = C.accent; }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = listing?.parent ? C.textMid : C.textFaint;
             }}
             title="Go up"
           >
@@ -171,50 +206,57 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
           </button>
           <div style={{
             flex: 1, display: "flex", alignItems: "center", gap: 2,
-            fontSize: 11, fontFamily: "monospace",
-            color: COLORS.text,
+            fontSize: 11, fontFamily: FONTS.mono,
+            color: C.textMid,
             overflow: "hidden",
           }}>
-            {breadcrumbs.length > 0 ? (
-              breadcrumbs.map((bc, i) => (
-                <span key={bc.path} style={{ display: "flex", alignItems: "center", gap: 2 }}>
-                  {i > 0 && <ChevronRight size={9} style={{ color: COLORS.textDim, flexShrink: 0 }} />}
-                  <button
-                    onClick={() => loadPath(bc.path)}
-                    style={{
-                      background: "none", border: "none",
-                      color: i === breadcrumbs.length - 1 ? COLORS.accent : COLORS.text,
-                      cursor: "pointer", padding: "2px 4px", borderRadius: 3,
-                      fontSize: 11, fontFamily: "monospace",
-                      whiteSpace: "nowrap",
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = COLORS.hoverBg; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                  >
-                    {bc.name || sep}
-                  </button>
-                </span>
-              ))
-            ) : (
-              <span style={{ color: COLORS.textDim }}>Loading...</span>
+            {breadcrumbs.length > 0 ? breadcrumbs.map((bc, i) => (
+              <span key={bc.path} style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                {i > 0 && <ChevronRight size={9} style={{ color: C.textFaint, flexShrink: 0 }} />}
+                <button
+                  onClick={() => loadPath(bc.path)}
+                  style={{
+                    background: "none", border: "none",
+                    color: i === breadcrumbs.length - 1 ? C.accent : C.textMid,
+                    cursor: "pointer", padding: "2px 6px", borderRadius: 3,
+                    fontSize: 11, fontFamily: FONTS.mono,
+                    whiteSpace: "nowrap",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = C.surface; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  {bc.name || sep}
+                </button>
+              </span>
+            )) : (
+              <span style={{ color: C.textFaint }}>// loading…</span>
             )}
           </div>
         </div>
 
-        {/* Body — sidebar with quick links + main folder list */}
-        <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-          {/* Sidebar quick links */}
+        {/* ── Body: side quick links + folder list ── */}
+        <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
+          {/* Quick links sidebar */}
           <div style={{
-            width: 180, flexShrink: 0,
-            background: COLORS.panelBg,
-            borderRight: `1px solid ${COLORS.border}`,
-            overflowY: "auto", padding: "8px 0",
+            width: 200, flexShrink: 0,
+            background: C.surfaceAlt,
+            borderRight: `1px solid ${C.border}`,
+            overflowY: "auto",
+            padding: "12px 0",
           }}>
+            <div style={{
+              padding: "0 18px 8px",
+              fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+              letterSpacing: "0.18em", textTransform: "uppercase",
+              color: C.textDim,
+            }}>
+              // Locations
+            </div>
             {home?.entries.map((entry) => {
               const isCurrent = listing?.path === entry.path;
               const Icon = entry.name === "Home"
                 ? Home
-                : entry.name.endsWith("drive")
+                : entry.name.toLowerCase().includes("drive")
                   ? HardDrive
                   : Folder;
               return (
@@ -223,41 +265,45 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
                   onClick={() => loadPath(entry.path)}
                   style={{
                     display: "flex", alignItems: "center", gap: 10,
-                    width: "100%", padding: "8px 14px",
-                    fontSize: 11, textAlign: "left",
-                    background: isCurrent ? COLORS.accentBg : "transparent",
-                    color: isCurrent ? COLORS.accent : COLORS.text,
+                    width: "100%", padding: "8px 18px",
+                    fontFamily: FONTS.mono, fontSize: 10,
+                    textAlign: "left",
+                    background: isCurrent ? C.accentDim : "transparent",
+                    color: isCurrent ? C.accent : C.textMid,
                     border: "none", cursor: "pointer",
-                    borderLeft: `2px solid ${isCurrent ? COLORS.accent : "transparent"}`,
+                    borderLeft: `2px solid ${isCurrent ? C.accent : "transparent"}`,
                   }}
                   onMouseEnter={(e) => {
-                    if (!isCurrent) e.currentTarget.style.background = COLORS.hoverBg;
+                    if (!isCurrent) { e.currentTarget.style.background = C.surface; e.currentTarget.style.color = C.text; }
                   }}
                   onMouseLeave={(e) => {
-                    if (!isCurrent) e.currentTarget.style.background = "transparent";
+                    if (!isCurrent) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.textMid; }
                   }}
                 >
-                  <Icon size={13} style={{ color: isCurrent ? COLORS.accent : COLORS.textMuted, flexShrink: 0 }} />
-                  <span style={{ fontWeight: isCurrent ? 600 : 400 }}>{entry.name}</span>
+                  <Icon size={12} style={{ flexShrink: 0 }} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {entry.name}
+                  </span>
                 </button>
               );
             })}
           </div>
 
           {/* Folder list */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
             {loading && (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 40 }}>
-                <Loader2 size={18} className="animate-spin" style={{ color: COLORS.accent }} />
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 60 }}>
+                <Loader2 size={18} className="animate-spin" style={{ color: C.accent }} />
               </div>
             )}
 
             {!loading && error && (
               <div style={{
-                margin: 16, padding: 12,
-                fontSize: 11, color: "hsl(0 84% 70%)",
-                background: "hsl(0 84% 50% / 0.1)",
-                border: "1px solid hsl(0 84% 50% / 0.25)",
+                margin: 16, padding: 14,
+                fontSize: 11, fontFamily: FONTS.mono,
+                color: "#ff9b9b",
+                background: "#ff6b6b12",
+                border: "1px solid #ff6b6b33",
                 borderRadius: 4,
               }}>
                 {error}
@@ -265,8 +311,16 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
             )}
 
             {!loading && !error && listing && listing.folders.length === 0 && (
-              <div style={{ padding: 24, textAlign: "center", color: COLORS.textDim, fontSize: 11 }}>
-                No folders here. Click "Open this folder" below to use the current directory.
+              <div style={{
+                padding: "60px 24px", textAlign: "center",
+                color: C.textDim, fontSize: 12, fontFamily: FONTS.sans,
+                lineHeight: 1.7,
+              }}>
+                <div style={{ fontFamily: FONTS.mono, fontSize: 9, color: C.textFaint, letterSpacing: "0.18em", marginBottom: 8 }}>
+                  // EMPTY
+                </div>
+                No subfolders here.<br />
+                Click <span style={{ color: C.accent }}>Open this folder</span> below to use the current directory.
               </div>
             )}
 
@@ -276,50 +330,72 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
                 onDoubleClick={() => loadPath(entry.path)}
                 onClick={() => loadPath(entry.path)}
                 style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  width: "100%", padding: "6px 16px",
-                  fontSize: 12, textAlign: "left",
-                  background: "transparent", color: COLORS.text,
+                  display: "flex", alignItems: "center", gap: 12,
+                  width: "100%", padding: "8px 22px",
+                  fontFamily: FONTS.mono, fontSize: 11,
+                  textAlign: "left",
+                  background: "transparent", color: C.text,
                   border: "none", cursor: "pointer",
+                  borderLeft: "2px solid transparent",
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = COLORS.hoverBg; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = C.surfaceAlt;
+                  e.currentTarget.style.borderLeft = `2px solid ${C.accentLine}`;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.borderLeft = "2px solid transparent";
+                }}
               >
-                <Folder size={14} style={{ color: "hsl(38 92% 60%)", flexShrink: 0 }} />
-                <span style={{ flex: 1 }}>{entry.name}</span>
+                <Folder size={13} style={{ color: C.textDim, flexShrink: 0 }} />
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {entry.name}
+                </span>
                 {entry.hasPackageJson && (
                   <span title="Contains package.json" style={{
-                    display: "flex", alignItems: "center", gap: 3,
-                    fontSize: 9, color: COLORS.accent,
-                    padding: "1px 5px", borderRadius: 3,
-                    background: COLORS.accentBg,
+                    display: "flex", alignItems: "center", gap: 4,
+                    fontSize: 8, fontFamily: FONTS.mono,
+                    letterSpacing: "0.12em", textTransform: "uppercase",
+                    color: C.accent,
+                    padding: "2px 7px", borderRadius: 3,
+                    background: C.accentDim,
+                    border: `1px solid ${C.accentLine}`,
                   }}>
                     <Package size={9} />
                     project
                   </span>
                 )}
-                <ChevronRight size={11} style={{ color: COLORS.textDim, flexShrink: 0 }} />
+                <ChevronRight size={11} style={{ color: C.textFaint, flexShrink: 0 }} />
               </button>
             ))}
           </div>
         </div>
 
-        {/* Footer with current path + Open button */}
+        {/* ── Footer: current path + Open button ── */}
         <div style={{
           display: "flex", alignItems: "center", gap: 12,
-          padding: "12px 16px",
-          borderTop: `1px solid ${COLORS.border}`,
-          background: COLORS.panelBg,
+          padding: "14px 22px",
+          borderTop: `1px solid ${C.border}`,
+          background: C.surfaceAlt,
         }}>
-          <div style={{ flex: 1, fontSize: 11, color: COLORS.textMuted, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {listing?.path || "—"}
+          <div style={{
+            flex: 1, fontFamily: FONTS.mono, fontSize: 10,
+            color: C.textMid,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            <span style={{ color: C.textFaint }}>$ cd </span>
+            <span style={{ color: C.accent }}>{listing?.path || "—"}</span>
           </div>
           <button
             onClick={onClose}
             style={{
-              padding: "6px 14px", fontSize: 12,
-              background: "transparent", color: COLORS.textMuted,
-              border: `1px solid ${COLORS.border}`, borderRadius: 5,
+              padding: "8px 18px",
+              fontFamily: FONTS.mono, fontSize: 10, fontWeight: 500,
+              letterSpacing: "0.12em", textTransform: "uppercase",
+              background: "transparent",
+              color: C.textMid,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
               cursor: "pointer",
             }}
           >
@@ -329,17 +405,18 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
             onClick={handlePick}
             disabled={!listing || picking}
             style={{
-              padding: "6px 18px", fontSize: 12, fontWeight: 600,
-              background: !listing || picking
-                ? "hsl(220 13% 22%)"
-                : "linear-gradient(135deg, hsl(207 90% 45%), hsl(207 90% 38%))",
-              color: !listing || picking ? COLORS.textDim : "#fff",
-              border: "none", borderRadius: 5,
+              padding: "8px 22px",
+              fontFamily: FONTS.mono, fontSize: 10, fontWeight: 600,
+              letterSpacing: "0.12em", textTransform: "uppercase",
+              background: !listing || picking ? C.surfaceAlt : C.accent,
+              color: !listing || picking ? C.textDim : C.bg,
+              border: `1px solid ${!listing || picking ? C.border : C.accent}`,
+              borderRadius: 4,
               cursor: !listing || picking ? "not-allowed" : "pointer",
-              display: "flex", alignItems: "center", gap: 6,
+              display: "flex", alignItems: "center", gap: 8,
             }}
           >
-            {picking ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+            {picking ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
             Open this folder
           </button>
         </div>

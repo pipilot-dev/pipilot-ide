@@ -86,8 +86,12 @@ const URL_PATTERNS = [
 ];
 
 function extractPort(text: string): number | null {
+  // Strip ANSI escape codes first — Vite/Next.js/etc. embed them inside
+  // URLs (e.g. "\x1b[1mhttp://localhost:\x1b[1m43268\x1b[0m") which
+  // breaks the regex that expects "localhost:43268" as a contiguous string.
+  const clean = text.replace(/\x1b\[[0-9;]*m/g, "");
   for (const pattern of URL_PATTERNS) {
-    const match = text.match(pattern);
+    const match = clean.match(pattern);
     if (match) {
       const port = parseInt(match[1]);
       if (port > 0 && port < 65536) return port;

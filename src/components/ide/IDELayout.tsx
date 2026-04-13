@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { COLORS as C, FONTS } from "@/lib/design-tokens";
 import { ActivityBar, ActivityBarView } from "./ActivityBar";
+import { TitleBar } from "./TitleBar";
 import { SidebarPanel } from "./SidebarPanel";
 import { EditorArea, EditorTab } from "./EditorArea";
 import { ChatPanel } from "../chat/ChatPanel";
 import { CommandPalette } from "./CommandPalette";
 import { TerminalPanel } from "./TerminalPanel";
-import { CheckpointBar } from "./CheckpointBar";
 import SettingsPanel from "@/components/ide/SettingsPanel";
 import { useFileSystem, FileNode } from "@/hooks/useFileSystem";
 import { useFileSystemRemote } from "@/hooks/useFileSystemRemote";
@@ -17,7 +18,6 @@ import {
   GitBranch,
   AlertCircle,
   CheckCircle2,
-  Wifi,
   Terminal,
   ChevronUp,
   ChevronDown,
@@ -26,15 +26,22 @@ import {
   ExternalLink,
   Loader2,
   HelpCircle,
+  Wifi,
+  WifiOff,
+  Clock,
 } from "lucide-react";
 import { deploySite, DeployResult } from "@/lib/deploy";
 import { useProjects } from "@/hooks/useProjects";
+import { FolderPicker } from "./FolderPicker";
+import { CloneRepoModal } from "./CloneRepoModal";
+import { ToastViewport } from "./ToastViewport";
 import { HelpDialog } from "@/components/ide/HelpDialog";
 import { NotificationCenter } from "@/components/ide/NotificationCenter";
 import { ProblemsPanel } from "@/components/ide/ProblemsPanel";
 import { useNotifications } from "@/contexts/NotificationContext";
 import { useProblems } from "@/contexts/ProblemsContext";
 import { useGitStatusCount } from "@/hooks/useGitStatusCount";
+import { useRealGit } from "@/hooks/useRealGit";
 
 function findFileById(nodes: FileNode[], id: string): FileNode | null {
   for (const node of nodes) {
@@ -52,6 +59,7 @@ export function IDELayout() {
   const [chatOpen, setChatOpen] = useState(true);
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const tabsRestoredRef = useRef(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   // Persist terminal height in localStorage
@@ -71,16 +79,114 @@ export function IDELayout() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [problemsOpen, setProblemsOpen] = useState(false);
-  const [activeProvider, setActiveProvider] = useState<"ai-sdk" | "claude-agent">("claude-agent");
+
+  // ── IDE-wide appearance wiring ──
+  // Applies theme, font family, and font size to the entire IDE (not just
+  // the Monaco editor) by setting CSS custom properties on <html>. Every
+  // UI component that uses `font-family: var(--ide-font)` or
+  // `font-size: var(--ide-font-size)` will react instantly.
+  useEffect(() => {
+    const root = document.documentElement;
+
+    function applyTheme(value: string) {
+      const isDark = value !== "light";
+      root.classList.toggle("dark", isDark);
+      window.dispatchEvent(new CustomEvent("pipilot:monaco-theme-changed", {
+        detail: { theme: isDark ? "pipilot-editorial" : "vs" },
+      }));
+    }
+
+    function applyFontFamily(value: string) {
+      // Set a CSS variable AND directly set the body font-family so every
+      // element in the IDE inherits the change without needing var() usage.
+      const family = value || '"JetBrains Mono", monospace';
+      root.style.setProperty("--ide-font", family);
+      document.body.style.fontFamily = family;
+    }
+
+    function applyFontSize(value: string) {
+      const px = parseInt(value) || 14;
+      root.style.setProperty("--ide-font-size", `${px}px`);
+    }
+
+    // Apply saved values on mount
+    applyTheme(localStorage.getItem("pipilot:theme") ?? "dark");
+    applyFontFamily(localStorage.getItem("pipilot:editorFontFamily") ?? "");
+    applyFontSize(localStorage.getItem("pipilot:editorFontSize") ?? "14");
+
+    function onSettingChanged(e: Event) {
+      const { key, value } = (e as CustomEvent<{ key: string; value: string }>).detail ?? {};
+      if (key === "theme") applyTheme(value);
+      if (key === "editorFontFamily") applyFontFamily(value);
+      if (key === "editorFontSize") applyFontSize(value);
+    }
+    window.addEventListener("pipilot:setting-changed", onSettingChanged);
+    return () => window.removeEventListener("pipilot:setting-changed", onSettingChanged);
+  }, []);
+
+  // ── Status bar: live clock + online status ──
+  const [clockStr, setClockStr] = useState(() => {
+    const now = new Date();
+    return now.toLocaleString(undefined, {
+      weekday: "short", month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  });
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== "undefined" ? navigator.onLine : true,
+  );
+  useEffect(() => {
+    const tick = setInterval(() => {
+      const now = new Date();
+      setClockStr(now.toLocaleString(undefined, {
+        weekday: "short", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit",
+      }));
+    }, 10_000); // update every 10s — minute precision is fine
+    const goOnline = () => setIsOnline(true);
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      clearInterval(tick);
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+    };
+  }, []);
+  // Persist problems panel height in localStorage (mirrors terminalResize)
+  const problemsResize = useResizable(
+    typeof window !== "undefined" ? Number(localStorage.getItem("pipilot-problems-height")) || 260 : 260,
+    120,
+    600,
+    "vertical"
+  );
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("pipilot-problems-height", String(problemsResize.size));
+    }
+  }, [problemsResize.size]);
+  // TitleBar modals
+  const [showOpenFolderPicker, setShowOpenFolderPicker] = useState(false);
+  const [showCloneModal, setShowCloneModal] = useState(false);
+  // Single provider — PiPilot Agent. Kept as a const for the existing
+  // branching that routes file ops to remoteFs vs localFs.
+  const activeProvider = "claude-agent" as const;
 
   const { addNotification } = useNotifications();
   const { errorCount, warningCount } = useProblems();
   const gitChangeCount = useGitStatusCount();
+  const git = useRealGit();
+  const { branch: gitBranch, branches: gitBranches, isRepo: gitIsRepo, checkout: gitCheckout, createBranch: gitCreateBranch, refreshStatus: gitRefreshStatus } = git;
+  const [showBranchPicker, setShowBranchPicker] = useState(false);
+  const [branchFilter, setBranchFilter] = useState("");
+  const [branchCreating, setBranchCreating] = useState(false);
+  const branchPickerRef = useRef<HTMLDivElement>(null);
+  const branchInputRef = useRef<HTMLInputElement>(null);
   const bellRef = useRef<HTMLElement>(null);
 
   const sidebar = useSidebarResizable(220, 140, 400);
   const chatPanel = useResizable(360, 260, 600, "horizontal");
-  const { activeProject } = useProjects();
+  const { activeProject, openFolder: openFolderInProjects } = useProjects();
 
   const localFs = useFileSystem();
   const remoteFs = useFileSystemRemote();
@@ -88,7 +194,7 @@ export function IDELayout() {
   // files live on real disk, not in IndexedDB. activeProject is read
   // below from useProjects(); we need its type here so use a quick read.
   const isLinkedProject = activeProject?.type === "linked";
-  const { files, isReady, executeTool, updateFileContent, getFileContent, activeProjectId } =
+  const { files, isReady, executeTool, updateFileContent, getFileContent, loadFolderChildren, activeProjectId } =
     (activeProvider === "claude-agent" || isLinkedProject) ? remoteFs : localFs;
   const checkpoints = useCheckpoints();
 
@@ -175,6 +281,38 @@ export function IDELayout() {
     }
   }, [activeProvider, activeProjectId]);
 
+  // Read file content — routes to API (agent mode) or IndexedDB (local mode)
+  const handleGetFileContent = useCallback(async (filePath: string): Promise<string> => {
+    if (activeProvider === "claude-agent") {
+      try {
+        const res = await fetch(`/api/files/read?projectId=${encodeURIComponent(activeProjectId)}&path=${encodeURIComponent(filePath)}`);
+        if (!res.ok) return "";
+        const data = await res.json();
+        return data.content || "";
+      } catch {
+        return "";
+      }
+    } else {
+      const file = await db.files.get(filePath);
+      return file?.content || "";
+    }
+  }, [activeProvider, activeProjectId]);
+
+  // Check if a file/folder exists — routes to API (agent mode) or IndexedDB (local mode)
+  const handleCheckFileExists = useCallback(async (filePath: string): Promise<boolean> => {
+    if (activeProvider === "claude-agent") {
+      try {
+        const res = await fetch(`/api/files/read?projectId=${encodeURIComponent(activeProjectId)}&path=${encodeURIComponent(filePath)}`);
+        return res.ok;
+      } catch {
+        return false;
+      }
+    } else {
+      const file = await db.files.get(filePath);
+      return !!file;
+    }
+  }, [activeProvider, activeProjectId]);
+
   // Deploy handler
   const handleDeploy = useCallback(async () => {
     if (deploying || !activeProject) return;
@@ -221,7 +359,7 @@ export function IDELayout() {
             const slug = customSlug || activeProject.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
             const previewUrl = `/api/preview/${activeProjectId}/index.html`;
             addNotification({ title: "Preview Ready", message: `Preview at: ${previewUrl}`, type: "success" });
-            return `Preview available at: ${previewUrl} (${flatFiles.length} files on disk). Full deploy to Puter coming soon.`;
+            return `Preview available at: ${previewUrl} (${flatFiles.length} files on disk). Full deploy coming soon.`;
           } catch (err: any) {
             return `Deploy error: ${err.message}`;
           }
@@ -277,8 +415,20 @@ export function IDELayout() {
     }
   };
 
-  const handleSelectFile = useCallback((node: FileNode) => {
+  const handleSelectFile = useCallback(async (node: FileNode) => {
     if (node.type !== "file") return;
+
+    // Lazy-loaded files (e.g. from node_modules) don't include content
+    // in the tree response — fetch it on demand here.
+    let nodeWithContent = node;
+    if (node.content == null) {
+      try {
+        const content = await getFileContent(node.id);
+        nodeWithContent = { ...node, content };
+      } catch {
+        nodeWithContent = { ...node, content: "" };
+      }
+    }
 
     setTabs((prev) => {
       const exists = prev.find((t) => t.node.id === node.id);
@@ -287,9 +437,9 @@ export function IDELayout() {
         return prev;
       }
       setActiveTabId(node.id);
-      return [...prev, { node, isDirty: false }];
+      return [...prev, { node: nodeWithContent, isDirty: false }];
     });
-  }, []);
+  }, [getFileContent]);
 
   const handleOpenPreview = useCallback(() => {
     const previewId = "__preview__";
@@ -333,34 +483,79 @@ export function IDELayout() {
   }, []);
 
   const handleNavigateToFile = useCallback(
-    (filePath: string, line?: number, column?: number) => {
-      // Find the file node in the tree
-      const node = findFileById(files, filePath);
-      if (!node || node.type !== "file") return;
+    async (filePath: string, line?: number, column?: number) => {
+      // Normalize path: strip leading slash
+      const normalized = filePath.replace(/^\/+/, "");
+
+      // Try to find the file in the current tree first
+      let node: FileNode | null = findFileById(files, normalized);
+
+      // If it's not in the tree (race condition with file watcher, or
+      // the agent just wrote it), fetch its content from the server and
+      // build a synthetic FileNode so the editor can open it.
+      if (!node || node.type !== "file") {
+        try {
+          const content = await getFileContent(normalized);
+          const name = normalized.split("/").pop() || normalized;
+          const ext = name.split(".").pop()?.toLowerCase() || "";
+          const langMap: Record<string, string> = {
+            ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+            json: "json", html: "html", css: "css", md: "markdown", py: "python",
+            svg: "xml", xml: "xml", yml: "yaml", yaml: "yaml",
+            sh: "shell", bash: "shell", mjs: "javascript", cjs: "javascript",
+          };
+          node = {
+            id: normalized,
+            name,
+            type: "file",
+            language: langMap[ext] || "plaintext",
+            content,
+          };
+        } catch (err) {
+          console.warn("[navigate] file not found:", normalized, err);
+          return;
+        }
+      }
+
+      const fileNode = node;
+
       // Open it (or activate existing tab)
       setTabs((prev) => {
-        const exists = prev.find((t) => t.node.id === filePath);
+        const exists = prev.find((t) => t.node.id === normalized);
         if (!exists) {
-          setActiveTabId(filePath);
-          return [...prev, { node, isDirty: false }];
+          setActiveTabId(normalized);
+          return [...prev, { node: fileNode, isDirty: false }];
         }
-        setActiveTabId(filePath);
+        setActiveTabId(normalized);
         return prev;
       });
       // Dispatch a custom event for the EditorArea to jump the cursor
-      // (the editor instance for this file picks it up after mounting)
       if (line) {
         setTimeout(() => {
           window.dispatchEvent(
             new CustomEvent("pipilot:goto-line", {
-              detail: { filePath, line, column: column || 1 },
+              detail: { filePath: normalized, line, column: column || 1 },
             }),
           );
         }, 100);
       }
     },
-    [files],
+    [files, getFileContent],
   );
+
+  // Listen for `pipilot:open-file` events from anywhere in the IDE
+  // (chat tool pills, problems panel, etc.)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { filePath: string; line?: number; column?: number }
+        | undefined;
+      if (!detail?.filePath) return;
+      handleNavigateToFile(detail.filePath, detail.line, detail.column);
+    };
+    window.addEventListener("pipilot:open-file", handler);
+    return () => window.removeEventListener("pipilot:open-file", handler);
+  }, [handleNavigateToFile]);
 
   const handleOpenSettings = useCallback(() => {
     const tabId = "__settings__";
@@ -381,6 +576,85 @@ export function IDELayout() {
       ];
     });
   }, []);
+
+  const handleOpenWalkthrough = useCallback((walkthroughId: string) => {
+    const tabId = `__walkthrough__${walkthroughId}`;
+    const names: Record<string, string> = {
+      "get-started": "Get Started",
+      "ai-power": "AI Power User",
+    };
+    setTabs((prev) => {
+      const exists = prev.find((t) => t.node.id === tabId);
+      if (exists) {
+        setActiveTabId(tabId);
+        return prev;
+      }
+      setActiveTabId(tabId);
+      return [
+        ...prev,
+        {
+          node: { id: tabId, name: names[walkthroughId] || "Walkthrough", type: "file" as const },
+          isDirty: false,
+          isWalkthrough: true,
+          walkthroughId,
+        },
+      ];
+    });
+  }, []);
+
+  const handleOpenWikiPage = useCallback((pageId: string, title: string) => {
+    const tabId = `__wiki__${pageId}`;
+    setTabs((prev) => {
+      const exists = prev.find((t) => t.node.id === tabId);
+      if (exists) {
+        setActiveTabId(tabId);
+        return prev;
+      }
+      setActiveTabId(tabId);
+      return [
+        ...prev,
+        {
+          node: { id: tabId, name: `Wiki: ${title}`, type: "file" as const },
+          isDirty: false,
+          isWiki: true,
+          wikiPageId: pageId,
+        },
+      ];
+    });
+  }, []);
+
+  // Listen for wiki page open events from WikiPanel
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { pageId, title } = (e as CustomEvent).detail || {};
+      if (pageId) handleOpenWikiPage(pageId, title || pageId);
+    };
+    window.addEventListener("pipilot:open-wiki-page", handler);
+    return () => window.removeEventListener("pipilot:open-wiki-page", handler);
+  }, [handleOpenWikiPage]);
+
+  // Listen for file open events from wiki links (e.g. "src/components/MapView.tsx")
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { filePath } = (e as CustomEvent).detail || {};
+      if (!filePath) return;
+      // Find the file in the tree and open it
+      const findNode = (nodes: FileNode[]): FileNode | null => {
+        for (const n of nodes) {
+          if (n.id === filePath || n.id.endsWith(`/${filePath}`)) return n;
+          if (n.children) {
+            const found = findNode(n.children);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      const node = findNode(files);
+      if (node) handleSelectFile(node);
+    };
+    window.addEventListener("pipilot:open-file", handler);
+    return () => window.removeEventListener("pipilot:open-file", handler);
+  }, [files, handleSelectFile]);
 
   const handleOpenDiff = useCallback((filePath: string, staged: boolean) => {
     const tabId = `__diff__${staged ? "s" : "u"}__${filePath}`;
@@ -408,6 +682,8 @@ export function IDELayout() {
   const handleCloseTab = useCallback(
     (id: string) => {
       setTabs((prev) => {
+        // Pinned tabs aren't removed by single Close action either, but we
+        // honor explicit close on the pinned tab itself.
         const newTabs = prev.filter((t) => t.node.id !== id);
         if (activeTabId === id) {
           const idx = prev.findIndex((t) => t.node.id === id);
@@ -420,6 +696,139 @@ export function IDELayout() {
     },
     [activeTabId]
   );
+
+  // Bulk close operations from the tab context menu. Pinned tabs survive
+  // "Close Others/Left/Right/All" — matching VS Code behavior.
+  const handleCloseOtherTabs = useCallback((keepId: string) => {
+    setTabs((prev) => {
+      const remaining = prev.filter((t) => t.node.id === keepId || t.isPinned);
+      setActiveTabId(remaining.find((t) => t.node.id === keepId)?.node.id ?? remaining[0]?.node.id ?? null);
+      return remaining;
+    });
+  }, []);
+
+  const handleCloseTabsToLeft = useCallback((pivotId: string) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.node.id === pivotId);
+      if (idx <= 0) return prev;
+      const remaining = prev.filter((t, i) => i >= idx || t.isPinned);
+      if (!remaining.find((t) => t.node.id === activeTabId)) {
+        setActiveTabId(pivotId);
+      }
+      return remaining;
+    });
+  }, [activeTabId]);
+
+  const handleCloseTabsToRight = useCallback((pivotId: string) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.node.id === pivotId);
+      if (idx < 0 || idx === prev.length - 1) return prev;
+      const remaining = prev.filter((t, i) => i <= idx || t.isPinned);
+      if (!remaining.find((t) => t.node.id === activeTabId)) {
+        setActiveTabId(pivotId);
+      }
+      return remaining;
+    });
+  }, [activeTabId]);
+
+  const handleCloseAllTabs = useCallback(() => {
+    setTabs((prev) => {
+      const remaining = prev.filter((t) => t.isPinned);
+      setActiveTabId(remaining[0]?.node.id ?? null);
+      return remaining;
+    });
+  }, []);
+
+  const handleTogglePinTab = useCallback((id: string) => {
+    setTabs((prev) => {
+      // When pinning, also move to the front of the tab strip (after other pinned ones)
+      const idx = prev.findIndex((t) => t.node.id === id);
+      if (idx < 0) return prev;
+      const target = prev[idx];
+      const isPinning = !target.isPinned;
+      const next = [...prev];
+      next[idx] = { ...target, isPinned: isPinning };
+      if (isPinning) {
+        // Move it to the end of the existing pinned section
+        const updated = next[idx];
+        next.splice(idx, 1);
+        const lastPinnedIdx = next.findLastIndex((t) => t.isPinned);
+        next.splice(lastPinnedIdx + 1, 0, updated);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleReorderTabs = useCallback((from: number, to: number) => {
+    setTabs((prev) => {
+      if (from === to || from < 0 || from >= prev.length || to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  }, []);
+
+  // ── Persist open tabs to localStorage ──
+  // Save: whenever tabs or activeTabId change, write a lightweight
+  // manifest (just file ids, pinned state, and which tab is active).
+  // Content is NOT saved — it's re-read from the file tree on restore.
+  useEffect(() => {
+    if (!activeProjectId || !tabsRestoredRef.current) return;
+    const manifest = {
+      tabIds: tabs
+        .filter((t) => !t.isPreview && !t.isCommit && !t.isDiff && !t.isSettings && !t.isWalkthrough)
+        .map((t) => ({ id: t.node.id, pinned: !!t.isPinned })),
+      activeId: activeTabId,
+    };
+    try {
+      localStorage.setItem(`pipilot-tabs-${activeProjectId}`, JSON.stringify(manifest));
+    } catch {}
+  }, [tabs, activeTabId, activeProjectId]);
+
+  // Restore: when the file tree is loaded (files.length > 0) and we
+  // haven't restored yet, read the manifest and re-open matching files.
+  useEffect(() => {
+    if (!activeProjectId || !files.length || tabsRestoredRef.current) return;
+    tabsRestoredRef.current = true;
+    try {
+      const raw = localStorage.getItem(`pipilot-tabs-${activeProjectId}`);
+      if (!raw) return;
+      const manifest = JSON.parse(raw) as { tabIds: { id: string; pinned?: boolean }[]; activeId: string | null };
+      if (!manifest.tabIds?.length) return;
+
+      // Build a flat lookup from the file tree
+      const fileMap = new Map<string, FileNode>();
+      const walk = (nodes: FileNode[]) => {
+        for (const n of nodes) {
+          if (n.type === "file") fileMap.set(n.id, n);
+          if (n.children) walk(n.children);
+        }
+      };
+      walk(files);
+
+      // Restore tabs that still exist in the tree
+      const restored: EditorTab[] = [];
+      for (const entry of manifest.tabIds) {
+        const node = fileMap.get(entry.id);
+        if (node) {
+          restored.push({ node, isDirty: false, isPinned: entry.pinned });
+        }
+      }
+      if (restored.length > 0) {
+        setTabs(restored);
+        // Restore active tab — fall back to first restored if the saved one is gone
+        const activeExists = restored.some((t) => t.node.id === manifest.activeId);
+        setActiveTabId(activeExists ? manifest.activeId : restored[0].node.id);
+      }
+    } catch {}
+  }, [activeProjectId, files]);
+
+  // Reset the restored flag when the project changes so the next project
+  // gets its own tabs restored.
+  useEffect(() => {
+    tabsRestoredRef.current = false;
+  }, [activeProjectId]);
 
   // Auto-refresh editor tabs when files change on disk (agent mode)
   useEffect(() => {
@@ -453,20 +862,99 @@ export function IDELayout() {
     });
   }, [files]);
 
-  // Handle editor content changes - save to IndexedDB
+  // Handle editor content changes — always auto-save with per-file
+  // debounce. Rapid keystrokes are batched into a single write 400ms
+  // after the last change. For linked projects this avoids a POST per
+  // keystroke; for local projects it avoids IndexedDB thrash.
+  const saveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const latestContentRef = useRef<Map<string, string>>(new Map());
   const handleEditorChange = useCallback(
     (fileId: string, content: string) => {
-      updateFileContent(fileId, content);
+      // Update the in-memory tab content immediately so the editor
+      // reflects the latest keystroke without waiting for the debounced
+      // write. Tabs never become "dirty" since auto-save is guaranteed.
+      latestContentRef.current.set(fileId, content);
       setTabs((prev) =>
         prev.map((tab) =>
           tab.node.id === fileId
-            ? { ...tab, node: { ...tab.node, content }, isDirty: true }
+            ? { ...tab, node: { ...tab.node, content }, isDirty: false }
             : tab
         )
       );
+
+      // Debounce the actual write
+      const existing = saveTimersRef.current.get(fileId);
+      if (existing) clearTimeout(existing);
+      const timer = setTimeout(() => {
+        const latest = latestContentRef.current.get(fileId);
+        if (latest !== undefined) {
+          updateFileContent(fileId, latest);
+          latestContentRef.current.delete(fileId);
+        }
+        saveTimersRef.current.delete(fileId);
+      }, 400);
+      saveTimersRef.current.set(fileId, timer);
     },
     [updateFileContent]
   );
+
+  // Flush any pending auto-save writes when the component unmounts
+  // (page close, project switch, etc.) so no keystrokes are lost.
+  useEffect(() => {
+    const timers = saveTimersRef.current;
+    const latest = latestContentRef.current;
+    return () => {
+      for (const [fileId, timer] of timers) {
+        clearTimeout(timer);
+        const content = latest.get(fileId);
+        if (content !== undefined) {
+          updateFileContent(fileId, content);
+        }
+      }
+      timers.clear();
+      latest.clear();
+    };
+  }, [updateFileContent]);
+
+  // Ctrl/Cmd+S fires `pipilot:file-saved` from the editor — flush any
+  // pending debounced writes immediately so the "Saved" toast is truthful.
+  useEffect(() => {
+    const onFlush = () => {
+      for (const [fileId, timer] of saveTimersRef.current) {
+        clearTimeout(timer);
+        const content = latestContentRef.current.get(fileId);
+        if (content !== undefined) {
+          updateFileContent(fileId, content);
+          latestContentRef.current.delete(fileId);
+        }
+      }
+      saveTimersRef.current.clear();
+    };
+    window.addEventListener("pipilot:file-saved", onFlush);
+    return () => window.removeEventListener("pipilot:file-saved", onFlush);
+  }, [updateFileContent]);
+
+  // Listen for walkthrough open events from WelcomePage
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent).detail?.id;
+      if (id) handleOpenWalkthrough(id);
+    };
+    window.addEventListener("pipilot:open-walkthrough", handler);
+    return () => window.removeEventListener("pipilot:open-walkthrough", handler);
+  }, [handleOpenWalkthrough]);
+
+  // Close branch picker on outside click
+  useEffect(() => {
+    if (!showBranchPicker) return;
+    const onDown = (e: MouseEvent) => {
+      if (branchPickerRef.current && !branchPickerRef.current.contains(e.target as Node)) {
+        setShowBranchPicker(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [showBranchPicker]);
 
   // Keyboard shortcuts
   // Listen for the Welcome Page's "open chat" event
@@ -475,6 +963,104 @@ export function IDELayout() {
     window.addEventListener("pipilot:open-chat", openChat);
     return () => window.removeEventListener("pipilot:open-chat", openChat);
   }, []);
+
+  // Generic notification dispatcher — any component can fire `pipilot:notify`
+  // with { type, title, message } and have it land in the bell center.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail as {
+        type?: "info" | "success" | "warning" | "error";
+        title: string;
+        message?: string;
+      } | undefined;
+      if (!d?.title) return;
+      addNotification({
+        title: d.title,
+        message: d.message || "",
+        type: d.type || "info",
+      });
+    };
+    window.addEventListener("pipilot:notify", handler);
+    return () => window.removeEventListener("pipilot:notify", handler);
+  }, [addNotification]);
+
+  // Listen for "new file" requests from the Welcome page
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail as { path: string; content?: string } | undefined;
+      if (!detail?.path) return;
+      try {
+        await handleCreateFile(detail.path, detail.content ?? "");
+      } catch (err) {
+        console.error("Failed to create file:", err);
+      }
+    };
+    window.addEventListener("pipilot:new-file", handler);
+    return () => window.removeEventListener("pipilot:new-file", handler);
+  }, [handleCreateFile]);
+
+  // ── TitleBar handlers ──
+  const titleBarHandlers = useMemo(() => {
+    const editorAction = (action: string) =>
+      window.dispatchEvent(new CustomEvent("pipilot:editor-action", { detail: { action } }));
+
+    return {
+      onNewFile: () => {
+        const name = prompt("New file (path):");
+        if (!name?.trim()) return;
+        handleCreateFile(name.trim(), "").catch((err) =>
+          alert("Failed: " + (err instanceof Error ? err.message : String(err))),
+        );
+      },
+      onNewFolder: () => {
+        const name = prompt("New folder (path):");
+        if (!name?.trim()) return;
+        handleCreateFolder(name.trim()).catch((err) =>
+          alert("Failed: " + (err instanceof Error ? err.message : String(err))),
+        );
+      },
+      onOpenFolder: () => setShowOpenFolderPicker(true),
+      onCloneRepo: () => setShowCloneModal(true),
+      onSaveFile: () => editorAction("save"),
+      onSaveAll: () => editorAction("save"),
+      onCloseTab: () => { if (activeTabId) handleCloseTab(activeTabId); },
+      onCloseAllTabs: () => { setTabs([]); setActiveTabId(null); },
+      onOpenSettings: handleOpenSettings,
+
+      onUndo: () => editorAction("undo"),
+      onRedo: () => editorAction("redo"),
+      onFind: () => editorAction("find"),
+      onReplace: () => editorAction("replace"),
+
+      onToggleSidebar: () => setActiveView((prev) => (prev ? null : "explorer")),
+      onToggleTerminal: () => setTerminalOpen((p) => !p),
+      onToggleChat: () => setChatOpen((p) => !p),
+      onCommandPalette: () => setCommandPaletteOpen((p) => !p),
+      onOpenExplorer: () => setActiveView("explorer"),
+      onOpenSearch: () => setActiveView("search"),
+      onOpenSourceControl: () => setActiveView("source-control"),
+      onOpenProblems: () => setProblemsOpen(true),
+      onOpenExtensions: () => setActiveView("extensions"),
+
+      onRunPreview: handleOpenPreview,
+      onDeploy: handleDeploy,
+
+      onNewTerminal: () => setTerminalOpen(true),
+
+      onWelcome: () => { setTabs([]); setActiveTabId(null); },
+      onKeyboardShortcuts: () => setHelpOpen(true),
+
+      // Active state for the layout-toggle cluster on the right side
+      sidebarOpen: !!activeView,
+      terminalOpen,
+      chatOpen,
+    };
+  }, [
+    handleCreateFile, handleCreateFolder, handleOpenSettings, handleCloseTab,
+    handleOpenPreview, handleDeploy, activeTabId,
+    activeView, terminalOpen, chatOpen,
+  ]);
+
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -507,11 +1093,6 @@ export function IDELayout() {
       if ((e.ctrlKey || e.metaKey) && e.key === "b") {
         e.preventDefault();
         setActiveView((prev) => (prev ? null : "explorer"));
-      }
-      // Ctrl+Shift+M - toggle AI mode
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "M") {
-        e.preventDefault();
-        setActiveProvider((p) => p === "claude-agent" ? "ai-sdk" : "claude-agent");
       }
     };
     document.addEventListener("keydown", handler);
@@ -576,29 +1157,113 @@ export function IDELayout() {
     if (allFlat.some((f) => f.name.endsWith(".js"))) techs.push("JavaScript");
     if (allFlat.some((f) => f.content?.includes("tailwind"))) techs.push("Tailwind CSS");
 
+    // Open tabs: active tab first, then the rest in order
+    const openTabPaths = tabs.map((t) => t.node.id);
+    if (activeTabId) {
+      const idx = openTabPaths.indexOf(activeTabId);
+      if (idx > 0) {
+        openTabPaths.splice(idx, 1);
+        openTabPaths.unshift(activeTabId);
+      }
+    }
+
     return {
       fileTree,
       projectType: (activeProject?.type === "cloud" ? "Node.js (E2B Cloud — full npm/Vite/Next.js/SSR) + " : activeProject?.type === "nodebox" ? "Node.js (Nodebox) + " : "") + (techs.length > 0 ? techs.join(" + ") : "HTML + CSS + JavaScript"),
       dependencies: "Tailwind CSS (CDN)",
+      openTabs: openTabPaths,
     };
-  }, [files]);
+  }, [files, tabs, activeTabId]);
 
   if (!isReady) {
     return (
-      <div
-        className="flex items-center justify-center"
-        style={{ height: "100vh", width: "100vw", background: "hsl(220 13% 18%)" }}
-      >
-        <div className="text-center" style={{ color: "hsl(220 14% 60%)" }}>
-          <div className="text-lg mb-2">Loading workspace...</div>
-          <div className="text-xs opacity-50">Initializing IndexedDB</div>
+      <div style={{
+        height: "100vh", width: "100vw",
+        background: "#16161a",
+        display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center",
+        fontFamily: '"DM Sans", -apple-system, sans-serif',
+      }}>
+        {/* Subtle warm ambient glow */}
+        <div style={{
+          position: "absolute",
+          width: 400, height: 400,
+          borderRadius: "50%",
+          background: "radial-gradient(circle, rgba(229,166,57,0.04) 0%, transparent 70%)",
+          filter: "blur(60px)",
+          pointerEvents: "none",
+        }} />
+
+        <div style={{
+          position: "relative", zIndex: 1,
+          display: "flex", flexDirection: "column",
+          alignItems: "center",
+          animation: "bootFadeIn 0.6s ease forwards",
+          opacity: 0,
+        }}>
+          <img
+            src="/logo.png"
+            alt="PiPilot"
+            style={{
+              width: 56, height: 56,
+              objectFit: "contain",
+              marginBottom: 20,
+              animation: "bootPulse 2.5s ease-in-out infinite",
+            }}
+          />
+          <div style={{
+            fontSize: 17, fontWeight: 600,
+            color: "#e2e2e6",
+            letterSpacing: "-0.01em",
+            marginBottom: 6,
+          }}>
+            PiPilot IDE
+          </div>
+          <div style={{
+            fontSize: 12, fontWeight: 400,
+            color: "#6b6b76",
+            marginBottom: 28,
+          }}>
+            Preparing your workspace
+          </div>
+          {/* Progress bar — amber shimmer */}
+          <div style={{
+            width: 160, height: 2,
+            background: "#2e2e35",
+            borderRadius: 1,
+            overflow: "hidden",
+          }}>
+            <div style={{
+              width: "35%", height: "100%",
+              background: "linear-gradient(90deg, transparent, #e5a639, transparent)",
+              borderRadius: 1,
+              animation: "bootShimmer 1.8s ease-in-out infinite",
+            }} />
+          </div>
         </div>
+        <style>{`
+          @keyframes bootFadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          @keyframes bootPulse {
+            0%, 100% { opacity: 0.7; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.02); }
+          }
+          @keyframes bootShimmer {
+            0% { transform: translateX(-250%); }
+            100% { transform: translateX(450%); }
+          }
+        `}</style>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col" style={{ height: "100vh", width: "100vw", overflow: "hidden" }}>
+      {/* Top toolbar */}
+      <TitleBar {...titleBarHandlers} />
+
       {/* Command Palette */}
       {commandPaletteOpen && (
         <CommandPalette
@@ -610,6 +1275,20 @@ export function IDELayout() {
           onClose={() => setCommandPaletteOpen(false)}
         />
       )}
+
+      {/* Folder picker (File → Open Folder) */}
+      <FolderPicker
+        open={showOpenFolderPicker}
+        onClose={() => setShowOpenFolderPicker(false)}
+        onPick={async (p) => { await openFolderInProjects(p); }}
+      />
+
+      {/* Clone Repository modal (File → Clone Repository) */}
+      <CloneRepoModal
+        open={showCloneModal}
+        onClose={() => setShowCloneModal(false)}
+        onCloned={async (path) => { await openFolderInProjects(path); }}
+      />
 
       {/* Main area */}
       <div className="flex flex-1 overflow-hidden">
@@ -650,6 +1329,10 @@ export function IDELayout() {
                 onRenameFile={handleRenameFile}
                 onDeleteFile={handleDeleteFile}
                 onUpdateFileContent={handleUpdateFileContent}
+                onGetFileContent={handleGetFileContent}
+                onCheckFileExists={handleCheckFileExists}
+                onExpandLazyFolder={loadFolderChildren}
+                git={git}
               />
             </div>
             {/* Sidebar resize handle */}
@@ -673,14 +1356,41 @@ export function IDELayout() {
             onSelectFile={handleSelectFile}
             onOpenPreview={handleOpenPreview}
             projectType={activeProject?.type || "static"}
+            onCloseOtherTabs={handleCloseOtherTabs}
+            onCloseTabsToLeft={handleCloseTabsToLeft}
+            onCloseTabsToRight={handleCloseTabsToRight}
+            onCloseAllTabs={handleCloseAllTabs}
+            onTogglePinTab={handleTogglePinTab}
+            onReorderTabs={handleReorderTabs}
           />
 
           {/* Problems panel */}
           {problemsOpen && (
-            <ProblemsPanel
-              onClose={() => setProblemsOpen(false)}
-              onNavigateToFile={handleNavigateToFile}
-            />
+            <>
+              {/* Problems panel resize handle */}
+              <div
+                onMouseDown={problemsResize.onMouseDown}
+                style={{
+                  height: 4,
+                  cursor: "ns-resize",
+                  background: problemsResize.isDragging ? "#e5a639" : "#2e2e35",
+                  flexShrink: 0,
+                  transition: problemsResize.isDragging ? "none" : "background 0.15s",
+                }}
+                onMouseEnter={(e) => {
+                  if (!problemsResize.isDragging) e.currentTarget.style.background = "#e5a63980";
+                }}
+                onMouseLeave={(e) => {
+                  if (!problemsResize.isDragging) e.currentTarget.style.background = "#28282f";
+                }}
+              />
+              <div style={{ height: problemsResize.size, minHeight: 120, flexShrink: 0 }}>
+                <ProblemsPanel
+                  onClose={() => setProblemsOpen(false)}
+                  onNavigateToFile={handleNavigateToFile}
+                />
+              </div>
+            </>
           )}
 
           {/* Terminal panel */}
@@ -703,31 +1413,11 @@ export function IDELayout() {
                   if (!terminalResize.isDragging) e.currentTarget.style.background = "hsl(220 13% 22%)";
                 }}
               />
-              <div
-                className="flex items-center justify-between px-3 border-b"
-                style={{
-                  height: 30,
-                  minHeight: 30,
-                  background: "hsl(220 13% 16%)",
-                  borderColor: "hsl(220 13% 22%)",
-                }}
-              >
-                <div className="flex items-center gap-2">
-                  <Terminal size={12} style={{ color: "hsl(220 14% 60%)" }} />
-                  <span className="text-xs font-medium" style={{ color: "hsl(220 14% 70%)" }}>
-                    Terminal
-                  </span>
-                </div>
-                <button
-                  onClick={() => setTerminalOpen(false)}
-                  className="p-0.5 rounded hover:bg-accent transition-colors"
-                  style={{ color: "hsl(220 14% 55%)" }}
-                >
-                  <ChevronDown size={14} />
-                </button>
-              </div>
-              <div style={{ height: terminalResize.size - 34, minHeight: 86, flexShrink: 0 }}>
-                <TerminalPanel />
+              {/* This bar is handled inside TerminalPanel's own header now.
+                  No extra chrome needed — TerminalPanel includes the editorial
+                  label, shell tabs, and action icons. */}
+              <div style={{ height: terminalResize.size - 4, minHeight: 86, flexShrink: 0 }}>
+                <TerminalPanel onClose={() => setTerminalOpen(false)} />
               </div>
             </>
           )}
@@ -742,34 +1432,219 @@ export function IDELayout() {
               data-testid="chat-resize-handle"
             />
             <div
-              className="overflow-hidden border-l"
+              className="overflow-hidden"
               style={{
                 width: chatPanel.size,
                 minWidth: chatPanel.size,
-                borderColor: "hsl(220 13% 22%)",
+                borderLeft: "1px solid hsl(220 13% 22%)",
               }}
               data-testid="chat-panel-wrapper"
             >
-              <ChatPanel toolExecutor={toolExecutorWithCheckpoints} workspaceContext={workspaceContext} checkpointManager={checkpointManagerForChat} projectId={activeProjectId} fileTree={files} activeProvider={activeProvider} onProviderChange={setActiveProvider} />
+              <ChatPanel
+                toolExecutor={toolExecutorWithCheckpoints}
+                workspaceContext={workspaceContext}
+                checkpointManager={checkpointManagerForChat}
+                projectId={activeProjectId}
+                fileTree={files}
+                openTabIds={tabs.filter((t) => !t.isPreview && !t.isCommit && !t.isDiff && !t.isSettings && !t.isWalkthrough).map((t) => t.node.id)}
+                activeTabId={activeTabId}
+              />
             </div>
           </>
         )}
       </div>
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      {/* Toast notifications viewport — fixed top-right stack */}
+      <ToastViewport />
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
 
       {/* Status bar */}
       <div className="status-bar" data-testid="status-bar">
-        <div className="flex items-center gap-1.5">
-          <GitBranch size={11} />
-          <span>main</span>
+        <div style={{ position: "relative" }} ref={branchPickerRef}>
+          <button
+            className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+            onClick={() => {
+              if (!gitIsRepo) return;
+              setShowBranchPicker((p) => {
+                if (!p) gitRefreshStatus(); // fetch latest branches on open
+                return !p;
+              });
+              setBranchFilter("");
+              setBranchCreating(false);
+              setTimeout(() => branchInputRef.current?.focus(), 50);
+            }}
+            style={{ background: "none", border: "none", color: "inherit", cursor: gitIsRepo ? "pointer" : "default", fontFamily: "inherit", fontSize: "inherit", padding: 0 }}
+          >
+            <GitBranch size={11} />
+            <span>{gitIsRepo === false ? "no repo" : gitBranch || "—"}</span>
+          </button>
+
+          {/* ── Branch picker dropdown ── */}
+          {showBranchPicker && gitIsRepo && (() => {
+            const filtered = gitBranches.filter((b) =>
+              b.toLowerCase().includes(branchFilter.toLowerCase()),
+            );
+            const exactMatch = gitBranches.some(
+              (b) => b.toLowerCase() === branchFilter.trim().toLowerCase(),
+            );
+            return (
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: "100%",
+                  left: 0,
+                  marginBottom: 4,
+                  width: 320,
+                  background: C.surface,
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 4,
+                  boxShadow: "0 -8px 24px rgba(0,0,0,0.4)",
+                  zIndex: 10002,
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                {/* Search / create input */}
+                <div style={{ padding: "8px 8px 4px" }}>
+                  <input
+                    ref={branchInputRef}
+                    value={branchFilter}
+                    onChange={(e) => setBranchFilter(e.target.value)}
+                    onKeyDown={async (e) => {
+                      if (e.key === "Escape") {
+                        setShowBranchPicker(false);
+                      } else if (e.key === "Enter" && branchFilter.trim()) {
+                        if (exactMatch) {
+                          // Checkout existing branch
+                          try {
+                            await gitCheckout(branchFilter.trim());
+                            addNotification({ type: "success", title: "Switched branch", message: branchFilter.trim() });
+                          } catch (err) {
+                            addNotification({ type: "error", title: "Checkout failed", message: String(err) });
+                          }
+                          setShowBranchPicker(false);
+                        } else if (branchCreating) {
+                          // Create + checkout new branch
+                          try {
+                            await gitCreateBranch(branchFilter.trim());
+                            await gitCheckout(branchFilter.trim());
+                            addNotification({ type: "success", title: "Created & switched to branch", message: branchFilter.trim() });
+                          } catch (err) {
+                            addNotification({ type: "error", title: "Create branch failed", message: String(err) });
+                          }
+                          setShowBranchPicker(false);
+                        }
+                      }
+                    }}
+                    placeholder="Select a branch or tag to checkout"
+                    style={{
+                      width: "100%",
+                      padding: "6px 8px",
+                      background: C.bg,
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 3,
+                      color: C.text,
+                      fontFamily: FONTS.mono,
+                      fontSize: 11,
+                      outline: "none",
+                    }}
+                    autoFocus
+                  />
+                </div>
+
+                {/* Actions: Create new branch */}
+                {branchFilter.trim() && !exactMatch && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        await gitCreateBranch(branchFilter.trim());
+                        await gitCheckout(branchFilter.trim());
+                        addNotification({ type: "success", title: "Created & switched to branch", message: branchFilter.trim() });
+                      } catch (err) {
+                        addNotification({ type: "error", title: "Create branch failed", message: String(err) });
+                      }
+                      setShowBranchPicker(false);
+                    }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6,
+                      padding: "7px 12px",
+                      background: "transparent", border: "none",
+                      color: C.accent,
+                      fontFamily: FONTS.mono, fontSize: 10,
+                      cursor: "pointer", textAlign: "left",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = C.surfaceAlt; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <span style={{ fontSize: 13 }}>+</span>
+                    Create new branch "{branchFilter.trim()}"
+                  </button>
+                )}
+
+                {/* Separator */}
+                <div style={{ height: 1, background: C.border }} />
+
+                {/* Branch list — scrollable */}
+                <div style={{ maxHeight: 260, overflowY: "auto", padding: "4px 0" }}>
+                  {filtered.length === 0 && (
+                    <div style={{ padding: "8px 12px", color: C.textDim, fontFamily: FONTS.mono, fontSize: 10 }}>
+                      No matching branches
+                    </div>
+                  )}
+                  {filtered.map((b) => {
+                    const isCurrent = b === gitBranch;
+                    return (
+                      <button
+                        key={b}
+                        onClick={async () => {
+                          if (isCurrent) {
+                            setShowBranchPicker(false);
+                            return;
+                          }
+                          try {
+                            await gitCheckout(b);
+                            addNotification({ type: "success", title: "Switched branch", message: b });
+                          } catch (err) {
+                            addNotification({ type: "error", title: "Checkout failed", message: String(err) });
+                          }
+                          setShowBranchPicker(false);
+                        }}
+                        style={{
+                          width: "100%",
+                          display: "flex", alignItems: "center", gap: 8,
+                          padding: "6px 12px",
+                          background: "transparent", border: "none",
+                          color: isCurrent ? C.accent : C.textMid,
+                          fontFamily: FONTS.mono, fontSize: 10,
+                          cursor: "pointer", textAlign: "left",
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = C.surfaceAlt; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                      >
+                        <GitBranch size={10} style={{ flexShrink: 0, opacity: isCurrent ? 1 : 0.5 }} />
+                        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {b}
+                        </span>
+                        {isCurrent && (
+                          <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 2, background: `${C.accent}22`, color: C.accent }}>
+                            current
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
         </div>
         <button
           className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
           onClick={() => setProblemsOpen((p) => !p)}
         >
-          {errorCount > 0 ? <AlertCircle size={13} style={{ color: "hsl(0 84% 60%)" }} /> : <CheckCircle2 size={11} style={{ color: "hsl(142 71% 60%)" }} />}
+          {errorCount > 0 ? <AlertCircle size={13} style={{ color: C.error }} /> : <CheckCircle2 size={11} style={{ color: C.ok }} />}
           <span>{errorCount > 0 || warningCount > 0 ? `${errorCount} errors, ${warningCount} warnings` : "No Problems"}</span>
         </button>
         <button
@@ -790,7 +1665,7 @@ export function IDELayout() {
           className="flex items-center gap-1 hover:opacity-80 transition-opacity"
           onClick={handleDeploy}
           disabled={deploying}
-          style={lastDeploy?.success ? { color: "hsl(142 71% 60%)" } : undefined}
+          style={lastDeploy?.success ? { color: C.ok } : undefined}
         >
           {deploying ? <Loader2 size={11} className="animate-spin" /> : <Rocket size={11} />}
           <span>{deploying ? "Deploying..." : "Deploy"}</span>
@@ -801,13 +1676,12 @@ export function IDELayout() {
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1 hover:opacity-80 transition-opacity"
-            style={{ color: "hsl(207 90% 60%)" }}
+            style={{ color: C.info }}
           >
             <ExternalLink size={10} />
             <span className="text-xs truncate" style={{ maxWidth: 120 }}>{lastDeploy.slug}</span>
           </a>
         )}
-        <CheckpointBar />
         <div className="flex-1" />
         {activeFile && (
           <>
@@ -815,10 +1689,22 @@ export function IDELayout() {
             <span>UTF-8</span>
           </>
         )}
-        <div className="flex items-center gap-1.5 ml-auto">
-          <Wifi size={11} />
-          <span>Connected</span>
+        {/* Connection status */}
+        <div
+          className="flex items-center gap-1.5"
+          title={isOnline ? "Connected to network" : "No network connection"}
+          style={{ color: isOnline ? C.ok : C.error }}
+        >
+          {isOnline ? <Wifi size={11} /> : <WifiOff size={11} />}
+          <span>{isOnline ? "Online" : "Offline"}</span>
         </div>
+
+        {/* System clock */}
+        <div className="flex items-center gap-1.5" style={{ color: C.textDim }}>
+          <Clock size={10} />
+          <span>{clockStr}</span>
+        </div>
+
         <NotificationCenter anchorRef={bellRef} />
         <button
           className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"

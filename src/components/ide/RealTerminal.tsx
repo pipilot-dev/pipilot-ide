@@ -5,29 +5,26 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { db } from "@/lib/db";
 
-// Read terminal settings synchronously from a small in-memory cache
-// (settings are stored in IndexedDB but we want them at xterm construction time)
-const settingsCache: Record<string, string> = {};
-async function loadTerminalSettings() {
-  try {
-    const rows = await db.settings.toArray();
-    for (const r of rows) settingsCache[r.key] = r.value;
-  } catch {}
-}
-// Eagerly populate
-loadTerminalSettings();
+// Read terminal settings — prefer localStorage (always up-to-date from
+// SettingsTabView save()), fall back to IndexedDB cache.
 function getSetting(key: string, fallback: string): string {
-  return settingsCache[key] ?? fallback;
+  try {
+    const ls = localStorage.getItem(`pipilot:${key}`);
+    if (ls !== null) return ls;
+  } catch {}
+  return fallback;
 }
 
 interface RealTerminalProps {
   sessionId: string;
   projectId: string;
   initialCommand?: string;
+  /** Shell profile id (e.g. "bash", "pwsh", "cmd"). Omit for host default. */
+  profile?: string;
   onExit?: () => void;
 }
 
-export function RealTerminal({ sessionId, projectId, initialCommand, onExit }: RealTerminalProps) {
+export function RealTerminal({ sessionId, projectId, initialCommand, profile, onExit }: RealTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -36,12 +33,14 @@ export function RealTerminal({ sessionId, projectId, initialCommand, onExit }: R
   const sessionIdRef = useRef(sessionId);
   const projectIdRef = useRef(projectId);
   const initialCommandRef = useRef(initialCommand);
+  const profileRef = useRef(profile);
   const onExitRef = useRef(onExit);
 
   // Keep refs in sync without triggering re-renders
   sessionIdRef.current = sessionId;
   projectIdRef.current = projectId;
   initialCommandRef.current = initialCommand;
+  profileRef.current = profile;
   onExitRef.current = onExit;
 
   useEffect(() => {
@@ -58,26 +57,26 @@ export function RealTerminal({ sessionId, projectId, initialCommand, onExit }: R
       scrollback: parseInt(getSetting("terminalScrollback", "10000")) || 10000,
       fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
       theme: {
-        background: "#0d1117",
-        foreground: "#c9d1d9",
-        cursor: "#58a6ff",
-        selectionBackground: "#264f78",
-        black: "#0d1117",
-        red: "#ff7b72",
-        green: "#7ee787",
-        yellow: "#d29922",
-        blue: "#58a6ff",
-        magenta: "#bc8cff",
-        cyan: "#39c5cf",
-        white: "#c9d1d9",
-        brightBlack: "#484f58",
-        brightRed: "#ffa198",
-        brightGreen: "#56d364",
-        brightYellow: "#e3b341",
-        brightBlue: "#79c0ff",
-        brightMagenta: "#d2a8ff",
-        brightCyan: "#56d4dd",
-        brightWhite: "#f0f6fc",
+        background: "#16161a",
+        foreground: "#a0a0a8",
+        cursor: "#8a8a94",
+        selectionBackground: "#2a3a5040",
+        black: "#16161a",
+        red: "#c06a64",
+        green: "#7ea868",
+        yellow: "#b09060",
+        blue: "#6a9ec0",
+        magenta: "#9880b8",
+        cyan: "#5aab9e",
+        white: "#a0a0a8",
+        brightBlack: "#5f5f6a",
+        brightRed: "#c06a64",
+        brightGreen: "#7ea868",
+        brightYellow: "#b09060",
+        brightBlue: "#6a9ec0",
+        brightMagenta: "#9880b8",
+        brightCyan: "#5aab9e",
+        brightWhite: "#b0b0b8",
       },
       allowProposedApi: true,
     });
@@ -116,7 +115,11 @@ export function RealTerminal({ sessionId, projectId, initialCommand, onExit }: R
     fetch("/api/terminal/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId: pid, sessionId: sid }),
+      body: JSON.stringify({
+        projectId: pid,
+        sessionId: sid,
+        profile: profileRef.current,
+      }),
     }).then(async (res) => {
       if (!res.ok) {
         term.writeln("\r\n\x1b[31mFailed to create terminal session\x1b[0m");
@@ -175,6 +178,25 @@ export function RealTerminal({ sessionId, projectId, initialCommand, onExit }: R
     // Forward keyboard input
     const dataDisposable = term.onData(writeToPty);
 
+    // Listen for settings changes and apply to the running terminal
+    const onSettingChanged = (e: Event) => {
+      const { key, value } = (e as CustomEvent).detail || {};
+      if (!key) return;
+      switch (key) {
+        case "terminalFontSize":
+          term.options.fontSize = parseInt(value) || 12;
+          try { fitAddon.fit(); } catch {}
+          break;
+        case "terminalCursorBlink":
+          term.options.cursorBlink = value !== "false";
+          break;
+        case "terminalScrollback":
+          term.options.scrollback = parseInt(value) || 10000;
+          break;
+      }
+    };
+    window.addEventListener("pipilot:setting-changed", onSettingChanged);
+
     // Debounced resize handler
     let resizeTimer: ReturnType<typeof setTimeout>;
     const resizeObserver = new ResizeObserver(() => {
@@ -195,6 +217,7 @@ export function RealTerminal({ sessionId, projectId, initialCommand, onExit }: R
       clearTimeout(resizeTimer);
       resizeObserver.disconnect();
       dataDisposable.dispose();
+      window.removeEventListener("pipilot:setting-changed", onSettingChanged);
       sseRef.current?.close();
       sseRef.current = null;
       term.dispose();

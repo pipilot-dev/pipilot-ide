@@ -372,7 +372,7 @@ export function useRealGit() {
   const stagedFiles = files.filter(f => f.index !== " " && f.index !== "?");
   const unstagedFiles = files.filter(f => f.worktree !== " " || f.index === "?");
 
-  return {
+  const gitApi = {
     installStatus,
     installGit,
     isRepo,
@@ -411,4 +411,7 @@ export function useRealGit() {
     deleteBranch,
     getCommitDetail,
   };
+  return gitApi;
 }
+
+export type RealGitApi = ReturnType<typeof useRealGit>;

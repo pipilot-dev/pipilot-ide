@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { COLORS as C } from "@/lib/design-tokens";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChatMessage as ChatMessageType, ToolCallInfo, BuiltinToolStatus } from "@/hooks/useChat";
@@ -33,6 +34,10 @@ import {
   Keyboard,
   ScanSearch,
   Play,
+  Stethoscope,
+  Server,
+  Package,
+  ScrollText,
 } from "lucide-react";
 
 interface ChatMessageProps {
@@ -42,7 +47,13 @@ interface ChatMessageProps {
 }
 
 /* ─── Tool Metadata ──────────────────────────────────────────────────── */
+/** Strip the mcp__pipilot__ prefix so our lookup maps work for custom tools. */
+function normalizeToolName(name: string): string {
+  return name.replace(/^mcp__pipilot__/, "");
+}
+
 function getToolIcon(name: string) {
+  const n = normalizeToolName(name);
   const iconMap: Record<string, React.ReactNode> = {
     read_file: <FileText size={12} />,
     list_files: <FolderTree size={12} />,
@@ -65,11 +76,21 @@ function getToolIcon(name: string) {
     web_search: <Globe size={12} />,
     web_extract: <Globe size={12} />,
     image_generation: <Image size={12} />,
+    // PiPilot custom tools
+    get_diagnostics: <Stethoscope size={12} />,
+    manage_dev_server: <Server size={12} />,
+    search_npm: <Package size={12} />,
+    get_dev_server_logs: <ScrollText size={12} />,
+    update_project_context: <Network size={12} />,
+    frontend_design_guide: <Sparkles size={12} />,
+    analyze_ui: <ScanSearch size={12} />,
+    screenshot_preview: <Camera size={12} />,
   };
-  return iconMap[name] || <FileText size={12} />;
+  return iconMap[n] || <FileText size={12} />;
 }
 
 function getToolLabel(name: string) {
+  const n = normalizeToolName(name);
   const labelMap: Record<string, string> = {
     read_file: "Read File",
     list_files: "List Files",
@@ -92,19 +113,91 @@ function getToolLabel(name: string) {
     web_search: "Web Search",
     web_extract: "Extract Page",
     image_generation: "Generate Image",
+    // PiPilot custom tools
+    get_diagnostics: "Diagnostics",
+    manage_dev_server: "Dev Server",
+    search_npm: "npm Search",
+    get_dev_server_logs: "Dev Logs",
+    update_project_context: "Project Context",
+    frontend_design_guide: "Design Guide",
+    analyze_ui: "Analyze UI",
   };
-  return labelMap[name] || name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return labelMap[n] || n.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function getToolAccentColor(name: string): string {
-  if (name.includes("create") || name.includes("batch")) return "hsl(142 71% 50%)";
-  if (name.includes("edit") || name.includes("rename")) return "hsl(38 92% 55%)";
-  if (name.includes("delete")) return "hsl(0 84% 60%)";
-  if (name.includes("deploy")) return "hsl(280 65% 60%)";
-  if (name.startsWith("preview_")) return "hsl(170 70% 50%)";
-  if (name.includes("search") || name.includes("list") || name.includes("read") || name.includes("info") || name.includes("tree")) return "hsl(207 90% 60%)";
-  return "hsl(220 14% 60%)";
+  const n = normalizeToolName(name);
+  // PiPilot custom tools — distinctive colors
+  if (n === "get_diagnostics") return C.error;        // red — problems
+  if (n === "manage_dev_server") return C.ok;          // green — running
+  if (n === "search_npm") return C.error;              // npm red
+  if (n === "get_dev_server_logs") return C.accent;    // amber — warnings
+  if (n === "update_project_context") return C.info;   // blue
+  if (n === "frontend_design_guide") return "#b392f0"; // purple
+  if (n === "analyze_ui") return "#56d4dd";            // teal
+  // Built-in tool colors
+  if (n.includes("create") || n.includes("batch")) return C.ok;
+  if (n.includes("edit") || n.includes("rename")) return C.accent;
+  if (n.includes("delete")) return C.error;
+  if (n.includes("deploy")) return "#b392f0";
+  if (n.startsWith("preview_")) return "#56d4dd";
+  if (n.includes("search") || n.includes("list") || n.includes("read") || n.includes("info") || n.includes("tree")) return C.info;
+  return C.textDim;
 }
+
+/* ─── Deep-linked file paths ─────────────────────────────────────────
+ * Detects file paths in inline `code` spans and makes them clickable.
+ * Clicking dispatches `pipilot:open-file` which IDELayout listens for.
+ * ──────────────────────────────────────────────────────────────────── */
+const FILE_PATH_RE = /^(?:\.?\/?)?(?:[\w@.-]+\/)*[\w@.-]+\.\w{1,10}$/;
+
+function isFilePath(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 3 || t.length > 200) return false;
+  if (!FILE_PATH_RE.test(t)) return false;
+  // Must have at least one slash OR a known extension
+  const knownExts = /\.(tsx?|jsx?|css|scss|html?|json|md|ya?ml|toml|vue|svelte|py|go|rs|rb|php|sh|sql|env|lock|config|mjs|cjs)$/i;
+  return t.includes("/") || knownExts.test(t);
+}
+
+function openFileInEditor(filePath: string) {
+  window.dispatchEvent(new CustomEvent("pipilot:open-file", {
+    detail: { filePath: filePath.trim() },
+  }));
+}
+
+/** Custom ReactMarkdown components that make inline code paths clickable. */
+const markdownComponents = {
+  code: ({ children, className }: any) => {
+    // Only handle INLINE code (no className = no language tag = not a code block)
+    if (className) return <code className={className}>{children}</code>;
+    const text = String(children).replace(/\n$/, "");
+    if (isFilePath(text)) {
+      return (
+        <code
+          onClick={() => openFileInEditor(text)}
+          title={`Open ${text} in editor`}
+          style={{
+            cursor: "pointer",
+            borderBottom: `1px dashed ${C.accentLine}`,
+            transition: "border-color 0.15s, color 0.15s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderBottomColor = C.accent;
+            e.currentTarget.style.color = C.accent;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderBottomColor = C.accentLine;
+            e.currentTarget.style.color = "";
+          }}
+        >
+          {text}
+        </code>
+      );
+    }
+    return <code>{text}</code>;
+  },
+};
 
 /* ─── Tool Call Card ─────────────────────────────────────────────────── */
 /* ─── Tool Result Display ─────────────────────────────────────────────
@@ -117,7 +210,7 @@ function ToolResultDisplay({ result, isError }: { result: string; isError: boole
     const imgSrc = splitIdx > 0 ? result.slice(0, splitIdx) : result;
     const layoutText = splitIdx > 0 ? result.slice(splitIdx + 2) : null;
     return (
-      <div className="mt-1 rounded-lg overflow-hidden" style={{ border: "1px solid hsl(220 13% 17%)" }}>
+      <div className="mt-1 rounded-lg overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
         <img
           src={imgSrc}
           alt="Preview screenshot"
@@ -126,14 +219,14 @@ function ToolResultDisplay({ result, isError }: { result: string; isError: boole
         />
         <div
           className="px-2 py-1 text-center font-sans"
-          style={{ background: "hsl(220 13% 10%)", color: "hsl(142 71% 55%)", fontSize: "0.6rem" }}
+          style={{ background: C.bg, color: C.ok, fontSize: "0.6rem" }}
         >
           Screenshot captured + DOM layout analyzed
         </div>
         {layoutText && (
           <pre
             className="p-2 overflow-x-auto max-h-32 overflow-y-auto"
-            style={{ background: "hsl(220 13% 8%)", fontSize: "0.58rem", lineHeight: "1.5", color: "hsl(220 14% 50%)" }}
+            style={{ background: C.bg, fontSize: "0.58rem", lineHeight: "1.5", color: C.textDim }}
           >
             {layoutText.length > 2000 ? layoutText.slice(0, 2000) + "\n..." : layoutText}
           </pre>
@@ -146,11 +239,11 @@ function ToolResultDisplay({ result, isError }: { result: string; isError: boole
     <pre
       className="mt-1 p-2.5 rounded-lg overflow-x-auto max-h-52 overflow-y-auto"
       style={{
-        background: "hsl(220 13% 10%)",
+        background: C.bg,
         fontSize: "0.68rem",
         lineHeight: "1.6",
-        border: "1px solid hsl(220 13% 17%)",
-        color: isError ? "hsl(0 84% 65%)" : "hsl(220 14% 68%)",
+        border: `1px solid ${C.border}`,
+        color: isError ? C.error : C.textMid,
       }}
     >
       {result.length > 3000 ? result.slice(0, 3000) + "\n... (truncated)" : result}
@@ -170,20 +263,36 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
   const isError = toolCall.status === "error";
 
   const statusColor = isDone
-    ? "hsl(142 71% 50%)"
+    ? C.ok
     : isError
-    ? "hsl(0 84% 60%)"
+    ? C.error
     : isRunning
-    ? "hsl(207 90% 60%)"
-    : "hsl(220 14% 50%)";
+    ? C.info
+    : C.textDim;
 
-  // Smart summary: show the most relevant arg for the tool type
-  const summary = parsedArgs.file_path
-    ? parsedArgs.file_path as string
+  // Smart summary: show the most relevant arg for the tool type.
+  // For file-based tools, also expose `summaryFilePath` so the path can be
+  // rendered as a clickable deep link to the editor.
+  const filePathArg = (parsedArgs.file_path || parsedArgs.path) as string | undefined;
+  // Only treat the value as a real file path if the tool is file-related —
+  // grep/glob/bash also use `path` for directories or globs which we don't
+  // want to make clickable.
+  const isFileTool =
+    toolCall.name === "Read" ||
+    toolCall.name === "Write" ||
+    toolCall.name === "Edit" ||
+    toolCall.name === "MultiEdit" ||
+    toolCall.name === "NotebookEdit" ||
+    toolCall.name === "read_file" ||
+    toolCall.name === "edit_file" ||
+    toolCall.name === "create_file" ||
+    toolCall.name === "write_file";
+  const summaryFilePath = isFileTool && filePathArg ? filePathArg : null;
+
+  const summary = filePathArg
+    ? filePathArg
     : parsedArgs.command
     ? `$ ${(parsedArgs.command as string).substring(0, 80)}`
-    : parsedArgs.path
-    ? parsedArgs.path as string
     : parsedArgs.pattern
     ? parsedArgs.pattern as string
     : parsedArgs.content && typeof parsedArgs.content === "string"
@@ -200,10 +309,10 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
 
   // Border color reflects state: accent for running, border for idle/done, error for failed
   const borderColor = isRunning
-    ? "#c6ff3d55"
+    ? C.accentLine
     : isError
-    ? "#ff6b6b55"
-    : "#28282f";
+    ? `${C.error}55`
+    : C.border;
 
   return (
     <div
@@ -249,10 +358,10 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
         </span>
 
         {/* Tool icon + label */}
-        <span style={{ color: "#5e5e68" }} className="flex-shrink-0">{getToolIcon(toolCall.name)}</span>
+        <span style={{ color: C.textDim }} className="flex-shrink-0">{getToolIcon(toolCall.name)}</span>
         <span
           style={{
-            color: "#a8a8b3",
+            color: C.textMid,
             fontSize: 10,
             fontWeight: 500,
             textTransform: "uppercase",
@@ -265,15 +374,45 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
 
         {/* Separator */}
         {summary && (
-          <span style={{ color: "#3a3a42", flexShrink: 0 }}>/</span>
+          <span style={{ color: C.textFaint, flexShrink: 0 }}>/</span>
         )}
 
-        {/* Summary */}
-        {summary && (
+        {/* Summary — clickable deep link when it's a file path */}
+        {summary && summaryFilePath ? (
           <span
             className="truncate"
             style={{
-              color: "#c6ff3d",
+              color: C.accent,
+              fontSize: 10,
+              fontWeight: 400,
+              letterSpacing: "0.02em",
+              borderBottom: `1px dotted ${C.accentLine}`,
+              cursor: "pointer",
+              transition: "color 0.15s, border-bottom-color 0.15s",
+            }}
+            title={`Open ${summaryFilePath} in editor`}
+            onClick={(e) => {
+              e.stopPropagation(); // don't toggle the expand/collapse
+              window.dispatchEvent(
+                new CustomEvent("pipilot:open-file", {
+                  detail: { filePath: summaryFilePath },
+                }),
+              );
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderBottomColor = C.accent;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderBottomColor = C.accentLine;
+            }}
+          >
+            {summary}
+          </span>
+        ) : summary ? (
+          <span
+            className="truncate"
+            style={{
+              color: C.accent,
               fontSize: 10,
               fontWeight: 400,
               letterSpacing: "0.02em",
@@ -281,10 +420,10 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
           >
             {summary}
           </span>
-        )}
+        ) : null}
 
         {/* Expand arrow */}
-        <span className="ml-auto flex-shrink-0" style={{ color: "#3a3a42" }}>
+        <span className="ml-auto flex-shrink-0" style={{ color: C.textFaint }}>
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         </span>
       </button>
@@ -294,25 +433,25 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
         <div
           className="px-2.5 py-2.5 text-xs font-mono"
           style={{
-            borderTop: "1px solid #28282f",
+            borderTop: `1px solid ${C.border}`,
             background: "#10101580",
-            color: "#a8a8b3",
+            color: C.textMid,
           }}
         >
           <div className="mb-2">
             <span
               className="text-xs font-sans font-medium uppercase tracking-wider"
-              style={{ color: "hsl(220 14% 42%)", fontSize: "0.6rem" }}
+              style={{ color: C.textFaint, fontSize: "0.6rem" }}
             >
               Arguments
             </span>
             <pre
               className="mt-1 p-2.5 rounded-lg overflow-x-auto"
               style={{
-                background: "hsl(220 13% 10%)",
+                background: C.bg,
                 fontSize: "0.68rem",
                 lineHeight: "1.6",
-                border: "1px solid hsl(220 13% 17%)",
+                border: `1px solid ${C.border}`,
               }}
             >
               {JSON.stringify(parsedArgs, null, 2)}
@@ -322,7 +461,7 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
             <div>
               <span
                 className="text-xs font-sans font-medium uppercase tracking-wider"
-                style={{ color: "hsl(220 14% 42%)", fontSize: "0.6rem" }}
+                style={{ color: C.textFaint, fontSize: "0.6rem" }}
               >
                 Result
               </span>
@@ -342,19 +481,19 @@ function BuiltinToolBadge({ status }: { status: BuiltinToolStatus }) {
     <div
       className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs my-0.5"
       style={{
-        background: "hsl(207 90% 36% / 0.1)",
-        color: "hsl(207 90% 68%)",
-        border: "1px solid hsl(207 90% 36% / 0.2)",
+        background: "#6cb6ff18",
+        color: C.info,
+        border: "1px solid #6cb6ff33",
       }}
     >
       {isStart ? (
         <Loader2 size={10} className="animate-spin" />
       ) : (
-        <CheckCircle2 size={10} style={{ color: "hsl(142 71% 55%)" }} />
+        <CheckCircle2 size={10} style={{ color: C.ok }} />
       )}
       <span className="font-medium">{getToolLabel(status.name)}</span>
       {status.arguments && (status.arguments as Record<string, unknown>).query && (
-        <span style={{ color: "hsl(207 90% 80%)", opacity: 0.7 }}>
+        <span style={{ color: "#8eccff", opacity: 0.7 }}>
           "{(status.arguments as Record<string, unknown>).query as string}"
         </span>
       )}
@@ -400,22 +539,22 @@ function MessageActions({
         className="flex items-center justify-center"
         style={{
           ...btnBase,
-          background: "hsl(220 13% 18%)",
-          color: copied ? "hsl(142 71% 55%)" : "hsl(220 14% 48%)",
-          border: "1px solid hsl(220 13% 24%)",
+          background: C.surfaceAlt,
+          color: copied ? C.ok : C.textDim,
+          border: `1px solid ${C.border}`,
         }}
         onMouseEnter={(e) => {
           if (!copied) {
-            e.currentTarget.style.color = "hsl(220 14% 80%)";
-            e.currentTarget.style.background = "hsl(220 13% 24%)";
-            e.currentTarget.style.borderColor = "hsl(220 13% 30%)";
+            e.currentTarget.style.color = C.text;
+            e.currentTarget.style.background = C.border;
+            e.currentTarget.style.borderColor = C.borderHover;
           }
         }}
         onMouseLeave={(e) => {
           if (!copied) {
-            e.currentTarget.style.color = "hsl(220 14% 48%)";
-            e.currentTarget.style.background = "hsl(220 13% 18%)";
-            e.currentTarget.style.borderColor = "hsl(220 13% 24%)";
+            e.currentTarget.style.color = C.textDim;
+            e.currentTarget.style.background = C.surfaceAlt;
+            e.currentTarget.style.borderColor = C.border;
           }
         }}
         onClick={handleCopy}
@@ -430,19 +569,19 @@ function MessageActions({
           className="flex items-center justify-center"
           style={{
             ...btnBase,
-            background: "hsl(220 13% 18%)",
-            color: "hsl(207 80% 58%)",
-            border: "1px solid hsl(220 13% 24%)",
+            background: C.surfaceAlt,
+            color: C.info,
+            border: `1px solid ${C.border}`,
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = "hsl(207 90% 72%)";
-            e.currentTarget.style.background = "hsl(207 60% 25% / 0.3)";
-            e.currentTarget.style.borderColor = "hsl(207 60% 40% / 0.3)";
+            e.currentTarget.style.color = "#8eccff";
+            e.currentTarget.style.background = "#6cb6ff20";
+            e.currentTarget.style.borderColor = "#6cb6ff4d";
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.color = "hsl(207 80% 58%)";
-            e.currentTarget.style.background = "hsl(220 13% 18%)";
-            e.currentTarget.style.borderColor = "hsl(220 13% 24%)";
+            e.currentTarget.style.color = C.info;
+            e.currentTarget.style.background = C.surfaceAlt;
+            e.currentTarget.style.borderColor = C.border;
           }}
           onClick={() => onRevert(message.id)}
           title="Revert to this point"
@@ -457,19 +596,19 @@ function MessageActions({
           className="flex items-center justify-center"
           style={{
             ...btnBase,
-            background: "hsl(220 13% 18%)",
-            color: "hsl(220 14% 48%)",
-            border: "1px solid hsl(220 13% 24%)",
+            background: C.surfaceAlt,
+            color: C.textDim,
+            border: `1px solid ${C.border}`,
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = "hsl(0 84% 62%)";
-            e.currentTarget.style.background = "hsl(0 50% 20% / 0.3)";
-            e.currentTarget.style.borderColor = "hsl(0 50% 35% / 0.3)";
+            e.currentTarget.style.color = C.error;
+            e.currentTarget.style.background = `${C.error}20`;
+            e.currentTarget.style.borderColor = `${C.error}55`;
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.color = "hsl(220 14% 48%)";
-            e.currentTarget.style.background = "hsl(220 13% 18%)";
-            e.currentTarget.style.borderColor = "hsl(220 13% 24%)";
+            e.currentTarget.style.color = C.textDim;
+            e.currentTarget.style.background = C.surfaceAlt;
+            e.currentTarget.style.borderColor = C.border;
           }}
           onClick={() => onDelete(message.id)}
           title="Delete message"
@@ -511,7 +650,7 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
         style={{
           width: 14,
           paddingTop: 4,
-          color: "#a8a8b3",
+          color: C.textMid,
         }}
       >
         <User size={12} strokeWidth={1.8} />
@@ -522,13 +661,16 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
         <div
           className="text-left text-sm leading-relaxed"
           style={{
-            background: "#15151b",
-            color: "#f5f5f7",
+            background: C.surface,
+            color: C.text,
             padding: "10px 14px",
-            border: "1px solid #28282f",
-            borderLeft: "2px solid #c6ff3d",
+            border: `1px solid ${C.border}`,
+            borderLeft: `2px solid ${C.accent}`,
             borderRadius: 4,
             maxWidth: "100%",
+            overflow: "hidden",
+            overflowWrap: "break-word",
+            wordBreak: "break-word",
           }}
         >
           {needsTruncation && !expanded ? (
@@ -540,9 +682,9 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
                   display: "inline-flex", alignItems: "center", gap: 4,
                   marginTop: 6, padding: "3px 10px",
                   fontSize: 10, fontWeight: 600,
-                  background: "hsl(207 90% 50% / 0.2)",
-                  color: "hsl(207 90% 85%)",
-                  border: "1px solid hsl(207 90% 50% / 0.3)",
+                  background: C.accentDim,
+                  color: C.accent,
+                  border: `1px solid ${C.accentLine}`,
                   borderRadius: 12, cursor: "pointer",
                 }}
               >
@@ -561,9 +703,9 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
                   display: "inline-flex", alignItems: "center", gap: 4,
                   marginTop: 6, padding: "3px 10px",
                   fontSize: 10, fontWeight: 600,
-                  background: "hsl(207 90% 50% / 0.2)",
-                  color: "hsl(207 90% 85%)",
-                  border: "1px solid hsl(207 90% 50% / 0.3)",
+                  background: C.accentDim,
+                  color: C.accent,
+                  border: `1px solid ${C.accentLine}`,
                   borderRadius: 12, cursor: "pointer",
                 }}
               >
@@ -590,7 +732,7 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
         <div
           className="mt-1 px-1 tabular-nums"
           style={{
-            color: "#5e5e68",
+            color: C.textDim,
             fontSize: 9,
             fontFamily: "'JetBrains Mono', ui-monospace, monospace",
             letterSpacing: "0.05em",
@@ -635,19 +777,19 @@ function InterruptionPrompt({ messageId, onContinue, onSendNew }: InterruptionPr
         marginTop: 10,
         padding: "10px 12px",
         borderRadius: 10,
-        background: "hsl(38 92% 50% / 0.08)",
-        border: "1px solid hsl(38 92% 50% / 0.25)",
+        background: C.accentDim,
+        border: `1px solid ${C.accentLine}`,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "hsl(38 92% 65%)" }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: C.accent }}>
           Agent was interrupted
         </span>
       </div>
 
       {mode === "choice" ? (
         <>
-          <div style={{ fontSize: 11, color: "hsl(220 14% 65%)", marginBottom: 10, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 11, color: C.textMid, marginBottom: 10, lineHeight: 1.5 }}>
             The previous session was paused. Click continue below to resume, or send a different message.
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -656,9 +798,9 @@ function InterruptionPrompt({ messageId, onContinue, onSendNew }: InterruptionPr
               style={{
                 display: "inline-flex", alignItems: "center", gap: 5,
                 padding: "5px 12px", fontSize: 11, fontWeight: 600,
-                background: "linear-gradient(135deg, hsl(142 71% 45%) 0%, hsl(142 71% 38%) 100%)",
+                background: "linear-gradient(135deg, #56d364 0%, #3da34e 100%)",
                 color: "#fff", border: "none", borderRadius: 6, cursor: "pointer",
-                boxShadow: "0 1px 3px hsl(142 71% 30% / 0.4)",
+                boxShadow: `0 1px 3px ${C.ok}66`,
               }}
             >
               <Play size={11} />
@@ -669,9 +811,9 @@ function InterruptionPrompt({ messageId, onContinue, onSendNew }: InterruptionPr
               style={{
                 display: "inline-flex", alignItems: "center", gap: 5,
                 padding: "5px 12px", fontSize: 11, fontWeight: 600,
-                background: "hsl(220 13% 22%)",
-                color: "hsl(220 14% 75%)",
-                border: "1px solid hsl(220 13% 28%)",
+                background: C.surfaceAlt,
+                color: C.textMid,
+                border: `1px solid ${C.border}`,
                 borderRadius: 6, cursor: "pointer",
               }}
             >
@@ -698,9 +840,9 @@ function InterruptionPrompt({ messageId, onContinue, onSendNew }: InterruptionPr
             style={{
               width: "100%", padding: "8px 10px",
               fontSize: 12, fontFamily: "inherit",
-              background: "hsl(220 13% 12%)",
-              color: "hsl(220 14% 90%)",
-              border: "1px solid hsl(220 13% 28%)",
+              background: C.surface,
+              color: C.text,
+              border: `1px solid ${C.border}`,
               borderRadius: 6,
               resize: "vertical",
               outline: "none",
@@ -714,9 +856,9 @@ function InterruptionPrompt({ messageId, onContinue, onSendNew }: InterruptionPr
                 display: "inline-flex", alignItems: "center", gap: 5,
                 padding: "5px 12px", fontSize: 11, fontWeight: 600,
                 background: text.trim()
-                  ? "linear-gradient(135deg, hsl(207 90% 45%) 0%, hsl(207 90% 38%) 100%)"
-                  : "hsl(220 13% 22%)",
-                color: text.trim() ? "#fff" : "hsl(220 14% 45%)",
+                  ? "linear-gradient(135deg, #e5a639 0%, #d19530 100%)"
+                  : C.surfaceAlt,
+                color: text.trim() ? "#fff" : C.textDim,
                 border: "none", borderRadius: 6,
                 cursor: text.trim() ? "pointer" : "not-allowed",
               }}
@@ -727,8 +869,8 @@ function InterruptionPrompt({ messageId, onContinue, onSendNew }: InterruptionPr
               onClick={() => { setMode("choice"); setText(""); }}
               style={{
                 padding: "5px 10px", fontSize: 11,
-                background: "transparent", color: "hsl(220 14% 55%)",
-                border: "1px solid hsl(220 13% 28%)",
+                background: "transparent", color: C.textDim,
+                border: `1px solid ${C.border}`,
                 borderRadius: 6, cursor: "pointer",
               }}
             >
@@ -800,7 +942,7 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
         style={{
           width: 14,
           paddingTop: 4,
-          color: "#c6ff3d",
+          color: C.accent,
         }}
       >
         <Sparkles size={12} strokeWidth={1.8} />
@@ -812,7 +954,7 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
           className="text-left text-sm leading-relaxed"
           style={{
             background: "transparent",
-            color: "#f5f5f7",
+            color: C.text,
             padding: "2px 0 4px",
             maxWidth: "100%",
           }}
@@ -835,7 +977,7 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                   <div
                     className="my-2"
                     style={{
-                      borderTop: "1px solid hsl(220 13% 24%)",
+                      borderTop: `1px solid ${C.border}`,
                     }}
                   />
                 )}
@@ -862,7 +1004,7 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                       if (part.type === "text" && part.content) {
                         return (
                           <div key={`${msg.id}-txt-${pi}`} className="chat-message">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                               {part.content}
                             </ReactMarkdown>
                           </div>
@@ -875,11 +1017,11 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                         <div style={{
                           display: "flex", gap: 3, alignItems: "center",
                         }}>
-                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "hsl(207 90% 60%)", animation: "pulse-dot 1.4s ease-in-out infinite" }} />
-                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "hsl(207 90% 60%)", animation: "pulse-dot 1.4s ease-in-out 0.2s infinite" }} />
-                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "hsl(207 90% 60%)", animation: "pulse-dot 1.4s ease-in-out 0.4s infinite" }} />
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.info, animation: "pulse-dot 1.4s ease-in-out infinite" }} />
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.info, animation: "pulse-dot 1.4s ease-in-out 0.2s infinite" }} />
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.info, animation: "pulse-dot 1.4s ease-in-out 0.4s infinite" }} />
                         </div>
-                        <span style={{ fontSize: 11, color: "hsl(207 90% 60%)", fontWeight: 500 }}>Working...</span>
+                        <span style={{ fontSize: 11, color: C.info, fontWeight: 500 }}>Working...</span>
                         <style>{`@keyframes pulse-dot { 0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1.2); } }`}</style>
                       </div>
                     )}
@@ -901,11 +1043,11 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                     {(hasContent || msg.streaming) && (
                       <div className={`chat-message ${msg.streaming ? "streaming-cursor" : ""}`}>
                         {msg.content ? (
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                             {msg.content}
                           </ReactMarkdown>
                         ) : msg.streaming ? (
-                          <span className="flex items-center gap-2 text-xs" style={{ color: "hsl(207 90% 60%)" }}>
+                          <span className="flex items-center gap-2 text-xs" style={{ color: C.info }}>
                             <Loader2 size={12} className="animate-spin" />
                             <span>Thinking...</span>
                           </span>
@@ -942,20 +1084,20 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
               className="flex items-center justify-center"
               style={{
                 ...btnBase,
-                background: "hsl(220 13% 18%)",
-                color: copied ? "hsl(142 71% 55%)" : "hsl(220 14% 48%)",
-                border: "1px solid hsl(220 13% 24%)",
+                background: C.surfaceAlt,
+                color: copied ? C.ok : C.textDim,
+                border: `1px solid ${C.border}`,
               }}
               onMouseEnter={(e) => {
                 if (!copied) {
-                  e.currentTarget.style.color = "hsl(220 14% 80%)";
-                  e.currentTarget.style.background = "hsl(220 13% 24%)";
+                  e.currentTarget.style.color = C.text;
+                  e.currentTarget.style.background = C.border;
                 }
               }}
               onMouseLeave={(e) => {
                 if (!copied) {
-                  e.currentTarget.style.color = "hsl(220 14% 48%)";
-                  e.currentTarget.style.background = "hsl(220 13% 18%)";
+                  e.currentTarget.style.color = C.textDim;
+                  e.currentTarget.style.background = C.surfaceAlt;
                 }
               }}
               onClick={handleCopy}
@@ -970,17 +1112,17 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                 className="flex items-center justify-center"
                 style={{
                   ...btnBase,
-                  background: "hsl(220 13% 18%)",
-                  color: "hsl(220 14% 48%)",
-                  border: "1px solid hsl(220 13% 24%)",
+                  background: C.surfaceAlt,
+                  color: C.textDim,
+                  border: `1px solid ${C.border}`,
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.color = "hsl(0 84% 62%)";
-                  e.currentTarget.style.background = "hsl(0 50% 20% / 0.3)";
+                  e.currentTarget.style.color = C.error;
+                  e.currentTarget.style.background = `${C.error}20`;
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.color = "hsl(220 14% 48%)";
-                  e.currentTarget.style.background = "hsl(220 13% 18%)";
+                  e.currentTarget.style.color = C.textDim;
+                  e.currentTarget.style.background = C.surfaceAlt;
                 }}
                 onClick={() => {
                   // Delete all messages in this turn
@@ -998,7 +1140,7 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
         {timestamp && (
           <div
             className="text-xs mt-1 px-1 tabular-nums"
-            style={{ color: "hsl(220 14% 35%)", fontSize: "0.65rem" }}
+            style={{ color: C.textFaint, fontSize: "0.65rem" }}
           >
             {timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </div>

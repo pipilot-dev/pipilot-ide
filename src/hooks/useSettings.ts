@@ -4,7 +4,7 @@ import { useCallback } from "react";
 
 const DEFAULTS: Record<string, string> = {
   editorFontSize: "14",
-  editorFontFamily: '"Fira Code", "Cascadia Code", monospace',
+  editorFontFamily: '"Cascadia Code", "Fira Code", monospace',
   editorTabSize: "2",
   editorWordWrap: "on",
   editorMinimap: "false",

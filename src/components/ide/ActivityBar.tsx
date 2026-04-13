@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import {
   Files,
   Search,
@@ -6,10 +7,11 @@ import {
   Settings,
   MessageSquareCode,
   Bug,
+  BookOpen,
 } from "lucide-react";
 import { COLORS as C } from "@/lib/design-tokens";
 
-export type ActivityBarView = "explorer" | "search" | "source-control" | "extensions" | "debug";
+export type ActivityBarView = "explorer" | "search" | "source-control" | "extensions" | "debug" | "wiki";
 
 interface ActivityBarProps {
   activeView: ActivityBarView | null;
@@ -26,11 +28,29 @@ const ACTIVITIES: { id: ActivityBarView; icon: React.ReactNode; label: string }[
   { id: "source-control", icon: <GitBranch size={18} strokeWidth={1.6} />, label: "Source Control" },
   { id: "debug", icon: <Bug size={18} strokeWidth={1.6} />, label: "Run and Debug" },
   { id: "extensions", icon: <Package size={18} strokeWidth={1.6} />, label: "Extensions" },
+  { id: "wiki", icon: <BookOpen size={18} strokeWidth={1.6} />, label: "Wiki" },
 ];
 
 export function ActivityBar({
   activeView, onViewChange, chatOpen, onToggleChat, onOpenSettings, badges,
 }: ActivityBarProps) {
+  const [showBadges, setShowBadges] = useState(
+    () => typeof window !== "undefined"
+      ? localStorage.getItem("pipilot:showActivityBadges") !== "false"
+      : true
+  );
+
+  useEffect(() => {
+    function onSettingChanged(e: Event) {
+      const { key, value } = (e as CustomEvent<{ key: string; value: string }>).detail ?? {};
+      if (key === "showActivityBadges") {
+        setShowBadges(value !== "false");
+      }
+    }
+    window.addEventListener("pipilot:setting-changed", onSettingChanged);
+    return () => window.removeEventListener("pipilot:setting-changed", onSettingChanged);
+  }, []);
+
   return (
     <div
       data-testid="activity-bar"
@@ -47,10 +67,6 @@ export function ActivityBar({
       }}
     >
       {ACTIVITIES.map((item) => {
-        // Respect showActivityBadges setting (default ON)
-        const showBadges = typeof window !== "undefined"
-          ? localStorage.getItem("pipilot:showActivityBadges") !== "false"
-          : true;
         const count = showBadges ? (badges?.[item.id] ?? 0) : 0;
         const isActive = activeView === item.id;
         return (

@@ -20,6 +20,7 @@ export interface DBChatMessage {
   content: string;
   toolCalls?: string;       // JSON serialized
   builtinToolStatuses?: string; // JSON serialized
+  parts?: string;           // JSON serialized — interleaved text/tool parts
   tool_call_id?: string;
   sessionId: string;
   timestamp: Date;
@@ -46,6 +47,11 @@ export interface DBProject {
   linkedPath?: string;  // absolute path on disk (only for type === "linked")
   createdAt: Date;
   updatedAt: Date;
+  // When set, the project is soft-closed — hidden from the main switcher
+  // but still shown in the File → Recent menu so the user can re-open it.
+  // For linked projects, the server registry entry may be absent until
+  // reopenProject re-registers it.
+  closedAt?: Date;
 }
 
 export interface DBCheckpoint {

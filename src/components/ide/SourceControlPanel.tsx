@@ -78,10 +78,15 @@ function FileRow({ file, staged, onStage, onUnstage, onDiscard, onView }: {
 interface SourceControlPanelProps {
   onOpenCommit?: (oid: string, shortOid: string) => void;
   onOpenDiff?: (filePath: string, staged: boolean) => void;
+  /** Optional shared git instance from parent. When provided, this panel
+   * reuses it instead of creating its own — ensures the status bar branch
+   * picker and source control panel read from the same state. */
+  git?: ReturnType<typeof useRealGit>;
 }
 
-export function SourceControlPanel({ onOpenCommit, onOpenDiff }: SourceControlPanelProps = {}) {
-  const git = useRealGit();
+export function SourceControlPanel({ onOpenCommit, onOpenDiff, git: externalGit }: SourceControlPanelProps = {}) {
+  const internalGit = useRealGit();
+  const git = externalGit || internalGit;
   const [commitMessage, setCommitMessage] = useState("");
   const [expandStaged, setExpandStaged] = useState(true);
   const [expandChanges, setExpandChanges] = useState(true);
@@ -674,13 +679,14 @@ export function SourceControlPanel({ onOpenCommit, onOpenDiff }: SourceControlPa
         {/* Staged */}
         {git.stagedFiles.length > 0 && (
           <div>
-            <button
+            <div
               onClick={() => setExpandStaged(!expandStaged)}
+              role="button"
               style={{
                 display: "flex", alignItems: "center", gap: 4,
                 width: "100%", padding: "4px 10px", fontSize: 10, fontWeight: 600,
                 background: "hsl(220 13% 14%)", color: "hsl(220 14% 65%)",
-                border: "none", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5,
+                cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5,
                 borderTop: "1px solid hsl(220 13% 22%)",
                 borderBottom: "1px solid hsl(220 13% 22%)",
               }}
@@ -695,7 +701,7 @@ export function SourceControlPanel({ onOpenCommit, onOpenDiff }: SourceControlPa
               >
                 <Minus size={11} />
               </button>
-            </button>
+            </div>
             {expandStaged && git.stagedFiles.map(f => (
               <FileRow
                 key={`s-${f.path}`}
@@ -711,13 +717,14 @@ export function SourceControlPanel({ onOpenCommit, onOpenDiff }: SourceControlPa
         {/* Unstaged */}
         {git.unstagedFiles.length > 0 && (
           <div>
-            <button
+            <div
               onClick={() => setExpandChanges(!expandChanges)}
+              role="button"
               style={{
                 display: "flex", alignItems: "center", gap: 4,
                 width: "100%", padding: "4px 10px", fontSize: 10, fontWeight: 600,
                 background: "hsl(220 13% 14%)", color: "hsl(220 14% 65%)",
-                border: "none", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5,
+                cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5,
                 borderTop: "1px solid hsl(220 13% 22%)",
                 borderBottom: "1px solid hsl(220 13% 22%)",
               }}
@@ -732,7 +739,7 @@ export function SourceControlPanel({ onOpenCommit, onOpenDiff }: SourceControlPa
               >
                 <Plus size={12} />
               </button>
-            </button>
+            </div>
             {expandChanges && git.unstagedFiles.map(f => (
               <FileRow
                 key={`u-${f.path}`}

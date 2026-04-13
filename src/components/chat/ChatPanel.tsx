@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, KeyboardEvent, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback, KeyboardEvent, useMemo, useLayoutEffect } from "react";
 import {
   Send,
   Square,
@@ -22,11 +22,13 @@ import {
   CornerDownLeft,
   Hash,
   X,
+  Settings,
 } from "lucide-react";
 import { useChat, ChatMode, ToolExecutor, WorkspaceContext, CheckpointManager } from "@/hooks/useChat";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 import { TodoPanel } from "./TodoPanel";
+import { SessionPicker } from "./SessionPicker";
 import { AskUserDialog } from "./AskUserDialog";
 import { QueuePanel } from "./QueuePanel";
 import { ChatMessageItem, AssistantTurnGroup } from "./ChatMessage";
@@ -40,14 +42,17 @@ const MAX_ATTACH_CHARS = 30000;
 const TRUNCATION_WARN = "⚠️ File truncated to fit context limit.";
 
 interface FileAttachment {
-  id: string;        // file path
+  id: string;        // file path or "__problems__"
   name: string;
-  type: "file" | "folder";
+  type: "file" | "folder" | "problems";
   language?: string;
   lineCount: number;
   charCount: number;
   truncated: boolean;
   content: string;   // the actual content (possibly truncated)
+  // Problems-attachment metadata (only set when type === "problems")
+  problemCount?: number;
+  totalProblemCount?: number;
 }
 
 /** Flatten a FileNode tree into a flat list of {id, name, type, language, content} */
@@ -165,25 +170,47 @@ interface ChatPanelProps {
   checkpointManager?: CheckpointManager;
   projectId?: string;
   fileTree?: FileNode[];
-  activeProvider?: "ai-sdk" | "claude-agent";
-  onProviderChange?: (provider: "ai-sdk" | "claude-agent") => void;
+  /** IDs of files currently open as editor tabs (for context pills) */
+  openTabIds?: string[];
+  /** The currently active/focused tab ID */
+  activeTabId?: string | null;
+  // Kept for compat with IDELayout, but PiPilot Agent is now the only provider.
+  activeProvider?: "claude-agent";
+  onProviderChange?: (provider: "claude-agent") => void;
 }
 
-export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, projectId, fileTree, activeProvider: activeProviderProp, onProviderChange }: ChatPanelProps) {
-  useEffect(() => { injectFonts(); }, []);
-  // Call both hooks unconditionally (React rules), pick based on active mode
-  const aiSdk = useChat(toolExecutor, workspaceContext, checkpointManager, projectId);
-  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, projectId);
-  const activeProvider = activeProviderProp || "claude-agent";
-  const setActiveProvider = onProviderChange || (() => {});
+const atFootKbd: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  minWidth: 16, padding: "1px 5px",
+  background: C.bg,
+  border: `1px solid ${C.border}`,
+  borderRadius: 2,
+  fontFamily: FONTS.mono,
+  fontSize: 9,
+  color: C.textMid,
+};
 
-  const chat = activeProvider === "claude-agent" ? agentSdk : aiSdk;
-  const { messages, isStreaming, mode, setMode, sendMessage, stopStreaming, clearMessages, deleteMessage, revertToMessage } = chat;
-  const agentTodos = activeProvider === "claude-agent" ? (agentSdk as any).todos || [] : [];
-  const agentPendingQuestion = activeProvider === "claude-agent" ? (agentSdk as any).pendingQuestion || null : null;
-  const agentAnswerQuestion = activeProvider === "claude-agent" ? (agentSdk as any).answerQuestion : null;
-  const agentContinueInterrupted = activeProvider === "claude-agent" ? (agentSdk as any).continueInterrupted : null;
-  const agentDismissInterruption = activeProvider === "claude-agent" ? (agentSdk as any).dismissInterruption : null;
+export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, projectId, fileTree, openTabIds, activeTabId }: ChatPanelProps) {
+  useEffect(() => { injectFonts(); }, []);
+  // Single provider — PiPilot Agent. Mode toggles between
+  // "agent" (autonomous build) and "plan" (research + plan only, no edits).
+  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, projectId);
+
+  const { messages, isStreaming, mode, setMode, sendMessage, stopStreaming, clearMessages, deleteMessage, revertToMessage } = agentSdk;
+  const agentTodos = (agentSdk as any).todos || [];
+  const agentPendingQuestion = (agentSdk as any).pendingQuestion || null;
+  const agentAnswerQuestion = (agentSdk as any).answerQuestion;
+  const agentContinueInterrupted = (agentSdk as any).continueInterrupted;
+  const agentDismissInterruption = (agentSdk as any).dismissInterruption;
+  const messageQueue: string[] = (agentSdk as any).messageQueue || [];
+  const removeFromQueue: (i: number) => void = (agentSdk as any).removeFromQueue || (() => {});
+  const clearQueue: () => void = (agentSdk as any).clearQueue || (() => {});
+  const isOptimizingContext: boolean = (agentSdk as any).isOptimizingContext || false;
+  const currentSessionId: string = (agentSdk as any).currentSessionId || "";
+  const createSession: (name?: string) => Promise<string> = (agentSdk as any).createSession || (async () => "");
+  const switchSession: (sid: string) => void = (agentSdk as any).switchSession || (() => {});
+  const renameSession: (sid: string, name: string) => Promise<void> = (agentSdk as any).renameSession || (async () => {});
+  const deleteSession: (sid: string) => Promise<void> = (agentSdk as any).deleteSession || (async () => {});
 
   // Handler when user picks "Tell PiPilot something else" and submits a new message
   const handleSendNewAfterInterrupt = useCallback((messageId: string, newMessage: string) => {
@@ -191,16 +218,9 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     sendMessage(newMessage);
   }, [agentDismissInterruption, sendMessage]);
 
-  // Sync mode changes to switch providers
   const handleSetMode = useCallback((newMode: ChatMode) => {
-    if (newMode === "claude-agent") {
-      setActiveProvider("claude-agent");
-      agentSdk.setMode("claude-agent");
-    } else {
-      setActiveProvider("ai-sdk");
-      aiSdk.setMode(newMode);
-    }
-  }, [aiSdk, agentSdk]);
+    setMode(newMode);
+  }, [setMode]);
 
   const handleDeleteMessage = useCallback(
     (messageId: string) => {
@@ -210,7 +230,40 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     [deleteMessage, isStreaming]
   );
 
-  const [input, setInput] = useState("");
+  // Input is persisted per-project in localStorage so unsent drafts survive
+  // page reloads. Initialized lazily so the first render reads the saved value.
+  const inputDraftKey = projectId ? `pipilot:input-draft:${projectId}` : null;
+  const [input, setInput] = useState<string>(() => {
+    if (typeof window === "undefined" || !inputDraftKey) return "";
+    try { return localStorage.getItem(inputDraftKey) || ""; } catch { return ""; }
+  });
+
+  // When the project changes, reload the saved draft for the new project.
+  useEffect(() => {
+    if (!inputDraftKey) { setInput(""); return; }
+    try {
+      setInput(localStorage.getItem(inputDraftKey) || "");
+    } catch { setInput(""); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  // Persist input to localStorage — debounced at 500ms to avoid
+  // blocking the main thread on every keystroke.
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => {
+    if (!inputDraftKey) return;
+    clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      try {
+        if (input.length > 0) {
+          localStorage.setItem(inputDraftKey, input);
+        } else {
+          localStorage.removeItem(inputDraftKey);
+        }
+      } catch {}
+    }, 500);
+    return () => clearTimeout(draftTimerRef.current);
+  }, [input, inputDraftKey]);
   const handleRevertToMessage = useCallback(
     async (messageId: string) => {
       if (isStreaming) return;
@@ -222,22 +275,50 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef(input);
 
-  // Listen for focus requests (e.g. from the Welcome page "Generate with AI" button)
+  // Sync state → DOM for uncontrolled textarea when input changes
+  // programmatically (prefill, slash select, clear on send, etc.)
   useEffect(() => {
-    const focusHandler = () => {
+    if (textareaRef.current && textareaRef.current.value !== input) {
+      textareaRef.current.value = input;
+      inputRef.current = input;
+    }
+  }, [input]);
+
+  // Listen for focus / prefill / auto-submit requests from the Welcome page
+  useEffect(() => {
+    const focusHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { prefill?: string; submit?: boolean } | undefined;
+      if (detail?.prefill !== undefined) {
+        setInput(detail.prefill);
+      }
       textareaRef.current?.focus();
+      if (detail?.submit && detail.prefill?.trim()) {
+        // Defer one tick so React commits the state before send
+        setTimeout(() => {
+          sendMessage(detail.prefill!);
+          setInput("");
+          /* charCount derived */
+          setAttachments([]);
+        }, 50);
+      }
     };
     window.addEventListener("pipilot:focus-chat-input", focusHandler);
-    return () => window.removeEventListener("pipilot:focus-chat-input", focusHandler);
-  }, []);
+    const clearAttHandler = () => setAttachments([]);
+    window.addEventListener("pipilot:clear-attachments", clearAttHandler);
+    return () => {
+      window.removeEventListener("pipilot:focus-chat-input", focusHandler);
+      window.removeEventListener("pipilot:clear-attachments", clearAttHandler);
+    };
+  }, [sendMessage]);
 
   const [showModeMenu, setShowModeMenu] = useState(false);
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [slashFilter, setSlashFilter] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
   const [showScrollDown, setShowScrollDown] = useState(false);
-  const [charCount, setCharCount] = useState(0);
+  // charCount removed — derived from input.length to avoid extra re-renders
 
   // @ File attachment state
   const [showAtMenu, setShowAtMenu] = useState(false);
@@ -245,6 +326,57 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   const [atIndex, setAtIndex] = useState(0);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [atCursorStart, setAtCursorStart] = useState(-1); // position of the @ in input
+  const atSearchRef = useRef<HTMLInputElement>(null);
+
+  // Auto-focus the @-menu search input when it opens
+  useEffect(() => {
+    if (showAtMenu) {
+      // Defer one tick so the input is mounted before we try to focus
+      setTimeout(() => atSearchRef.current?.focus(), 0);
+    }
+  }, [showAtMenu]);
+
+  // Listen for "Ask AI to fix" from the Problems panel — attaches a
+  // problems digest as a removable pill and pre-fills the input prompt.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        id: string;
+        count: number;
+        totalCount: number;
+        truncated: boolean;
+        content: string;
+        prefill?: string;
+      } | undefined;
+      if (!detail) return;
+
+      const lineCount = detail.content.split("\n").length;
+      setAttachments((prev) => {
+        // Replace any existing problems attachment so multiple clicks
+        // don't pile up duplicates.
+        const without = prev.filter((a) => a.type !== "problems");
+        return [
+          ...without,
+          {
+            id: "__problems__",
+            name: "Problems",
+            type: "problems",
+            language: "markdown",
+            lineCount,
+            charCount: detail.content.length,
+            truncated: detail.truncated,
+            content: detail.content,
+            problemCount: detail.count,
+            totalProblemCount: detail.totalCount,
+          },
+        ];
+      });
+      if (detail.prefill) setInput(detail.prefill);
+      setTimeout(() => textareaRef.current?.focus(), 30);
+    };
+    window.addEventListener("pipilot:attach-problems", handler);
+    return () => window.removeEventListener("pipilot:attach-problems", handler);
+  }, []);
 
   // Flat file list for @ autocomplete
   const flatFiles = useMemo(() => {
@@ -315,6 +447,16 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     }
   }, [flatFiles, attachments]);
 
+  // Listen for "Add File to Chat" from editor context menu
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const filePath = (e as CustomEvent).detail?.filePath;
+      if (filePath) attachFile(filePath);
+    };
+    window.addEventListener("pipilot:attach-file", handler);
+    return () => window.removeEventListener("pipilot:attach-file", handler);
+  }, [attachFile]);
+
   // Remove an attachment
   const removeAttachment = useCallback((fileId: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== fileId));
@@ -334,7 +476,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
       const after = spaceIdx >= 0 ? afterAt.slice(spaceIdx) : "";
       const newInput = before + after;
       setInput(newInput);
-      setCharCount(newInput.length);
+      /* charCount derived */
     }
     textareaRef.current?.focus();
   }, [attachFile, atCursorStart, input]);
@@ -352,13 +494,74 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     }
   }, [messages, showScrollDown]);
 
+  // ── Lazy message rendering ──
+  // Render only the most recent N messages by default. When the user scrolls
+  // to the top of the message list, we extend the window by another N. This
+  // keeps the render tree small for long conversations and avoids re-rendering
+  // hundreds of <ChatMessageItem> + <AssistantTurnGroup> nodes on every tick.
+  const VISIBLE_PAGE = 20;
+  const [visibleCount, setVisibleCount] = useState(VISIBLE_PAGE);
+
+  // Reset window when the active session changes (so switching sessions
+  // doesn't carry the previous expansion) and scroll to bottom
+  useEffect(() => {
+    setVisibleCount(VISIBLE_PAGE);
+    // Scroll to bottom after messages load — use a short delay so the
+    // DOM has rendered the new session's messages first.
+    const timer = setTimeout(() => {
+      bottomRef.current?.scrollIntoView({ behavior: "instant" });
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [currentSessionId]);
+
+  // If new messages stream in (during a live response), keep the window
+  // big enough to include them so the user always sees the latest activity.
+  useEffect(() => {
+    if (messages.length > visibleCount) {
+      setVisibleCount((prev) => Math.max(prev, Math.min(messages.length, prev + 1)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length]);
+
+  const visibleMessages = useMemo(() => {
+    if (messages.length <= visibleCount) return messages;
+    return messages.slice(messages.length - visibleCount);
+  }, [messages, visibleCount]);
+
+  const hasOlderMessages = messages.length > visibleCount;
+  const hiddenCount = messages.length - visibleCount;
+
+  const loadOlder = useCallback(() => {
+    setVisibleCount((prev) => Math.min(messages.length, prev + VISIBLE_PAGE));
+  }, [messages.length]);
+
   // Track scroll position for "scroll to bottom" button
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
     const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     setShowScrollDown(!isNearBottom);
-  }, []);
+    // Auto-load older messages when the user scrolls within 80px of the top.
+    // We preserve scroll position by anchoring on scrollHeight delta after the
+    // window grows (handled by the useLayoutEffect below).
+    if (el.scrollTop < 80 && hasOlderMessages) {
+      loadOlder();
+    }
+  }, [hasOlderMessages, loadOlder]);
+
+  // After auto-loading older messages, the scroll container's scrollHeight
+  // grows. Without this, the scroll position would jump to the new bottom.
+  // We capture the height before the load and restore the relative offset.
+  const prevScrollHeightRef = useRef<number>(0);
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const prev = prevScrollHeightRef.current;
+    if (prev > 0 && el.scrollHeight > prev) {
+      el.scrollTop = el.scrollHeight - prev + el.scrollTop;
+    }
+    prevScrollHeightRef.current = el.scrollHeight;
+  }, [visibleCount]);
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -376,9 +579,14 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   }, [slashFilter]);
 
   const handleSend = () => {
-    const trimmed = input.trim();
+    // Read from ref (latest value) — state may be stale since we skip
+    // re-renders on normal typing for performance.
+    const currentInput = inputRef.current ?? input;
+    const trimmed = currentInput.trim();
     if (!trimmed && attachments.length === 0) return;
-    if (isStreaming) return;
+    // NOTE: We DO allow sending while streaming. sendMessage detects the
+    // streaming state and pushes the new message into the local queue
+    // (see useAgentChat). The queue auto-drains when streaming completes.
 
     // Build the final message with attached file context
     let finalMessage = trimmed;
@@ -387,6 +595,12 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         if (a.type === "folder") {
           return `--- Attached folder: ${a.id} ---\n${a.content}`;
         }
+        if (a.type === "problems") {
+          const totalNote = a.truncated && a.totalProblemCount
+            ? ` (truncated from ${a.totalProblemCount})`
+            : "";
+          return `--- Attached diagnostics: ${a.problemCount} problem${a.problemCount === 1 ? "" : "s"}${totalNote} ---\n${a.content}`;
+        }
         const header = `--- Attached file: ${a.id} (${a.lineCount} lines, ${a.language || "plaintext"})${a.truncated ? " [TRUNCATED]" : ""} ---`;
         return `${header}\n${a.content}`;
       });
@@ -394,18 +608,21 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     }
 
     sendMessage(finalMessage);
+    inputRef.current = "";
     setInput("");
-    setCharCount(0);
     setAttachments([]);
     setShowSlashMenu(false);
     setShowAtMenu(false);
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
+    if (textareaRef.current) {
+      textareaRef.current.value = "";
+      textareaRef.current.style.height = "auto";
+    }
   };
 
   const handleSlashSelect = useCallback(
     (cmd: SlashCommand) => {
       setInput(cmd.prompt);
-      setCharCount(cmd.prompt.length);
+      /* charCount derived */
       setShowSlashMenu(false);
       textareaRef.current?.focus();
       // Auto-resize
@@ -476,72 +693,77 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     }
   };
 
+  // ── Optimized input handler ──
+  // Uses a ref to track the value and only calls setInput (triggering a
+  // React re-render) when a menu needs to open/close. Normal typing just
+  // updates the ref — the textarea is read from the ref on send.
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
-    const cursorPos = e.target.selectionStart ?? value.length;
-    setInput(value);
-    setCharCount(value.length);
-    e.target.style.height = "auto";
-    e.target.style.height = Math.min(e.target.scrollHeight, 160) + "px";
+    const ta = e.target;
+    inputRef.current = value;
+
+    // Auto-resize — deferred to avoid layout thrash
+    requestAnimationFrame(() => {
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+    });
 
     // Slash command detection (only at start of input)
-    if (value === "/") {
+    const isSlash = value.startsWith("/") && !value.includes(" ");
+    if (value === "/" || isSlash) {
+      setInput(value); // re-render needed for slash menu
       setShowSlashMenu(true);
-      setSlashFilter("");
+      setSlashFilter(value.length > 1 ? value.slice(1) : "");
       setSlashIndex(0);
-      setShowAtMenu(false);
-    } else if (value.startsWith("/") && !value.includes(" ")) {
-      setShowSlashMenu(true);
-      setSlashFilter(value.slice(1));
-      setSlashIndex(0);
-      setShowAtMenu(false);
-    } else {
+      if (showAtMenu) setShowAtMenu(false);
+      return;
+    }
+    if (showSlashMenu) {
+      setInput(value);
       setShowSlashMenu(false);
+      return;
     }
 
-    // @ mention detection: find the last @ before cursor that isn't preceded by a space-less word
+    // @ mention detection
+    const cursorPos = ta.selectionStart ?? value.length;
     const textBeforeCursor = value.slice(0, cursorPos);
     const lastAtIdx = textBeforeCursor.lastIndexOf("@");
     if (lastAtIdx >= 0) {
-      // The @ must be at start or preceded by whitespace
       const charBefore = lastAtIdx > 0 ? value[lastAtIdx - 1] : " ";
       if (charBefore === " " || charBefore === "\n" || lastAtIdx === 0) {
         const afterAt = textBeforeCursor.slice(lastAtIdx + 1);
-        // Only show menu if there's no space yet (still typing the mention)
         if (!afterAt.includes(" ") && !afterAt.includes("\n")) {
+          setInput(value); // re-render needed for @ menu
           setShowAtMenu(true);
           setAtFilter(afterAt);
           setAtIndex(0);
           setAtCursorStart(lastAtIdx);
-        } else {
-          setShowAtMenu(false);
+          return;
         }
-      } else {
-        setShowAtMenu(false);
       }
-    } else {
-      setShowAtMenu(false);
     }
+    if (showAtMenu) {
+      setInput(value);
+      setShowAtMenu(false);
+      return;
+    }
+
+    // Normal typing — NO re-render. Just update the ref.
+    // Only sync to state occasionally for the char counter display.
   };
 
   const modeConfig: Record<ChatMode, { label: string; icon: React.ReactNode; desc: string; color: string }> = {
-    chat: {
-      label: "Chat",
-      icon: <MessageSquare size={12} />,
-      desc: "Single-turn conversation",
-      color: "hsl(220 14% 65%)",
-    },
     agent: {
       label: "Agent",
-      icon: <Zap size={12} />,
-      desc: "Multi-step autonomous coding",
-      color: "hsl(207 90% 65%)",
-    },
-    "claude-agent": {
-      label: "PiPilot Agent",
       icon: <Bot size={12} />,
-      desc: "Autonomous agent with file tools",
-      color: "#c6ff3d",
+      desc: "Autonomous agent — reads, writes, runs",
+      color: C.accent,
+    },
+    plan: {
+      label: "Plan",
+      icon: <Zap size={12} />,
+      desc: "Research & plan only — no edits",
+      color: C.info,
     },
   };
 
@@ -585,16 +807,6 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           >
             / C
           </span>
-          <span
-            style={{
-              fontFamily: FONTS.mono,
-              fontSize: 9, fontWeight: 500,
-              letterSpacing: "0.18em", textTransform: "uppercase",
-              color: C.text,
-            }}
-          >
-            AI Assistant
-          </span>
           {messageCount > 0 && (
             <span
               style={{
@@ -610,17 +822,26 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         </div>
 
         <div className="flex items-center gap-1.5">
+          {/* Session Picker — multi-chat sessions per project */}
+          {projectId && currentSessionId && (
+            <SessionPicker
+              projectId={projectId}
+              currentSessionId={currentSessionId}
+              onSwitch={switchSession}
+              onCreate={createSession}
+              onRename={renameSession}
+              onDelete={deleteSession}
+            />
+          )}
           {/* Mode Toggle */}
           <div className="relative">
             <button
               className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all duration-200"
               style={{
-                background: mode !== "chat"
-                  ? `linear-gradient(135deg, ${mode === "claude-agent" ? "hsl(280 65% 36% / 0.25)" : "hsl(207 90% 36% / 0.25)"} 0%, ${mode === "claude-agent" ? "hsl(280 65% 36% / 0.15)" : "hsl(207 90% 36% / 0.15)"} 100%)`
-                  : "hsl(220 13% 22%)",
-                color: modeConfig[mode]?.color || "hsl(220 14% 65%)",
-                border: `1px solid ${mode !== "chat" ? (mode === "claude-agent" ? "hsl(280 65% 45% / 0.3)" : "hsl(207 90% 45% / 0.3)") : "hsl(220 13% 28%)"}`,
-                boxShadow: mode !== "chat" ? `0 0 12px ${mode === "claude-agent" ? "hsl(280 65% 50% / 0.15)" : "hsl(207 90% 50% / 0.15)"}` : "none",
+                background: `linear-gradient(135deg, ${mode === "plan" ? `${C.info}40` : `${C.accent}40`} 0%, ${mode === "plan" ? `${C.info}26` : `${C.accent}26`} 100%)`,
+                color: modeConfig[mode]?.color || C.textMid,
+                border: `1px solid ${mode === "plan" ? C.accentLine : C.accentLine}`,
+                boxShadow: `0 0 12px ${mode === "plan" ? `${C.info}26` : `${C.accent}26`}`,
               }}
               onClick={() => setShowModeMenu((p) => !p)}
               data-testid="chat-mode-toggle"
@@ -636,24 +857,24 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                 <div
                   className="absolute right-0 top-full mt-1.5 rounded-xl border shadow-xl z-50 overflow-hidden"
                   style={{
-                    background: "hsl(220 13% 17%)",
-                    borderColor: "hsl(220 13% 25%)",
-                    minWidth: "200px",
+                    background: C.surface,
+                    borderColor: C.border,
+                    minWidth: "220px",
                     backdropFilter: "blur(16px)",
-                    boxShadow: "0 8px 32px hsl(220 13% 5% / 0.6), 0 0 0 1px hsl(220 13% 25%)",
+                    boxShadow: `0 8px 32px #00000099, 0 0 0 1px ${C.border}`,
                   }}
                 >
-                  {(["chat", "agent", "claude-agent"] as ChatMode[]).map((m) => (
+                  {(["agent", "plan"] as ChatMode[]).map((m) => (
                     <button
                       key={m}
                       className="w-full flex items-start gap-2.5 px-3.5 py-2.5 text-xs transition-all duration-150 text-left"
                       style={
                         mode === m
-                          ? { color: modeConfig[m].color, background: "hsl(207 90% 40% / 0.12)" }
-                          : { color: "hsl(220 14% 70%)" }
+                          ? { color: modeConfig[m].color, background: `${C.info}1f` }
+                          : { color: C.textMid }
                       }
                       onMouseEnter={(e) => {
-                        if (mode !== m) e.currentTarget.style.background = "hsl(220 13% 22%)";
+                        if (mode !== m) e.currentTarget.style.background = C.surfaceAlt;
                       }}
                       onMouseLeave={(e) => {
                         if (mode !== m) e.currentTarget.style.background = "transparent";
@@ -667,7 +888,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                       <span className="mt-0.5 flex-shrink-0">{modeConfig[m].icon}</span>
                       <div>
                         <div className="font-semibold">{modeConfig[m].label}</div>
-                        <div style={{ color: "hsl(220 14% 50%)", marginTop: 1 }}>{modeConfig[m].desc}</div>
+                        <div style={{ color: C.textDim, marginTop: 1 }}>{modeConfig[m].desc}</div>
                       </div>
                     </button>
                   ))}
@@ -679,15 +900,15 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           {messages.length > 0 && (
             <button
               className="rounded-lg p-1.5 text-xs transition-all duration-200 hover:scale-105"
-              style={{ color: "hsl(220 14% 50%)" }}
+              style={{ color: C.textDim }}
               onClick={clearMessages}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "hsl(0 84% 60% / 0.12)";
-                e.currentTarget.style.color = "hsl(0 84% 65%)";
+                e.currentTarget.style.background = `${C.error}1f`;
+                e.currentTarget.style.color = C.error;
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.color = "hsl(220 14% 50%)";
+                e.currentTarget.style.color = C.textDim;
               }}
               title="Clear conversation"
               data-testid="chat-clear-btn"
@@ -697,28 +918,6 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           )}
         </div>
       </div>
-
-      {/* ── Agent mode badge ── */}
-      {(mode === "agent" || mode === "claude-agent") && (
-        <div
-          className="flex items-center gap-2 px-4 py-2 text-xs"
-          style={{
-            background: "linear-gradient(90deg, hsl(207 90% 36% / 0.08) 0%, transparent 100%)",
-            borderBottom: "1px solid hsl(220 13% 20%)",
-            color: "hsl(207 90% 65%)",
-          }}
-        >
-          <div
-            className="w-1.5 h-1.5 rounded-full"
-            style={{
-              background: "hsl(142 71% 50%)",
-              boxShadow: "0 0 6px hsl(142 71% 50% / 0.5)",
-            }}
-          />
-          <span style={{ fontWeight: 500 }}>{mode === "claude-agent" ? "PiPilot Agent" : "Agent mode"}</span>
-          <span style={{ color: "hsl(220 14% 45%)" }}>— {mode === "claude-agent" ? "Autonomous agent" : "autonomous coding with file tools"}</span>
-        </div>
-      )}
 
       {/* ── Messages ── */}
       <div
@@ -794,7 +993,6 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                     <button
                       onClick={() => {
                         setInput(s.text);
-                        setCharCount(s.text.length);
                         textareaRef.current?.focus();
                       }}
                       style={{
@@ -857,8 +1055,44 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           </div>
         )}
 
+        {/* Load-older button — visible only when there are hidden messages */}
+        {hasOlderMessages && (
+          <div style={{ display: "flex", justifyContent: "center", padding: "12px 0 8px" }}>
+            <button
+              onClick={loadOlder}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "6px 14px",
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 3,
+                color: C.textMid,
+                fontFamily: FONTS.mono,
+                fontSize: 9,
+                fontWeight: 500,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                cursor: "pointer",
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = C.accentLine;
+                e.currentTarget.style.color = C.accent;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = C.border;
+                e.currentTarget.style.color = C.textMid;
+              }}
+            >
+              ↑ Load older ({hiddenCount})
+            </button>
+          </div>
+        )}
+
         {(() => {
-          // Group consecutive assistant/tool messages into unified turns
+          // Group consecutive assistant/tool messages into unified turns.
+          // Operates on `visibleMessages` (the lazy-load slice) instead of
+          // the full `messages` array.
           const result: React.ReactNode[] = [];
           let currentTurn: ChatMessage[] = [];
 
@@ -879,7 +1113,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
             }
           }
 
-          for (const msg of messages) {
+          for (const msg of visibleMessages) {
             if (msg.role === "user") {
               flushTurn();
               result.push(
@@ -898,6 +1132,131 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           flushTurn();
           return result;
         })()}
+
+        {/* ── Context optimization status (shimmer + spinning gear) ── */}
+        {isOptimizingContext && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "12px 16px",
+              margin: "8px 0",
+              background: C.surfaceAlt,
+              border: `1px solid ${C.accentLine}`,
+              borderRadius: 4,
+              fontFamily: FONTS.mono,
+              position: "relative",
+              overflow: "hidden",
+            }}
+          >
+            {/* Spinning gear */}
+            <Settings
+              size={13}
+              style={{
+                color: C.accent,
+                flexShrink: 0,
+                animation: "pipilot-gear-spin 2.4s linear infinite",
+              }}
+            />
+
+            {/* Editorial label */}
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 500,
+                letterSpacing: "0.18em",
+                textTransform: "uppercase",
+                color: C.accent,
+                flexShrink: 0,
+              }}
+            >
+              / OPT
+            </span>
+
+            {/* Shimmering text */}
+            <span
+              className="pipilot-shimmer-text"
+              style={{
+                fontSize: 11,
+                fontWeight: 500,
+                letterSpacing: "0.05em",
+              }}
+            >
+              Optimizing context…
+            </span>
+
+            <div style={{ flex: 1 }} />
+
+            <span
+              style={{
+                fontSize: 9,
+                color: C.textDim,
+                letterSpacing: "0.05em",
+              }}
+            >
+              summarizing earlier turns
+            </span>
+
+            {/* Background shimmer sweep */}
+            <div
+              aria-hidden
+              className="pipilot-shimmer-bg"
+              style={{
+                position: "absolute",
+                inset: 0,
+                pointerEvents: "none",
+              }}
+            />
+
+            <style>{`
+              @keyframes pipilot-gear-spin {
+                from { transform: rotate(0deg); }
+                to   { transform: rotate(360deg); }
+              }
+              .pipilot-shimmer-text {
+                background: linear-gradient(
+                  90deg,
+                  ${C.text} 0%,
+                  ${C.text} 30%,
+                  ${C.accent} 50%,
+                  ${C.text} 70%,
+                  ${C.text} 100%
+                );
+                background-size: 200% 100%;
+                background-clip: text;
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                color: transparent;
+                animation: pipilot-shimmer-slide 2s linear infinite;
+              }
+              @keyframes pipilot-shimmer-slide {
+                from { background-position: 200% 0; }
+                to   { background-position: -200% 0; }
+              }
+              .pipilot-shimmer-bg::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                left: -50%;
+                width: 50%;
+                height: 100%;
+                background: linear-gradient(
+                  90deg,
+                  transparent 0%,
+                  ${C.accent}0a 50%,
+                  transparent 100%
+                );
+                animation: pipilot-shimmer-sweep 2.2s linear infinite;
+              }
+              @keyframes pipilot-shimmer-sweep {
+                from { transform: translateX(0); }
+                to   { transform: translateX(400%); }
+              }
+            `}</style>
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div>
 
@@ -907,10 +1266,10 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           <button
             className="absolute left-1/2 -translate-x-1/2 -top-10 z-20 rounded-full p-1.5 transition-all duration-200 hover:scale-110"
             style={{
-              background: "hsl(220 13% 22%)",
-              border: "1px solid hsl(220 13% 30%)",
-              color: "hsl(220 14% 70%)",
-              boxShadow: "0 4px 12px hsl(220 13% 5% / 0.5)",
+              background: C.surfaceAlt,
+              border: `1px solid ${C.borderHover}`,
+              color: C.textMid,
+              boxShadow: "0 4px 12px #00000080",
             }}
             onClick={scrollToBottom}
           >
@@ -919,73 +1278,246 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         </div>
       )}
 
-      {/* ── @ File mention popup ── */}
-      {showAtMenu && filteredAtFiles.length > 0 && (
+      {/* ── @ File mention popup — editorial-terminal styled with search ── */}
+      {showAtMenu && (
         <div
-          className="mx-3 mb-1 rounded-xl border overflow-hidden"
+          className="mx-3 mb-1 overflow-hidden"
           style={{
-            background: "hsl(220 13% 17%)",
-            borderColor: "hsl(220 13% 25%)",
-            boxShadow: "0 -8px 32px hsl(220 13% 5% / 0.5)",
-            maxHeight: 280,
-            overflowY: "auto",
+            background: C.surface,
+            border: `1px solid ${C.border}`,
+            borderRadius: 4,
+            boxShadow: `0 -8px 32px rgba(0, 0, 0, 0.6)`,
+            maxHeight: 320,
+            display: "flex",
+            flexDirection: "column",
           }}
         >
+          {/* Header — editorial label + count */}
           <div
-            className="px-3 py-1.5 text-xs font-medium flex items-center gap-1.5"
-            style={{ color: "hsl(220 14% 42%)", borderBottom: "1px solid hsl(220 13% 22%)" }}
+            style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "8px 12px",
+              borderBottom: `1px solid ${C.border}`,
+              background: C.surfaceAlt,
+              flexShrink: 0,
+            }}
           >
-            <AtSign size={10} />
-            <span>Attach file or folder</span>
-            {atFilter && (
-              <span className="ml-auto font-mono" style={{ color: "hsl(207 90% 60%)", fontSize: "0.65rem" }}>
-                {filteredAtFiles.length} match{filteredAtFiles.length !== 1 ? "es" : ""}
-              </span>
-            )}
+            <AtSign size={10} style={{ color: C.accent }} />
+            <span style={{
+              fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+              letterSpacing: "0.18em", textTransform: "uppercase",
+              color: C.accent,
+            }}>
+              / @
+            </span>
+            <span style={{
+              fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500,
+              letterSpacing: "0.18em", textTransform: "uppercase",
+              color: C.textDim,
+            }}>
+              Attach File
+            </span>
+            <div style={{ flex: 1 }} />
+            <span style={{
+              fontFamily: FONTS.mono, fontSize: 9,
+              color: C.textFaint, letterSpacing: "0.05em",
+            }}>
+              {String(filteredAtFiles.length).padStart(2, "0")} / {String(flatFiles.length).padStart(2, "0")}
+            </span>
           </div>
-          {filteredAtFiles.map((file, idx) => {
-            const isFolder = file.type === "folder";
-            const alreadyAttached = attachments.some((a) => a.id === file.id);
-            const lines = file.content ? file.content.split("\n").length : 0;
-            const isOverLimit = lines > MAX_ATTACH_LINES;
-            return (
+
+          {/* Search input — editorial */}
+          <div
+            style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "10px 14px",
+              borderBottom: `1px solid ${C.border}`,
+              flexShrink: 0,
+            }}
+          >
+            <Search size={12} style={{ color: C.textDim, flexShrink: 0 }} />
+            <input
+              ref={atSearchRef}
+              type="text"
+              value={atFilter}
+              onChange={(e) => {
+                setAtFilter(e.target.value);
+                setAtIndex(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setAtIndex((i) => Math.min(i + 1, filteredAtFiles.length - 1));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setAtIndex((i) => Math.max(i - 1, 0));
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  const file = filteredAtFiles[atIndex];
+                  if (file && !attachments.some((a) => a.id === file.id)) {
+                    handleAtSelect(file.id);
+                  }
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setShowAtMenu(false);
+                  setAtFilter("");
+                  textareaRef.current?.focus();
+                }
+              }}
+              placeholder="search files…"
+              style={{
+                flex: 1,
+                background: "transparent",
+                border: "none",
+                outline: "none",
+                fontFamily: FONTS.mono,
+                fontSize: 12,
+                color: C.text,
+                caretColor: C.accent,
+                letterSpacing: "0.01em",
+              }}
+            />
+            {atFilter && (
               <button
-                key={file.id}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-all duration-100 text-left"
+                onClick={() => { setAtFilter(""); atSearchRef.current?.focus(); }}
                 style={{
-                  background: idx === atIndex ? "hsl(207 90% 40% / 0.12)" : "transparent",
-                  color: alreadyAttached ? "hsl(220 14% 40%)" : idx === atIndex ? "hsl(220 14% 88%)" : "hsl(220 14% 70%)",
-                  borderLeft: idx === atIndex ? "2px solid hsl(207 90% 55%)" : "2px solid transparent",
-                  opacity: alreadyAttached ? 0.5 : 1,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 18, height: 18,
+                  background: "transparent",
+                  border: "none",
+                  color: C.textDim,
+                  cursor: "pointer",
+                  borderRadius: 2,
                 }}
-                onMouseEnter={() => setAtIndex(idx)}
-                onClick={() => !alreadyAttached && handleAtSelect(file.id)}
-                disabled={alreadyAttached}
+                onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
               >
-                <span style={{ color: isFolder ? "hsl(38 92% 55%)" : "hsl(207 90% 60%)", flexShrink: 0 }}>
-                  {isFolder ? <FolderOpen size={12} /> : <FileCode2 size={12} />}
-                </span>
-                <span className="font-mono truncate flex-1" style={{ fontSize: "0.7rem" }}>
-                  {file.id}
-                </span>
-                {!isFolder && lines > 0 && (
-                  <span
-                    className="flex-shrink-0 flex items-center gap-0.5 tabular-nums"
-                    style={{
-                      fontSize: "0.6rem",
-                      color: isOverLimit ? "hsl(38 92% 55%)" : "hsl(220 14% 40%)",
-                    }}
-                  >
-                    {isOverLimit && <AlertTriangle size={8} />}
-                    {lines}L
-                  </span>
-                )}
-                {alreadyAttached && (
-                  <span className="flex-shrink-0 text-xs" style={{ color: "hsl(142 71% 50%)", fontSize: "0.6rem" }}>attached</span>
-                )}
+                <X size={11} />
               </button>
-            );
-          })}
+            )}
+            <kbd style={{
+              padding: "2px 6px",
+              fontFamily: FONTS.mono, fontSize: 9,
+              background: C.bg,
+              border: `1px solid ${C.border}`,
+              borderRadius: 2,
+              color: C.textDim,
+              flexShrink: 0,
+            }}>
+              ESC
+            </kbd>
+          </div>
+
+          {/* Result list */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "4px 0", minHeight: 0 }}>
+            {filteredAtFiles.length === 0 ? (
+              <div style={{
+                padding: "24px 16px", textAlign: "center",
+                fontFamily: FONTS.mono, fontSize: 10, color: C.textDim,
+              }}>
+                <div style={{
+                  fontFamily: FONTS.mono, fontSize: 9,
+                  letterSpacing: "0.18em", color: C.textFaint,
+                  marginBottom: 6,
+                }}>
+                  // NO MATCHES
+                </div>
+                {atFilter ? `No files match "${atFilter}"` : "No files in this project"}
+              </div>
+            ) : filteredAtFiles.map((file, idx) => {
+              const isFolder = file.type === "folder";
+              const alreadyAttached = attachments.some((a) => a.id === file.id);
+              const lines = file.content ? file.content.split("\n").length : 0;
+              const isOverLimit = lines > MAX_ATTACH_LINES;
+              const isSelected = idx === atIndex;
+              return (
+                <button
+                  key={file.id}
+                  data-at-idx={idx}
+                  className="w-full flex items-center gap-3 text-left transition-colors"
+                  style={{
+                    padding: "7px 14px",
+                    background: isSelected ? C.surfaceAlt : "transparent",
+                    color: alreadyAttached ? C.textFaint : isSelected ? C.text : C.textMid,
+                    borderLeft: `2px solid ${isSelected ? C.accent : "transparent"}`,
+                    border: "none",
+                    cursor: alreadyAttached ? "not-allowed" : "pointer",
+                    fontFamily: FONTS.mono,
+                    fontSize: 11,
+                    opacity: alreadyAttached ? 0.5 : 1,
+                  }}
+                  onMouseEnter={() => setAtIndex(idx)}
+                  onClick={() => !alreadyAttached && handleAtSelect(file.id)}
+                  disabled={alreadyAttached}
+                >
+                  <span style={{
+                    color: isSelected ? C.accent : C.textDim,
+                    flexShrink: 0,
+                  }}>
+                    {isFolder ? <FolderOpen size={11} /> : <FileCode2 size={11} />}
+                  </span>
+                  <span style={{
+                    flex: 1,
+                    fontFamily: FONTS.mono,
+                    fontSize: 10,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    minWidth: 0,
+                  }}>
+                    {file.id}
+                  </span>
+                  {!isFolder && lines > 0 && (
+                    <span style={{
+                      display: "flex", alignItems: "center", gap: 3,
+                      fontFamily: FONTS.mono, fontSize: 9,
+                      color: isOverLimit ? C.warn : C.textFaint,
+                      flexShrink: 0,
+                    }}>
+                      {isOverLimit && <AlertTriangle size={8} />}
+                      {lines}L
+                    </span>
+                  )}
+                  {alreadyAttached && (
+                    <span style={{
+                      fontFamily: FONTS.mono, fontSize: 8,
+                      letterSpacing: "0.12em", textTransform: "uppercase",
+                      color: C.accent,
+                      padding: "1px 6px",
+                      border: `1px solid ${C.accentLine}`,
+                      borderRadius: 2,
+                      flexShrink: 0,
+                    }}>
+                      attached
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Footer hint */}
+          <div
+            style={{
+              display: "flex", alignItems: "center", gap: 14,
+              padding: "8px 14px",
+              borderTop: `1px solid ${C.border}`,
+              background: C.surfaceAlt,
+              fontFamily: FONTS.mono, fontSize: 9,
+              color: C.textDim,
+              letterSpacing: "0.05em",
+              textTransform: "uppercase",
+              flexShrink: 0,
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <kbd style={atFootKbd}>↑</kbd>
+              <kbd style={atFootKbd}>↓</kbd>
+              navigate
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <kbd style={atFootKbd}>↵</kbd>
+              attach
+            </span>
+          </div>
         </div>
       )}
 
@@ -994,14 +1526,14 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         <div
           className="mx-3 mb-1 rounded-xl border overflow-hidden"
           style={{
-            background: "hsl(220 13% 17%)",
-            borderColor: "hsl(220 13% 25%)",
-            boxShadow: "0 -8px 32px hsl(220 13% 5% / 0.5)",
+            background: C.surface,
+            borderColor: C.border,
+            boxShadow: "0 -8px 32px #00000080",
             maxHeight: 240,
             overflowY: "auto",
           }}
         >
-          <div className="px-3 py-1.5 text-xs font-medium" style={{ color: "hsl(220 14% 42%)", borderBottom: "1px solid hsl(220 13% 22%)" }}>
+          <div className="px-3 py-1.5 text-xs font-medium" style={{ color: C.textFaint, borderBottom: `1px solid ${C.surfaceAlt}` }}>
             <Hash size={10} className="inline mr-1" style={{ verticalAlign: "-1px" }} />
             Commands
           </div>
@@ -1010,27 +1542,27 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
               key={cmd.id}
               className="w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-all duration-100 text-left"
               style={{
-                background: idx === slashIndex ? "hsl(207 90% 40% / 0.12)" : "transparent",
-                color: idx === slashIndex ? "hsl(207 90% 70%)" : "hsl(220 14% 70%)",
-                borderLeft: idx === slashIndex ? "2px solid hsl(207 90% 55%)" : "2px solid transparent",
+                background: idx === slashIndex ? `${C.info}1f` : "transparent",
+                color: idx === slashIndex ? C.textMid : C.textMid,
+                borderLeft: idx === slashIndex ? `2px solid ${C.info}` : "2px solid transparent",
               }}
               onMouseEnter={() => setSlashIndex(idx)}
               onClick={() => handleSlashSelect(cmd)}
             >
-              <span style={{ color: idx === slashIndex ? "hsl(207 90% 60%)" : "hsl(220 14% 45%)" }}>
+              <span style={{ color: idx === slashIndex ? C.info : C.textDim }}>
                 {cmd.icon}
               </span>
-              <span className="font-mono font-semibold" style={{ color: idx === slashIndex ? "hsl(207 90% 75%)" : "hsl(220 14% 60%)" }}>
+              <span className="font-mono font-semibold" style={{ color: idx === slashIndex ? C.info : C.textMid }}>
                 {cmd.label}
               </span>
-              <span style={{ color: "hsl(220 14% 48%)" }}>{cmd.description}</span>
+              <span style={{ color: C.textDim }}>{cmd.description}</span>
             </button>
           ))}
         </div>
       )}
 
-      {/* ── Queue Panel (shows pending messages) ── */}
-      {projectId && <QueuePanel projectId={projectId} isStreaming={isStreaming} />}
+      {/* ── Queue Panel (local queue, persists in localStorage) ── */}
+      <QueuePanel queue={messageQueue} onRemove={removeFromQueue} onClear={clearQueue} />
 
       {/* ── Todo Panel (above input, like Cursor/Copilot) ── */}
       {agentTodos.length > 0 && <TodoPanel todos={agentTodos} />}
@@ -1076,15 +1608,15 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           >
             {isStreaming ? "// streaming" : "// compose"}
           </span>
-          {charCount > 0 && !isStreaming && (
+          {input.length > 0 && !isStreaming && (
             <span style={{
               marginLeft: "auto",
               fontFamily: FONTS.mono,
               fontSize: 9,
-              color: charCount > 4000 ? C.warn : C.textDim,
+              color: input.length > 4000 ? C.warn : C.textDim,
               letterSpacing: "0.05em",
             }}>
-              {charCount.toLocaleString()}
+              {input.length.toLocaleString()}
             </span>
           )}
         </div>
@@ -1102,52 +1634,115 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           }}
         >
 
+          {/* Queue is now rendered above as <QueuePanel /> — no inline strip here */}
+
+          {/* Editor context pill — active file + count of other open tabs */}
+          {activeTabId && openTabIds && openTabIds.length > 0 && (() => {
+            const activeFileName = (activeTabId.split("/").pop() || activeTabId);
+            const otherCount = openTabIds.length - (openTabIds.includes(activeTabId) ? 1 : 0);
+            return (
+              <div className="flex items-center gap-1.5" style={{ padding: "8px 12px 2px" }}>
+                <span
+                  title={activeTabId}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 4,
+                    padding: "2px 7px", borderRadius: 3,
+                    background: `${C.accent}12`,
+                    border: `1px solid ${C.accent}35`,
+                    color: C.accent,
+                    fontFamily: FONTS.mono, fontSize: 9,
+                    maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}
+                >
+                  <FileCode2 size={9} style={{ flexShrink: 0 }} />
+                  {activeFileName}
+                </span>
+                {otherCount > 0 && (
+                  <span
+                    title={openTabIds.filter((id) => id !== activeTabId).join("\n")}
+                    style={{
+                      padding: "2px 6px", borderRadius: 3,
+                      border: `1px solid ${C.border}`,
+                      color: C.textDim,
+                      fontFamily: FONTS.mono, fontSize: 9,
+                    }}
+                  >
+                    +{otherCount}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Attachment chips */}
           {attachments.length > 0 && (
             <div className="flex flex-wrap gap-1.5" style={{ padding: "10px 12px 4px" }}>
-              {attachments.map((att) => (
-                <div
-                  key={att.id}
-                  className="inline-flex items-center gap-1.5 group/chip"
-                  style={{
-                    padding: "2px 7px",
-                    background: "transparent",
-                    border: `1px solid ${att.truncated ? C.warn + "55" : C.border}`,
-                    borderRadius: 3,
-                    color: att.truncated ? C.warn : C.textMid,
-                    fontFamily: FONTS.mono,
-                    fontSize: 10,
-                  }}
-                >
-                  <span style={{ flexShrink: 0 }}>
-                    {att.type === "folder" ? <FolderOpen size={10} /> : <FileCode2 size={10} />}
-                  </span>
-                  <span className="font-mono truncate" style={{ maxWidth: 140, fontSize: "0.68rem" }}>
-                    {att.id}
-                  </span>
-                  <span
-                    className="tabular-nums"
-                    style={{ color: "hsl(220 14% 45%)", fontSize: "0.6rem", flexShrink: 0 }}
+              {attachments.map((att) => {
+                const isProblems = att.type === "problems";
+                const accentColor = isProblems ? C.accent : att.truncated ? C.warn : C.textMid;
+                const borderColor = isProblems ? C.accentLine : att.truncated ? C.warn + "55" : C.border;
+                return (
+                  <div
+                    key={att.id}
+                    className="inline-flex items-center gap-1.5 group/chip"
+                    style={{
+                      padding: "3px 8px",
+                      background: isProblems ? C.accentDim : "transparent",
+                      border: `1px solid ${borderColor}`,
+                      borderRadius: 3,
+                      color: accentColor,
+                      fontFamily: FONTS.mono,
+                      fontSize: 10,
+                    }}
                   >
-                    {att.lineCount}L
-                  </span>
-                  {att.truncated && (
-                    <span title={`Truncated from ${att.lineCount} lines to ${MAX_ATTACH_LINES} lines`} style={{ flexShrink: 0 }}>
-                      <AlertTriangle size={9} />
+                    <span style={{ flexShrink: 0 }}>
+                      {isProblems
+                        ? <AlertTriangle size={10} />
+                        : att.type === "folder"
+                          ? <FolderOpen size={10} />
+                          : <FileCode2 size={10} />}
                     </span>
-                  )}
-                  <button
-                    className="flex-shrink-0 rounded-sm transition-colors opacity-50 group-hover/chip:opacity-100"
-                    style={{ color: "hsl(220 14% 55%)" }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = "hsl(0 84% 65%)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = "hsl(220 14% 55%)"; }}
-                    onClick={() => removeAttachment(att.id)}
-                    title="Remove attachment"
-                  >
-                    <X size={10} />
-                  </button>
-                </div>
-              ))}
+                    {isProblems ? (
+                      <span style={{
+                        fontFamily: FONTS.mono,
+                        fontSize: "0.68rem",
+                        letterSpacing: "0.05em",
+                        textTransform: "uppercase",
+                      }}>
+                        problems · {att.problemCount}
+                        {att.truncated && att.totalProblemCount ? ` / ${att.totalProblemCount}` : ""}
+                      </span>
+                    ) : (
+                      <>
+                        <span className="font-mono truncate" style={{ maxWidth: 140, fontSize: "0.68rem" }}>
+                          {att.id}
+                        </span>
+                        <span
+                          className="tabular-nums"
+                          style={{ color: C.textDim, fontSize: "0.6rem", flexShrink: 0 }}
+                        >
+                          {att.lineCount}L
+                        </span>
+                      </>
+                    )}
+                    {!isProblems && att.truncated && (
+                      <span title={`Truncated from ${att.lineCount} lines to ${MAX_ATTACH_LINES} lines`} style={{ flexShrink: 0 }}>
+                        <AlertTriangle size={9} />
+                      </span>
+                    )}
+                    <button
+                      className="flex-shrink-0 rounded-sm transition-colors opacity-50 group-hover/chip:opacity-100"
+                      style={{ color: isProblems ? C.accent : C.textDim }}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = C.error; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = isProblems ? C.accent : C.textDim; }}
+                      onClick={() => removeAttachment(att.id)}
+                      title="Remove attachment"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -1164,10 +1759,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
               maxHeight: "180px",
               caretColor: C.accent,
             }}
-            placeholder={
-              mode === "agent" || mode === "claude-agent" ? "build something..." : "ask anything..."
-            }
-            value={input}
+            placeholder={mode === "plan" ? "describe what to research..." : "build something..."}
+            defaultValue={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             rows={1}
@@ -1271,6 +1864,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                     e.currentTarget.style.background = "transparent";
                     e.currentTarget.style.borderColor = `${C.error}55`;
                   }}
+                  type="button"
                   onClick={stopStreaming}
                   data-testid="chat-stop-btn"
                 >
@@ -1278,9 +1872,10 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                   Stop
                 </button>
               ) : (() => {
-                const canSend = input.trim() || attachments.length > 0;
+                const canSend = (textareaRef.current?.value?.trim() || input.trim()) || attachments.length > 0;
                 return (
                   <button
+                    type="button"
                     style={{
                       display: "flex", alignItems: "center", gap: 8,
                       padding: "6px 16px",
@@ -1304,10 +1899,10 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                       e.currentTarget.style.boxShadow = "none";
                     }}
                     onClick={handleSend}
-                    disabled={!canSend || isStreaming}
+                    disabled={!canSend}
                     data-testid="chat-send-btn"
                   >
-                    Send
+                    {isStreaming ? "Queue" : "Send"}
                     <Send size={10} strokeWidth={1.8} />
                   </button>
                 );
