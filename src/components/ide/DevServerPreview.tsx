@@ -4,6 +4,7 @@ import {
   Play, Square, RefreshCw, ExternalLink, Loader2,
   ArrowLeft, ArrowRight, Maximize2, Minimize2,
   Monitor, Tablet, Smartphone, Terminal as TerminalIcon,
+  MousePointerClick, Camera, X,
 } from "lucide-react";
 import { ConsolePanel, ConsoleEntry } from "./ConsolePanel";
 import { COLORS as C, FONTS } from "@/lib/design-tokens";
@@ -54,6 +55,8 @@ export function DevServerPreview() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [responsiveMode, setResponsiveMode] = useState<ResponsiveMode>("desktop");
   const [showConsole, setShowConsole] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [capturing, setCapturing] = useState(false);
 
   const pushHistory = useCallback((url: string) => {
     setHistory(prev => {
@@ -286,6 +289,106 @@ export function DevServerPreview() {
     if (iframeRef.current) iframeRef.current.src = url;
   }, [urlInput, pushHistory]);
 
+  // ── Select & capture DOM tree for chat attachment ────────────────────
+  // Captures a Playwright-style accessibility tree from the iframe DOM,
+  // giving the AI agent a structured text representation of the page
+  // without needing vision capabilities.
+  const capturePreview = useCallback(async () => {
+    if (!iframeRef.current || !previewUrl) return;
+    setCapturing(true);
+    try {
+      const iframeDoc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document;
+      let domTree = "";
+      if (iframeDoc) {
+        // Build accessibility-like DOM tree from the iframe
+        let refCounter = 0;
+        const buildTree = (el: Element, depth: number): string => {
+          const indent = "  ".repeat(depth);
+          const ref = `e${refCounter++}`;
+          const tag = el.tagName.toLowerCase();
+
+          // Map to semantic roles
+          const roleMap: Record<string, string> = {
+            header: "banner", nav: "navigation", main: "main", footer: "contentinfo",
+            section: "region", article: "article", aside: "complementary",
+            form: "form", ul: "list", ol: "list", li: "listitem",
+            a: "link", button: "button", input: "textbox", textarea: "textbox",
+            select: "combobox", img: "img", h1: "heading", h2: "heading",
+            h3: "heading", h4: "heading", h5: "heading", h6: "heading",
+            p: "paragraph", table: "table", tr: "row", td: "cell", th: "columnheader",
+          };
+          const role = el.getAttribute("role") || roleMap[tag] || "generic";
+
+          // Gather attributes
+          const parts: string[] = [`${role} [ref=${ref}]`];
+          const text = el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("placeholder") || "";
+          if (text) parts[0] = `${role} "${text}" [ref=${ref}]`;
+          if (tag.match(/^h[1-6]$/)) parts.push(`[level=${tag[1]}]`);
+          if (el instanceof HTMLAnchorElement && el.href) parts.push(`\n${indent}  - /url: ${el.getAttribute("href") || ""}`);
+          const cursor = getComputedStyle(el).cursor;
+          if (cursor === "pointer") parts[0] += ` [cursor=pointer]`;
+
+          const lines: string[] = [`${indent}- ${parts.join(" ")}`];
+
+          // Direct text content (not from children)
+          for (const child of el.childNodes) {
+            if (child.nodeType === Node.TEXT_NODE) {
+              const t = (child.textContent || "").trim();
+              if (t && t.length < 200) lines.push(`${indent}  - text: ${t}`);
+            }
+          }
+
+          // Recurse visible children
+          for (const child of el.children) {
+            if (child instanceof HTMLElement) {
+              const style = getComputedStyle(child);
+              if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") continue;
+              // Skip script/style/svg internals
+              if (["SCRIPT", "STYLE", "NOSCRIPT", "SVG", "PATH"].includes(child.tagName)) continue;
+              lines.push(buildTree(child, depth + 1));
+            }
+          }
+          return lines.join("\n");
+        };
+
+        const body = iframeDoc.body;
+        if (body) {
+          domTree = buildTree(body, 0);
+          // Limit size for chat context
+          if (domTree.length > 15000) domTree = domTree.slice(0, 15000) + "\n... (truncated)";
+        }
+      }
+
+      const content = domTree
+        ? `[Web Preview DOM Tree]\nURL: ${previewUrl}\nViewport: ${responsiveMode}\n\n${domTree}`
+        : `[Web Preview — could not access iframe DOM (cross-origin)]\nURL: ${previewUrl}\nViewport: ${responsiveMode}\n\nThe preview is running but DOM capture failed due to cross-origin restrictions. The user wants help with the current visual output.`;
+
+      window.dispatchEvent(new CustomEvent("pipilot:add-preview-attachment", {
+        detail: {
+          id: `__preview_${Date.now()}__`,
+          name: `Preview DOM`,
+          content,
+        },
+      }));
+      setSelectMode(false);
+      window.dispatchEvent(new CustomEvent("pipilot:open-chat"));
+      window.dispatchEvent(new CustomEvent("pipilot:notify", { detail: { type: "success", title: "Preview DOM attached to chat" } }));
+    } catch (err) {
+      // Fallback: attach URL context
+      window.dispatchEvent(new CustomEvent("pipilot:add-preview-attachment", {
+        detail: {
+          id: `__preview_${Date.now()}__`,
+          name: `Preview: ${previewUrl}`,
+          content: `[Web Preview]\nURL: ${previewUrl}\nViewport: ${responsiveMode}\nDOM capture failed. Help with the current preview output.`,
+        },
+      }));
+      setSelectMode(false);
+      window.dispatchEvent(new CustomEvent("pipilot:open-chat"));
+    } finally {
+      setCapturing(false);
+    }
+  }, [previewUrl, responsiveMode]);
+
   const handleFullscreen = useCallback(() => {
     setIsFullscreen(prev => !prev);
   }, []);
@@ -460,6 +563,26 @@ export function DevServerPreview() {
           )}
         </button>
 
+        {/* Select / Capture for chat */}
+        <button
+          onClick={() => selectMode ? capturePreview() : setSelectMode(true)}
+          disabled={!isRunning}
+          title={selectMode ? "Capture & attach to chat" : "Select preview to attach to chat"}
+          style={{
+            ...navBtn(!isRunning),
+            background: selectMode ? `${C.accent}20` : "transparent",
+            color: selectMode ? C.accent : (!isRunning ? C.textFaint : C.textMid),
+            border: selectMode ? `1px solid ${C.accent}40` : "1px solid transparent",
+          }}
+        >
+          {capturing ? <Loader2 size={13} className="animate-spin" /> : selectMode ? <Camera size={13} /> : <MousePointerClick size={13} />}
+        </button>
+        {selectMode && (
+          <button onClick={() => setSelectMode(false)} title="Cancel select" style={navBtn(false)}>
+            <X size={11} />
+          </button>
+        )}
+
         {/* Open in new tab */}
         <button
           onClick={() => previewUrl && window.open(previewUrl, "_blank")}
@@ -632,10 +755,38 @@ export function DevServerPreview() {
                   style={{
                     width: "100%", height: "100%", border: "none",
                     background: "#fff",
+                    pointerEvents: selectMode ? "none" : "auto",
                   }}
                   title="Dev Server Preview"
                   src={previewUrl || "about:blank"}
                 />
+                {/* Select mode overlay */}
+                {selectMode && (
+                  <div
+                    onClick={capturePreview}
+                    style={{
+                      position: "absolute", inset: 0, zIndex: 10,
+                      background: `${C.accent}08`,
+                      border: `2px dashed ${C.accent}60`,
+                      borderRadius: 4,
+                      cursor: "crosshair",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      transition: "background 0.2s",
+                    }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = `${C.accent}15`; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = `${C.accent}08`; }}
+                  >
+                    <div style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "10px 20px", borderRadius: 8,
+                      background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)",
+                      color: C.accent, fontFamily: FONTS.mono, fontSize: 12, fontWeight: 600,
+                    }}>
+                      <Camera size={16} />
+                      {capturing ? "Capturing DOM tree..." : "Click to capture page structure & attach to chat"}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: 1 }}>

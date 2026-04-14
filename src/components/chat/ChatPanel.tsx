@@ -316,9 +316,29 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     window.addEventListener("pipilot:focus-chat-input", focusHandler);
     const clearAttHandler = () => setAttachments([]);
     window.addEventListener("pipilot:clear-attachments", clearAttHandler);
+    // Preview attachment from WebPreview "click to select"
+    const previewAttHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail) return;
+      setAttachments((prev) => {
+        if (prev.some((a) => a.id === detail.id)) return prev;
+        return [...prev, {
+          id: detail.id,
+          name: detail.name || "Preview",
+          type: "file" as const,
+          language: "preview",
+          lineCount: 0,
+          charCount: detail.content?.length || 0,
+          truncated: false,
+          content: detail.content || "",
+        }];
+      });
+    };
+    window.addEventListener("pipilot:add-preview-attachment", previewAttHandler);
     return () => {
       window.removeEventListener("pipilot:focus-chat-input", focusHandler);
       window.removeEventListener("pipilot:clear-attachments", clearAttHandler);
+      window.removeEventListener("pipilot:add-preview-attachment", previewAttHandler);
     };
   }, [sendMessage]);
 
