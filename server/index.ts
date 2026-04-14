@@ -1291,13 +1291,57 @@ function createIdeToolServer(projectId: string) {
     },
   );
 
+  // ── run_in_terminal ──
+  // Sends a command to the IDE's terminal panel. The terminal stays open
+  // after the stream ends, so long-running processes (dev servers, expo,
+  // watchers) keep running. The tool opens the terminal panel, waits for
+  // it to be ready, then sends the command.
+  const runInTerminal = tool(
+    "run_in_terminal",
+    "Send a command to the IDE's integrated terminal panel. The terminal stays open after the agent stream ends, " +
+    "so use this for long-running processes like dev servers, expo start, watchers, or any command that needs to persist. " +
+    "The command is typed into the terminal as if the user typed it. Use this instead of Bash when you need the process " +
+    "to keep running after your response is complete.",
+    {
+      command: z.string().describe("The shell command to run (e.g. 'npm run dev', 'npx expo start', 'python manage.py runserver')"),
+    },
+    async (args) => {
+      // We can't directly control the terminal from the server — instead,
+      // emit an SSE event that the frontend picks up and forwards to the
+      // terminal panel. The frontend handles opening the terminal and
+      // writing the command.
+      try {
+        // Broadcast via the SSE stream to the frontend
+        const sseRes = (globalThis as any).__pipilotSSEResponse;
+        if (sseRes && typeof sseRes.write === "function") {
+          sseRes.write(`data: ${JSON.stringify({
+            type: "terminal_command",
+            command: args.command,
+          })}\n\n`);
+          if (typeof (sseRes as any).flush === "function") (sseRes as any).flush();
+        }
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Command sent to terminal: \`${args.command}\`\nThe terminal panel will open and execute this command. It will keep running after this conversation ends.`,
+          }],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text" as const, text: `Failed to send to terminal: ${err.message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   return createSdkMcpServer({
     name: "pipilot",
     version: "1.0.0",
     tools: [
       getDiagnostics, manageDevServer, searchNpm, getDevServerLogs,
       updateProjectContext, frontendDesignGuide, analyzeUi, screenshotPreview,
-      memory,
+      memory, runInTerminal,
     ],
   });
 }
@@ -1908,7 +1952,9 @@ End your response with a section titled "## Plan" containing the numbered steps.
   let assistantText = "";
 
   // Reference to current SSE response for canUseTool to send questions
+  // Also stored globally so the run_in_terminal tool can emit events
   let sseRes = res;
+  (globalThis as any).__pipilotSSEResponse = res;
 
   // Create abort controller for this run
   const abortController = new AbortController();
@@ -3434,7 +3480,7 @@ app.post("/api/dev-server/start", async (req, res) => {
 
   // Reuse existing dev server if already running (unless force restart requested)
   const existing = getDevServerStatus(projectId);
-  if (!force && (existing.status === "running" || existing.status === "starting" || existing.status === "installing")) {
+  if (!force && existing && (existing.status === "running" || existing.status === "starting" || existing.status === "installing")) {
     console.log(`[dev-server] Reusing ${existing.status} server for ${projectId}${existing.port ? ` on port ${existing.port}` : ""}`);
     return res.json({
       success: true,
@@ -3466,7 +3512,7 @@ app.post("/api/dev-server/stop", (req, res) => {
 app.get("/api/dev-server/status", (req, res) => {
   const projectId = req.query.projectId as string;
   if (!projectId) return res.status(400).json({ error: "projectId required" });
-  res.json(getDevServerStatus(projectId));
+  res.json(getDevServerStatus(projectId) || { running: false, status: "stopped" });
 });
 
 // Proxy preview requests to the running dev server
@@ -3475,8 +3521,8 @@ app.get("/api/dev-preview", async (req, res) => {
   if (!projectId) return res.status(400).json({ error: "projectId required" });
 
   const status = getDevServerStatus(projectId);
-  if (!status.running || !status.port) {
-    return res.status(503).json({ error: "Dev server not running", status: status.status });
+  if (!status || !status.running || !status.port) {
+    return res.status(503).json({ error: "Dev server not running", status: status?.status || "stopped" });
   }
 
   // Redirect to the actual dev server
@@ -3498,7 +3544,7 @@ app.get("/api/dev-server/logs", (req, res) => {
 
   // Send existing logs as initial batch
   const status = getDevServerStatus(projectId);
-  if (status.logs.length > 0) {
+  if (status?.logs?.length) {
     for (const log of status.logs) {
       res.write(`data: ${JSON.stringify({ text: log, source: "stdout", level: "info" })}\n\n`);
     }
@@ -5240,7 +5286,9 @@ app.post("/api/connectors/remove", express.json(), (req, res) => {
   }
 });
 
-app.use("/api/cloud", createCloudRouter(getWorkDir));
+// Cloud API now runs as a separate process on port 3002.
+// See server/cloud.ts — run with: npx tsx server/cloud.ts --standalone
+// app.use("/api/cloud", createCloudRouter(getWorkDir));
 
 app.listen(PORT, () => {
   console.log(`[agent-server] Running on http://localhost:${PORT}`);

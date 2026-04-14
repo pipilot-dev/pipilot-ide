@@ -78,11 +78,28 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
       const nameFromPrompt = await generateProjectFolderName(prompt);
       await createProject(nameFromPrompt, "static", "blank");
       window.dispatchEvent(new CustomEvent("pipilot:open-chat"));
-      setTimeout(() => {
-        window.dispatchEvent(new CustomEvent("pipilot:focus-chat-input", { detail: { prefill: prompt, submit: true } }));
-      }, 250);
       setShowGenerate(false);
       setGeneratePrompt("");
+
+      // Wait for the chat session to initialize for the new project.
+      // useAgentChat emits "pipilot:chat-session-ready" after the
+      // session ID is set and the IndexedDB row is created.
+      await new Promise<void>((resolve) => {
+        const onReady = () => {
+          window.removeEventListener("pipilot:chat-session-ready", onReady);
+          resolve();
+        };
+        window.addEventListener("pipilot:chat-session-ready", onReady);
+        // Fallback timeout in case the event never fires
+        setTimeout(() => {
+          window.removeEventListener("pipilot:chat-session-ready", onReady);
+          resolve();
+        }, 3000);
+      });
+
+      // One more tick for React to commit the state update
+      await new Promise((r) => setTimeout(r, 200));
+      window.dispatchEvent(new CustomEvent("pipilot:focus-chat-input", { detail: { prefill: prompt, submit: true } }));
     } catch (err: any) {
       setGenerateError(err?.message || "Failed to start project");
     } finally {

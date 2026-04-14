@@ -302,13 +302,15 @@ export function stopDevServer(projectId: string): boolean {
 
 export function getDevServerStatus(projectId: string) {
   const app = runningApps.get(projectId);
-  if (!app) return { running: false, port: null, url: null, status: "stopped", logs: [] as string[] };
+  if (!app) return null;
 
   return {
     running: app.status === "running",
     port: app.port,
     url: app.url,
+    pid: app.process?.pid || null,
     status: app.status,
+    startedAt: app.startedAt,
     logs: app.logs.slice(-50),
   };
 }

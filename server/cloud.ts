@@ -1,5 +1,6 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import { execSync } from "child_process";
+import cors from "cors";
 import fs from "fs";
 import path from "path";
 
@@ -857,4 +858,49 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
   });
 
   return router;
+}
+
+// ── Standalone server mode ──
+// When run directly (not imported), starts its own Express server on port 3002.
+// This isolates cloud API calls from the main agent server so slow external
+// requests (GitHub, Vercel, Cloudflare) don't block agent streaming or terminal.
+if (process.argv[1]?.includes("cloud") || process.argv.includes("--standalone")) {
+  const WORKSPACE_BASE = path.join(process.cwd(), "workspaces");
+
+  // Workspace resolution — same logic as index.ts
+  function resolveWorkDir(projectId: string): string {
+    // Check linked workspaces registry
+    try {
+      const regPath = path.join(WORKSPACE_BASE, ".pipilot-linked.json");
+      if (fs.existsSync(regPath)) {
+        const registry = JSON.parse(fs.readFileSync(regPath, "utf8"));
+        for (const entry of Object.values(registry) as any[]) {
+          if (entry.id === projectId && entry.absolutePath && fs.existsSync(entry.absolutePath)) {
+            return entry.absolutePath;
+          }
+        }
+      }
+    } catch {}
+    return path.join(WORKSPACE_BASE, projectId);
+  }
+
+  const app = express();
+  app.use(cors());
+  app.use(express.json({ limit: "5mb" }));
+  app.use("/api/cloud", createCloudRouter(resolveWorkDir));
+
+  const PORT = 3002;
+
+  // Crash protection
+  process.on("uncaughtException", (err) => {
+    console.error("[cloud-server] Uncaught exception (non-fatal):", err.message);
+  });
+  process.on("unhandledRejection", (reason: any) => {
+    console.error("[cloud-server] Unhandled rejection (non-fatal):", reason?.message || reason);
+  });
+
+  app.listen(PORT, () => {
+    console.log(`[cloud-server] Running standalone on http://localhost:${PORT}`);
+    console.log(`[cloud-server] Workspace base: ${WORKSPACE_BASE}`);
+  });
 }

@@ -191,6 +191,13 @@ export function RealTerminal({ sessionId, projectId, initialCommand, profile, on
     // Forward keyboard input
     const dataDisposable = term.onData(writeToPty);
 
+    // Listen for AI agent's terminal commands
+    const onTerminalSend = (e: Event) => {
+      const cmd = (e as CustomEvent).detail?.command;
+      if (cmd) writeToPty(cmd + "\r");
+    };
+    window.addEventListener("pipilot:terminal-send", onTerminalSend);
+
     // Listen for settings changes and apply to the running terminal
     const onSettingChanged = (e: Event) => {
       const { key, value } = (e as CustomEvent).detail || {};
@@ -230,6 +237,7 @@ export function RealTerminal({ sessionId, projectId, initialCommand, profile, on
       clearTimeout(resizeTimer);
       resizeObserver.disconnect();
       dataDisposable.dispose();
+      window.removeEventListener("pipilot:terminal-send", onTerminalSend);
       window.removeEventListener("pipilot:setting-changed", onSettingChanged);
       sseRef.current?.close();
       sseRef.current = null;

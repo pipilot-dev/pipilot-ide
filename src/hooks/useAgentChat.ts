@@ -168,7 +168,7 @@ export function useAgentChat(
       if (stored) nextId = stored;
     } catch {}
     setCurrentSessionId(nextId);
-    // Ensure a chatSessions row exists for this id
+    // Ensure a chatSessions row exists for this id, then signal readiness
     (async () => {
       try {
         const existing = await db.chatSessions.get(nextId);
@@ -182,6 +182,12 @@ export function useAgentChat(
           });
         }
       } catch {}
+      // Signal that the chat session is ready for the new project.
+      // The Generate-with-AI flow in WelcomePage listens for this
+      // before auto-sending the prompt.
+      window.dispatchEvent(new CustomEvent("pipilot:chat-session-ready", {
+        detail: { projectId, sessionId: nextId },
+      }));
     })();
   }, [projectId]);
 
@@ -717,6 +723,22 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
                   requestId: event.requestId,
                   questions: event.questions,
                 });
+                break;
+              }
+
+              case "terminal_command": {
+                // Agent wants to run a command in the persistent terminal
+                const cmd = event.command;
+                if (cmd) {
+                  // Open the terminal panel
+                  window.dispatchEvent(new CustomEvent("pipilot:toggle-terminal"));
+                  // Wait for terminal to be ready, then send the command
+                  setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent("pipilot:terminal-send", {
+                      detail: { command: cmd },
+                    }));
+                  }, 500);
+                }
                 break;
               }
 

@@ -98,7 +98,7 @@ export default defineConfig({
         changeOrigin: true,
       },
       "/api/cloud": {
-        target: "http://localhost:3001",
+        target: "http://localhost:3002",
         changeOrigin: true,
       },
       "/api/agents": {
@@ -138,8 +138,18 @@ export default defineConfig({
     },
   },
   root: path.resolve(import.meta.dirname),
+  // Exclude workspace HTML files from dep scanning — they're user projects,
+  // not part of the IDE itself. Without this, Vite tries to parse them and
+  // fails on syntax errors in user code.
+  optimizeDeps: {
+    exclude: ["workspaces"],
+    entries: ["index.html"],
+  },
   build: {
     outDir: path.resolve(import.meta.dirname, "dist"),
     emptyOutDir: true,
+    rollupOptions: {
+      input: path.resolve(import.meta.dirname, "index.html"),
+    },
   },
 });

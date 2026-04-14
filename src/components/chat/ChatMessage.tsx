@@ -1046,12 +1046,18 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                             {msg.content}
                           </ReactMarkdown>
-                        ) : msg.streaming ? (
-                          <span className="flex items-center gap-2 text-xs" style={{ color: C.info }}>
-                            <Loader2 size={12} className="animate-spin" />
-                            <span>Thinking...</span>
-                          </span>
                         ) : null}
+                      </div>
+                    )}
+                    {/* Working indicator — shown in fallback branch too */}
+                    {msg.streaming && (
+                      <div className="flex items-center gap-2 py-1">
+                        <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.info, animation: "pulse-dot 1.4s ease-in-out infinite" }} />
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.info, animation: "pulse-dot 1.4s ease-in-out 0.2s infinite" }} />
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.info, animation: "pulse-dot 1.4s ease-in-out 0.4s infinite" }} />
+                        </div>
+                        <span style={{ fontSize: 11, color: C.info, fontWeight: 500 }}>Working...</span>
                       </div>
                     )}
                   </>
