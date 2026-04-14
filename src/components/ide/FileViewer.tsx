@@ -222,7 +222,28 @@ export function FileViewer({ filePath, fileName, content, renderCodeFallback }: 
                 h4: ({ children }) => <h4 style={{ fontSize: 14, fontWeight: 600, color: "hsl(220 14% 85%)", margin: "18px 0 6px" }}>{children}</h4>,
                 p: ({ children }) => <p style={{ margin: "10px 0", lineHeight: 1.75 }}>{children}</p>,
                 strong: ({ children }) => <strong style={{ color: "hsl(220 14% 88%)", fontWeight: 600 }}>{children}</strong>,
-                a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>{children}</a>,
+                a: ({ href, children }) => {
+                  const h = href || "";
+                  // .md links → open in editor as a file tab
+                  if (h.endsWith(".md") && !h.startsWith("http")) {
+                    const dir = filePath.includes("/") ? filePath.substring(0, filePath.lastIndexOf("/")) : "";
+                    const resolved = dir ? `${dir}/${h}` : h;
+                    return (
+                      <a href="#" onClick={(e) => { e.preventDefault(); window.dispatchEvent(new CustomEvent("pipilot:open-file", { detail: { filePath: resolved } })); }}
+                        style={{ color: C.accent, textDecoration: "none", borderBottom: `1px solid ${C.accent}40`, cursor: "pointer" }}>{children}</a>
+                    );
+                  }
+                  // Source file links
+                  if (/\.(tsx?|jsx?|css|json|html|py|go|rs)$/.test(h) && !h.startsWith("http")) {
+                    const dir = filePath.includes("/") ? filePath.substring(0, filePath.lastIndexOf("/")) : "";
+                    const resolved = dir ? `${dir}/${h}` : h;
+                    return (
+                      <a href="#" onClick={(e) => { e.preventDefault(); window.dispatchEvent(new CustomEvent("pipilot:open-file", { detail: { filePath: resolved } })); }}
+                        style={{ color: "hsl(207 80% 68%)", textDecoration: "none", cursor: "pointer", fontFamily: FONTS.mono, fontSize: "0.9em" }}>{children}</a>
+                    );
+                  }
+                  return <a href={h} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>{children}</a>;
+                },
                 blockquote: ({ children }) => <blockquote style={{ margin: "16px 0", padding: "12px 20px", borderLeft: `3px solid ${C.accent}`, background: `${C.accent}08`, borderRadius: "0 6px 6px 0", fontStyle: "italic" }}>{children}</blockquote>,
                 hr: () => <hr style={{ border: "none", borderTop: "1px solid hsl(220 13% 22%)", margin: "20px 0" }} />,
                 ul: ({ children }) => <ul style={{ margin: "8px 0", paddingLeft: 22, listStyle: "disc" }}>{children}</ul>,

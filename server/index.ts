@@ -1306,32 +1306,14 @@ function createIdeToolServer(projectId: string) {
       command: z.string().describe("The shell command to run (e.g. 'npm run dev', 'npx expo start', 'python manage.py runserver')"),
     },
     async (args) => {
-      // We can't directly control the terminal from the server — instead,
-      // emit an SSE event that the frontend picks up and forwards to the
-      // terminal panel. The frontend handles opening the terminal and
-      // writing the command.
-      try {
-        // Broadcast via the SSE stream to the frontend
-        const sseRes = (globalThis as any).__pipilotSSEResponse;
-        if (sseRes && typeof sseRes.write === "function") {
-          sseRes.write(`data: ${JSON.stringify({
-            type: "terminal_command",
-            command: args.command,
-          })}\n\n`);
-          if (typeof (sseRes as any).flush === "function") (sseRes as any).flush();
-        }
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Command sent to terminal: \`${args.command}\`\nThe terminal panel will open and execute this command. It will keep running after this conversation ends.`,
-          }],
-        };
-      } catch (err: any) {
-        return {
-          content: [{ type: "text" as const, text: `Failed to send to terminal: ${err.message}` }],
-          isError: true,
-        };
-      }
+      // Return a result with a special marker that the frontend detects
+      // from the tool_use event and routes to the terminal panel.
+      return {
+        content: [{
+          type: "text" as const,
+          text: `__TERMINAL_CMD__${args.command}__END_TERMINAL_CMD__\nCommand queued for terminal: \`${args.command}\`\nThe terminal panel will open and execute this command. It will keep running after this conversation ends.`,
+        }],
+      };
     },
   );
 

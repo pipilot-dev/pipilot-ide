@@ -961,8 +961,13 @@ export function IDELayout() {
   // Listen for the Welcome Page's "open chat" event
   useEffect(() => {
     const openChat = () => setChatOpen(true);
+    const openTerminal = () => setTerminalOpen(true);
     window.addEventListener("pipilot:open-chat", openChat);
-    return () => window.removeEventListener("pipilot:open-chat", openChat);
+    window.addEventListener("pipilot:open-terminal", openTerminal);
+    return () => {
+      window.removeEventListener("pipilot:open-chat", openChat);
+      window.removeEventListener("pipilot:open-terminal", openTerminal);
+    };
   }, []);
 
   // Generic notification dispatcher — any component can fire `pipilot:notify`
@@ -1305,7 +1310,7 @@ export function IDELayout() {
 
         {/* Cloud panel — full width, replaces sidebar + editor */}
         {activeView === "cloud" && (
-          <div className="flex-1 overflow-hidden">
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
             <CloudPanel />
           </div>
         )}

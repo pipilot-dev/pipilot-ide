@@ -543,7 +543,6 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
                 if (event.data) {
                   setMessages((prev) => prev.map((m) => {
                     if (m.id !== assistantId) return m;
-                    // Build parts: append to last text part or create new one
                     const parts = [...(m.parts || [])];
                     const lastPart = parts[parts.length - 1];
                     if (lastPart && lastPart.type === "text") {
@@ -553,6 +552,19 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
                     }
                     return { ...m, content: m.content + event.data, parts };
                   }));
+
+                  // Detect terminal command marker in streamed text
+                  const fullContent = (messagesRef.current.find(m => m.id === assistantId)?.content || "") + event.data;
+                  const termMatch = fullContent.match(/__TERMINAL_CMD__(.+?)__END_TERMINAL_CMD__/);
+                  if (termMatch && !(globalThis as any).__terminalCmdSent?.[termMatch[1]]) {
+                    if (!(globalThis as any).__terminalCmdSent) (globalThis as any).__terminalCmdSent = {};
+                    (globalThis as any).__terminalCmdSent[termMatch[1]] = true;
+                    const cmd = termMatch[1];
+                    window.dispatchEvent(new CustomEvent("pipilot:open-terminal"));
+                    setTimeout(() => {
+                      window.dispatchEvent(new CustomEvent("pipilot:terminal-send", { detail: { command: cmd } }));
+                    }, 1000);
+                  }
                 }
                 break;
 
@@ -727,17 +739,13 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
               }
 
               case "terminal_command": {
-                // Agent wants to run a command in the persistent terminal
+                // Legacy SSE-based terminal command (kept for compat)
                 const cmd = event.command;
                 if (cmd) {
-                  // Open the terminal panel
-                  window.dispatchEvent(new CustomEvent("pipilot:toggle-terminal"));
-                  // Wait for terminal to be ready, then send the command
+                  window.dispatchEvent(new CustomEvent("pipilot:open-terminal"));
                   setTimeout(() => {
-                    window.dispatchEvent(new CustomEvent("pipilot:terminal-send", {
-                      detail: { command: cmd },
-                    }));
-                  }, 500);
+                    window.dispatchEvent(new CustomEvent("pipilot:terminal-send", { detail: { command: cmd } }));
+                  }, 1000);
                 }
                 break;
               }

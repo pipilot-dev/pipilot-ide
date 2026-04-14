@@ -249,21 +249,23 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
 
   // Persist input to localStorage — debounced at 500ms to avoid
   // blocking the main thread on every keystroke.
+  // Persist draft to localStorage — reads from inputRef (the live value)
+  // since the textarea is uncontrolled and `input` state is stale during typing.
   const draftTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  useEffect(() => {
+  const saveDraft = useCallback(() => {
     if (!inputDraftKey) return;
     clearTimeout(draftTimerRef.current);
     draftTimerRef.current = setTimeout(() => {
       try {
-        if (input.length > 0) {
-          localStorage.setItem(inputDraftKey, input);
+        const val = inputRef.current || "";
+        if (val.length > 0) {
+          localStorage.setItem(inputDraftKey, val);
         } else {
           localStorage.removeItem(inputDraftKey);
         }
       } catch {}
     }, 500);
-    return () => clearTimeout(draftTimerRef.current);
-  }, [input, inputDraftKey]);
+  }, [inputDraftKey]);
   const handleRevertToMessage = useCallback(
     async (messageId: string) => {
       if (isStreaming) return;
@@ -611,6 +613,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     inputRef.current = "";
     setInput("");
     setAttachments([]);
+    // Clear draft from localStorage
+    if (inputDraftKey) try { localStorage.removeItem(inputDraftKey); } catch {}
     setShowSlashMenu(false);
     setShowAtMenu(false);
     if (textareaRef.current) {
@@ -748,8 +752,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
       return;
     }
 
-    // Normal typing — NO re-render. Just update the ref.
-    // Only sync to state occasionally for the char counter display.
+    // Normal typing — NO re-render. Just update the ref + save draft.
+    saveDraft();
   };
 
   const modeConfig: Record<ChatMode, { label: string; icon: React.ReactNode; desc: string; color: string }> = {
