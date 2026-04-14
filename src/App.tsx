@@ -3,6 +3,17 @@ import { ProjectProvider } from "@/contexts/ProjectContext";
 import { NotificationProvider } from "@/contexts/NotificationContext";
 import { ProblemsProvider } from "@/contexts/ProblemsContext";
 import { ExtensionProvider } from "@/contexts/ExtensionContext";
+import { OnboardingScreen, useOnboarding } from "@/components/ide/OnboardingScreen";
+
+function AppInner() {
+  const { showOnboarding, completeOnboarding } = useOnboarding();
+
+  if (showOnboarding) {
+    return <OnboardingScreen onComplete={completeOnboarding} />;
+  }
+
+  return <IDELayout />;
+}
 
 function App() {
   return (
@@ -10,7 +21,7 @@ function App() {
       <ProblemsProvider>
         <ExtensionProvider>
           <ProjectProvider>
-            <IDELayout />
+            <AppInner />
           </ProjectProvider>
         </ExtensionProvider>
       </ProblemsProvider>
