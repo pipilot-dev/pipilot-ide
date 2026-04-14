@@ -39,9 +39,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "server/**/*"
-    ],
+    "resources": [],
     "externalBin": [],
     "copyright": "© 2024 PiPilot",
     "category": "DeveloperTool",
