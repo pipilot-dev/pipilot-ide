@@ -13,12 +13,17 @@
     "title": "PiPilot IDE",
     "windows": [
       {
+        "label": "main",
         "title": "PiPilot IDE",
         "width": 1400,
         "height": 900,
+        "minWidth": 800,
+        "minHeight": 500,
         "resizable": true,
         "fullscreen": false,
-        "decorations": true
+        "decorations": true,
+        "center": true,
+        "visible": true
       }
     ],
     "security": {
@@ -35,8 +40,56 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [],
-    "externalBin": []
+    "resources": [
+      "server/**/*"
+    ],
+    "externalBin": [],
+    "copyright": "© 2024 PiPilot",
+    "category": "DeveloperTool",
+    "shortDescription": "AI-native code editor",
+    "longDescription": "PiPilot IDE is an AI-native code editor with integrated terminal, cloud management, autonomous agent, and real-time preview. Build full-stack apps with AI assistance.",
+    "homepage": "https://pipilot.dev",
+    "createUpdaterArtifacts": "v1Compatible",
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "tsp": false,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "headerImage": null,
+        "sidebarImage": null,
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "template": null
+      },
+      "wix": null
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "frameworks": [],
+      "signingIdentity": null,
+      "providerShortName": null,
+      "entitlements": null
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      },
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1"],
+        "section": "devel",
+        "priority": "optional"
+      },
+      "rpm": {
+        "release": "1"
+      }
+    }
   },
   "plugins": {
     "shell": {
@@ -52,6 +105,14 @@
           "cmd": "npx",
           "args": true
         }
+      ]
+    },
+    "updater": {
+      "active": true,
+      "dialog": true,
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/niccolowidberg/pipilot-ide/releases/latest/download/latest.json"
       ]
     }
   }
