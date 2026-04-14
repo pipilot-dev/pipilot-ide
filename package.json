@@ -9,13 +9,8 @@
     "dev:server": "tsx server/index.ts",
     "dev:cloud": "tsx server/cloud.ts --standalone",
     "build": "vite build --config vite.config.ts",
-    "build:server": "node scripts/bundle-server.mjs",
-    "build:all": "pnpm build && pnpm build:server",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",

@@ -68,6 +68,7 @@ export function AskUserDialog({ requestId, questions, onAnswer }: AskUserDialogP
   const answeredCount = questions.filter(
     (q) => answers[q.question] || customTexts[q.question]?.trim(),
   ).length;
+  
 
   return (
     <div
