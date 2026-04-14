@@ -126,124 +126,156 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
         background: C.bg, color: C.text, fontFamily: F.s, minHeight: 0,
       }}
     >
-      {/* Subtle radial glow */}
+      {/* ── Atmospheric background layers ── */}
+      {/* Warm accent glow — top left */}
       <div aria-hidden style={{
-        position: "absolute", top: -80, left: "50%", transform: "translateX(-50%)",
-        width: 800, height: 400,
-        background: `radial-gradient(ellipse at center, ${C.accent}06 0%, transparent 70%)`,
+        position: "absolute", top: -180, left: -100,
+        width: 700, height: 700,
+        background: `radial-gradient(circle, ${C.accent}0a 0%, transparent 60%)`,
         pointerEvents: "none",
       }} />
+      {/* Cool blue glow — bottom right */}
+      <div aria-hidden style={{
+        position: "absolute", bottom: -200, right: -100,
+        width: 600, height: 600,
+        background: `radial-gradient(circle, hsl(207 80% 50% / 0.04) 0%, transparent 60%)`,
+        pointerEvents: "none",
+      }} />
+      {/* Subtle grain texture */}
+      <div aria-hidden style={{
+        position: "absolute", inset: 0, opacity: 0.3, pointerEvents: "none",
+        backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E")`,
+      }} />
 
-      <div style={{ position: "relative", maxWidth: 680, margin: "0 auto", padding: "48px 40px 60px" }}>
+      <div style={{ position: "relative", maxWidth: 720, margin: "0 auto", padding: "36px 40px 60px" }}>
 
-        {/* ── Logo + Title ── */}
+        {/* ── Hero section ── */}
         <header style={{
-          display: "flex", alignItems: "center", gap: 16, marginBottom: 40,
-          animation: "wFadeIn 0.45s cubic-bezier(0.16, 1, 0.3, 1)",
+          display: "flex", flexDirection: "column", alignItems: "center",
+          textAlign: "center", marginBottom: 44,
+          animation: "wSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1)",
         }}>
           <div style={{
-            width: 44, height: 44, borderRadius: 11, overflow: "hidden",
-            background: logoLoaded ? "transparent" : C.surface,
-            border: `1px solid ${C.border}`,
+            width: 56, height: 56, borderRadius: 16, overflow: "hidden",
+            background: C.surface, border: `1px solid ${C.border}`,
             display: "flex", alignItems: "center", justifyContent: "center",
-            flexShrink: 0,
-            boxShadow: `0 4px 16px -4px #00000040`,
+            marginBottom: 16,
+            boxShadow: `0 8px 32px -8px ${C.accent}20, 0 2px 8px rgba(0,0,0,0.3)`,
           }}>
-            <img
-              src={LOGO_URL} alt="PiPilot" onLoad={() => setLogoLoaded(true)}
-              style={{ width: "72%", height: "72%", objectFit: "contain", opacity: logoLoaded ? 1 : 0, transition: "opacity 0.3s" }}
-            />
+            <img src={LOGO_URL} alt="PiPilot" onLoad={() => setLogoLoaded(true)}
+              style={{ width: "68%", height: "68%", objectFit: "contain", opacity: logoLoaded ? 1 : 0, transition: "opacity 0.4s" }} />
           </div>
-          <div>
-            <h1 style={{ fontFamily: F.d, fontSize: 22, fontWeight: 400, lineHeight: 1.1, color: C.text, margin: 0 }}>
-              PiPilot IDE
-            </h1>
-          </div>
+          <h1 style={{
+            fontFamily: F.d, fontSize: 28, fontWeight: 300, color: C.text,
+            margin: "0 0 4px", letterSpacing: "-0.03em",
+          }}>
+            PiPilot <span style={{ fontWeight: 500 }}>IDE</span>
+          </h1>
+          <p style={{
+            fontFamily: F.m, fontSize: 9, color: C.textDim,
+            letterSpacing: "0.12em", textTransform: "uppercase", margin: 0,
+          }}>
+            ai-native code editor
+          </p>
         </header>
 
-        {/* ── Two-column: Start + Recent ── */}
+        {/* ── Quick action cards ── */}
         <div style={{
-          display: "grid", gridTemplateColumns: "1fr 1fr", gap: 48, marginBottom: 36,
-          animation: "wFadeIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) 0.04s backwards",
+          display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 32,
+          animation: "wSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.06s backwards",
         }}>
-          {/* Start */}
-          <div>
-            <SectionTitle>Start</SectionTitle>
-            <NavList>
-              <NavLink icon={<FilePlus size={14} />} onClick={() => {
-                if (onNewFile) { onNewFile(); return; }
-                setNewFileError(!activeProjectId ? "Open or create a project first." : null);
-                setNewFileName(""); setShowNewFile(true);
-              }}>New File...</NavLink>
-              <NavLink icon={<FolderOpen size={14} />} onClick={() => setShowOpenFolder(true)}>Open Folder...</NavLink>
-              <NavLink icon={<GitBranch size={14} />} onClick={() => setShowClone(true)}>Clone Repository...</NavLink>
-              <NavLink icon={<Sparkles size={14} />} accent onClick={() => {
-                setGeneratePrompt(""); setGenerateError(null); setShowGenerate(true);
-                setTimeout(() => generateTextareaRef.current?.focus(), 80);
-              }}>Generate with AI...</NavLink>
-            </NavList>
-          </div>
-
-          {/* Recent */}
-          <div>
-            <SectionTitle>Recent</SectionTitle>
-            {recentProjects.length === 0 ? (
-              <p style={{ fontSize: 12, color: C.textDim, lineHeight: 1.6, margin: 0 }}>
-                No recent projects.{" "}
-                <button type="button" onClick={() => setShowOpenFolder(true)} style={{
-                  background: "none", border: "none", padding: 0, color: "hsl(207 90% 68%)",
-                  cursor: "pointer", fontFamily: "inherit", fontSize: "inherit",
-                }}>Open a folder</button> to start.
-              </p>
-            ) : (
-              <NavList>
-                {recentProjects.map((p) => (
-                  <button
-                    key={p.id} type="button" onClick={() => switchProject(p.id)}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 8,
-                      padding: "5px 8px", marginLeft: -8, width: "calc(100% + 16px)",
-                      background: "transparent", border: "none",
-                      color: C.textMid, fontFamily: F.s, fontSize: 12.5,
-                      cursor: "pointer", borderRadius: 4, textAlign: "left",
-                      transition: "background 0.12s",
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = C.surfaceAlt; e.currentTarget.style.color = C.text; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.textMid; }}
-                  >
-                    <FolderOpen size={12} style={{ opacity: 0.45, flexShrink: 0 }} />
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
-                    <span style={{ fontFamily: F.m, fontSize: 9, color: C.textDim, flexShrink: 0 }}>{relativeTime(p.updatedAt)}</span>
-                  </button>
-                ))}
-              </NavList>
-            )}
-          </div>
+          {[
+            { icon: <FolderOpen size={18} />, label: "Open Folder", color: C.info, onClick: () => setShowOpenFolder(true) },
+            { icon: <GitBranch size={18} />, label: "Clone Repo", color: "#c678dd", onClick: () => setShowClone(true) },
+            { icon: <Sparkles size={18} />, label: "Generate", color: C.accent, onClick: () => { setGeneratePrompt(""); setGenerateError(null); setShowGenerate(true); setTimeout(() => generateTextareaRef.current?.focus(), 80); } },
+            { icon: <FilePlus size={18} />, label: "New File", color: "#98c379", onClick: () => { if (onNewFile) { onNewFile(); return; } setNewFileError(!activeProjectId || activeProjectId === "default-project" ? "Open or create a project first." : null); setNewFileName(""); setShowNewFile(true); } },
+          ].map((a, i) => (
+            <button key={i} type="button" onClick={a.onClick} style={{
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+              padding: "18px 12px 14px", background: C.surface, border: `1px solid ${C.border}`,
+              borderRadius: 10, cursor: "pointer", transition: "all 0.2s",
+              color: C.text,
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = a.color + "60"; e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 8px 24px -4px ${a.color}15`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}
+            >
+              <div style={{ color: a.color, opacity: 0.85 }}>{a.icon}</div>
+              <span style={{ fontFamily: F.m, fontSize: 9, fontWeight: 600, letterSpacing: "0.06em", color: C.textMid }}>{a.label}</span>
+            </button>
+          ))}
         </div>
 
+        {/* ── Recent projects ── */}
+        {recentProjects.length > 0 && (
+          <div style={{
+            marginBottom: 32,
+            animation: "wSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.1s backwards",
+          }}>
+            <div style={{
+              fontFamily: F.m, fontSize: 9, fontWeight: 600, color: C.textDim,
+              letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8,
+            }}>Recent Projects</div>
+            <div style={{
+              background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+              overflow: "hidden",
+            }}>
+              {recentProjects.map((p, i) => (
+                <button key={p.id} type="button" onClick={() => switchProject(p.id)} style={{
+                  display: "flex", alignItems: "center", gap: 10, width: "100%",
+                  padding: "10px 14px",
+                  background: "transparent", border: "none", borderBottom: i < recentProjects.length - 1 ? `1px solid ${C.border}` : "none",
+                  color: C.text, fontFamily: F.s, fontSize: 12, cursor: "pointer",
+                  textAlign: "left", transition: "background 0.15s",
+                }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = C.surfaceAlt; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  <FolderOpen size={13} style={{ color: C.accent, opacity: 0.6, flexShrink: 0 }} />
+                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{p.name}</span>
+                  <span style={{ fontFamily: F.m, fontSize: 9, color: C.textDim, flexShrink: 0 }}>{relativeTime(p.updatedAt)}</span>
+                  <ChevronRight size={12} style={{ color: C.textFaint }} />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* ── Walkthroughs ── */}
-        <div style={{ animation: "wFadeIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) 0.08s backwards" }}>
-          <SectionTitle>Walkthroughs</SectionTitle>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ animation: "wSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.14s backwards" }}>
+          <div style={{
+            fontFamily: F.m, fontSize: 9, fontWeight: 600, color: C.textDim,
+            letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8,
+          }}>Learn</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <WalkthroughCard
               icon={<Zap size={18} />}
-              gradient="hsl(220 13% 22%)"
-              title="Get Started with PiPilot"
-              description="Set up your workspace, navigate the editor, and learn the essentials"
+              gradient={`linear-gradient(135deg, ${C.accent}18 0%, transparent 60%)`}
+              title="Get Started"
+              description="Workspace, editor, terminal"
               steps={6}
               storageKey="pipilot-wt-get-started"
               onClick={() => openWalkthrough("get-started")}
             />
             <WalkthroughCard
               icon={<MessageSquare size={18} />}
-              gradient="hsl(220 13% 22%)"
+              gradient="linear-gradient(135deg, hsl(207 80% 50% / 0.08) 0%, transparent 60%)"
               title="AI Power User"
-              description="Use the AI agent to generate, edit, refactor, and deploy your projects"
+              description="Agent, checkpoints, deploy"
               steps={6}
               storageKey="pipilot-wt-ai-power"
               onClick={() => openWalkthrough("ai-power")}
             />
           </div>
+        </div>
+
+        {/* ── Footer tip ── */}
+        <div style={{
+          marginTop: 32, textAlign: "center",
+          animation: "wSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.18s backwards",
+        }}>
+          <span style={{ fontFamily: F.m, fontSize: 9, color: C.textFaint }}>
+            press <kbd style={{ padding: "1px 5px", background: C.surfaceAlt, border: `1px solid ${C.border}`, borderRadius: 3, fontSize: 9, fontFamily: F.m, color: C.textDim }}>Ctrl+Shift+I</kbd> to open AI chat
+          </span>
         </div>
       </div>
 
@@ -307,8 +339,8 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
       )}
 
       <style>{`
-        @keyframes wFadeIn {
-          from { opacity: 0; transform: translateY(8px); }
+        @keyframes wSlideUp {
+          from { opacity: 0; transform: translateY(16px); }
           to { opacity: 1; transform: translateY(0); }
         }
       `}</style>
@@ -318,38 +350,7 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
 
 // ─── Sub-components ─────────────────────────────
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <h2 style={{
-      fontFamily: F.s, fontSize: 11, fontWeight: 700, color: C.text,
-      textTransform: "uppercase", letterSpacing: "0.06em",
-      margin: "0 0 10px",
-    }}>{children}</h2>
-  );
-}
-
-function NavList({ children }: { children: React.ReactNode }) {
-  return <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>{children}</div>;
-}
-
-function NavLink({ children, icon, onClick, accent }: { children: React.ReactNode; icon: React.ReactNode; onClick: () => void; accent?: boolean }) {
-  return (
-    <button type="button" onClick={onClick} style={{
-      display: "flex", alignItems: "center", gap: 8,
-      padding: "5px 8px", marginLeft: -8, width: "calc(100% + 16px)",
-      background: "transparent", border: "none",
-      color: accent ? C.accent : "hsl(207 90% 68%)",
-      fontFamily: F.s, fontSize: 12.5, cursor: "pointer",
-      borderRadius: 4, transition: "background 0.12s", textAlign: "left",
-    }}
-    onMouseEnter={(e) => { e.currentTarget.style.background = C.surfaceAlt; }}
-    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-    >
-      <span style={{ opacity: 0.6, flexShrink: 0 }}>{icon}</span>
-      {children}
-    </button>
-  );
-}
+// Removed: SectionTitle, NavList, NavLink — replaced by action cards
 
 function WalkthroughCard({ icon, gradient, title, description, steps, storageKey, onClick }: {
   icon: React.ReactNode; gradient: string; title: string; description: string;
@@ -367,37 +368,27 @@ function WalkthroughCard({ icon, gradient, title, description, steps, storageKey
   const allDone = doneCount >= steps;
 
   return (
-    <button
-      type="button" onClick={onClick}
-      style={{
-        display: "flex", alignItems: "center", gap: 14,
-        padding: "14px 16px", width: "100%",
-        background: "transparent",
-        border: `1px solid ${C.border}`,
-        borderRadius: 8, cursor: "pointer",
-        textAlign: "left",
-        transition: "all 0.15s",
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = C.surface; e.currentTarget.style.borderColor = C.borderHover; }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = C.border; }}
+    <button type="button" onClick={onClick} style={{
+      display: "flex", flexDirection: "column", gap: 10,
+      padding: "16px", width: "100%",
+      background: C.surface, backgroundImage: gradient,
+      border: `1px solid ${C.border}`,
+      borderRadius: 10, cursor: "pointer", textAlign: "left",
+      transition: "all 0.2s", position: "relative", overflow: "hidden",
+    }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.transform = "none"; }}
     >
-      <div style={{
-        width: 36, height: 36, borderRadius: 8, background: gradient,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        color: C.accent, flexShrink: 0,
-      }}>
-        {icon}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ color: C.accent, opacity: 0.7 }}>{icon}</div>
+        <div style={{ fontFamily: F.s, fontSize: 12, fontWeight: 600, color: C.text }}>{title}</div>
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: F.s, fontSize: 13, fontWeight: 600, color: C.text }}>{title}</div>
-        <div style={{ fontFamily: F.s, fontSize: 11, color: C.textDim, marginTop: 2 }}>{description}</div>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-        <div style={{ width: 40, height: 3, borderRadius: 2, background: C.surfaceAlt, overflow: "hidden" }}>
-          <div style={{ width: `${progress * 100}%`, height: "100%", background: allDone ? "#22c55e" : C.accent, borderRadius: 2, transition: "width 0.3s" }} />
+      <div style={{ fontFamily: F.s, fontSize: 10, color: C.textDim, lineHeight: 1.5 }}>{description}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ flex: 1, height: 2, borderRadius: 1, background: C.surfaceAlt, overflow: "hidden" }}>
+          <div style={{ width: `${progress * 100}%`, height: "100%", background: allDone ? "#22c55e" : C.accent, borderRadius: 1, transition: "width 0.3s" }} />
         </div>
-        <span style={{ fontFamily: F.m, fontSize: 9, color: C.textDim }}>{doneCount}/{steps}</span>
-        <ChevronRight size={14} style={{ color: C.textDim }} />
+        <span style={{ fontFamily: F.m, fontSize: 8, color: C.textDim }}>{doneCount}/{steps}</span>
       </div>
     </button>
   );
