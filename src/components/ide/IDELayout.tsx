@@ -1021,6 +1021,10 @@ export function IDELayout() {
 
     return {
       onNewFile: () => {
+        if (!activeProjectId || activeProjectId === "default-project") {
+          window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"));
+          return;
+        }
         const name = prompt("New file (path):");
         if (!name?.trim()) return;
         handleCreateFile(name.trim(), "").catch((err) =>
@@ -1407,10 +1411,17 @@ export function IDELayout() {
                 }}
               />
               <div style={{ height: problemsResize.size, minHeight: 120, flexShrink: 0 }}>
-                <ProblemsPanel
-                  onClose={() => setProblemsOpen(false)}
-                  onNavigateToFile={handleNavigateToFile}
-                />
+                {(!activeProjectId || activeProjectId === "default-project") ? (
+                  <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8, background: "#1c1c21" }}>
+                    <span style={{ fontSize: 11, color: "#6b6b76" }}>Open a project to see diagnostics</span>
+                    <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"))} style={{ padding: "5px 12px", borderRadius: 4, fontSize: 10, fontFamily: "'Geist Mono', monospace", fontWeight: 600, background: "#232329", border: "1px solid #2e2e35", color: "#b0b0b8", cursor: "pointer" }}>Open Folder</button>
+                  </div>
+                ) : (
+                  <ProblemsPanel
+                    onClose={() => setProblemsOpen(false)}
+                    onNavigateToFile={handleNavigateToFile}
+                  />
+                )}
               </div>
             </>
           )}
@@ -1439,7 +1450,14 @@ export function IDELayout() {
                   No extra chrome needed — TerminalPanel includes the editorial
                   label, shell tabs, and action icons. */}
               <div style={{ height: terminalResize.size - 4, minHeight: 86, flexShrink: 0 }}>
-                <TerminalPanel onClose={() => setTerminalOpen(false)} />
+                {(!activeProjectId || activeProjectId === "default-project") ? (
+                  <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8, background: "#1c1c21" }}>
+                    <span style={{ fontSize: 11, color: "#6b6b76" }}>Open a project to use the terminal</span>
+                    <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"))} style={{ padding: "5px 12px", borderRadius: 4, fontSize: 10, fontFamily: "'Geist Mono', monospace", fontWeight: 600, background: "#232329", border: "1px solid #2e2e35", color: "#b0b0b8", cursor: "pointer" }}>Open Folder</button>
+                  </div>
+                ) : (
+                  <TerminalPanel onClose={() => setTerminalOpen(false)} />
+                )}
               </div>
             </>
           )}
