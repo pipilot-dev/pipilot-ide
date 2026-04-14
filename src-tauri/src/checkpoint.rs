@@ -32,6 +32,7 @@ fn run_git(cwd: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
+#[allow(dead_code)]
 fn now_epoch() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -65,7 +66,7 @@ fn write_index(data_dir: &str, project_id: &str, entries: &[CheckpointEntry]) ->
 // ── Tauri commands ──
 
 #[tauri::command]
-pub fn checkpoint_create(cwd: String, label: String, message_id: Option<String>) -> Result<String, String> {
+pub fn checkpoint_create(cwd: String, label: String, _message_id: Option<String>) -> Result<String, String> {
     run_git(&cwd, &["add", "-A"])?;
     let msg = format!("checkpoint: {}", label);
     run_git(&cwd, &["commit", "-m", &msg, "--allow-empty"])?;

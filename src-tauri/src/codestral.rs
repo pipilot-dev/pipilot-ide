@@ -31,7 +31,7 @@ struct FimRequest {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct ChatMessage {
+pub struct ChatMessage {
     role: String,
     content: String,
 }
