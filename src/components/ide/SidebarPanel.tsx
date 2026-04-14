@@ -199,6 +199,32 @@ const bulkBtnStyle: React.CSSProperties = {
 export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSearchFiles, onRunPreview, onOpenTerminal, onOpenCommit, onOpenDiff, onCreateFile, onCreateFolder, onRenameFile, onDeleteFile, onUpdateFileContent, onCheckFileExists, onExpandLazyFolder, git }: SidebarPanelProps) {
   useEffect(() => { injectFonts(); }, []);
   const { activeProjectId } = useActiveProject();
+  const isDefaultProject = !activeProjectId || activeProjectId === "default-project";
+
+  // Shared "no project" empty state for all project-dependent panels
+  const NoProjectGuard = () => (
+    <div style={{ padding: "32px 16px", textAlign: "center", flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ fontSize: 11, color: C.textDim, marginBottom: 16, lineHeight: 1.6 }}>
+        Open a folder or generate a project to get started.
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%", maxWidth: 200 }}>
+        <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"))} style={{
+          padding: "8px 14px", borderRadius: 6, fontSize: 11, fontFamily: FONTS.mono, fontWeight: 600,
+          background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text, cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+        }}>
+          <FolderOpen size={13} /> Open Folder
+        </button>
+        <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:show-generate-modal"))} style={{
+          padding: "8px 14px", borderRadius: 6, fontSize: 11, fontFamily: FONTS.mono, fontWeight: 600,
+          background: C.accent, border: "none", color: "#fff", cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+        }}>
+          <Sparkles size={13} /> Generate with AI
+        </button>
+      </div>
+    </div>
+  );
   const { activeProject } = useProjects();
   const { addNotification, showToast } = useNotifications();
   const [searchQuery, setSearchQuery] = useState("");
@@ -1304,29 +1330,7 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
                   }}
                 />
               )}
-              {activeProjectId === "default-project" ? (
-                <div style={{ padding: "24px 16px", textAlign: "center" }}>
-                  <div style={{ fontSize: 11, color: C.textDim, marginBottom: 16, lineHeight: 1.6 }}>
-                    Open a folder or generate a project to get started.
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"))} style={{
-                      padding: "8px 14px", borderRadius: 6, fontSize: 11, fontFamily: FONTS.mono, fontWeight: 600,
-                      background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text, cursor: "pointer",
-                      display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                    }}>
-                      <FolderOpen size={13} /> Open Folder
-                    </button>
-                    <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:show-generate-modal"))} style={{
-                      padding: "8px 14px", borderRadius: 6, fontSize: 11, fontFamily: FONTS.mono, fontWeight: 600,
-                      background: C.accent, border: "none", color: "#fff", cursor: "pointer",
-                      display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                    }}>
-                      <Sparkles size={13} /> Generate with AI
-                    </button>
-                  </div>
-                </div>
-              ) : <FileTree
+              {isDefaultProject ? <NoProjectGuard /> : <FileTree
                 nodes={filteredFiles}
                 selectedFileId={selectedFileId}
                 onSelectFile={onSelectFile}
@@ -1357,7 +1361,8 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
         </>
       )}
 
-      {view === "search" && (
+      {view === "search" && isDefaultProject && <NoProjectGuard />}
+      {view === "search" && !isDefaultProject && (
         <div className="flex flex-col h-full overflow-hidden">
           {/* Editorial section header */}
           <div
@@ -1673,11 +1678,13 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
         </div>
       )}
 
-      {view === "source-control" && (
+      {view === "source-control" && isDefaultProject && <NoProjectGuard />}
+      {view === "source-control" && !isDefaultProject && (
         <SourceControlPanel onOpenCommit={onOpenCommit} onOpenDiff={onOpenDiff} git={git} />
       )}
 
-      {view === "debug" && (
+      {view === "debug" && isDefaultProject && <NoProjectGuard />}
+      {view === "debug" && !isDefaultProject && (
         <RunDebugPanel onRunPreview={onRunPreview} onOpenTerminal={onOpenTerminal} />
       )}
 
@@ -1685,7 +1692,8 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
         <ExtensionMarketplace />
       )}
 
-      {view === "wiki" && (
+      {view === "wiki" && isDefaultProject && <NoProjectGuard />}
+      {view === "wiki" && !isDefaultProject && (
         <WikiPanel activeTabId={selectedFileId} />
       )}
 
