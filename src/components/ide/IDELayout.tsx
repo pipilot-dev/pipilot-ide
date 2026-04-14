@@ -961,7 +961,7 @@ export function IDELayout() {
   // Listen for the Welcome Page's "open chat" event
   useEffect(() => {
     const openChat = () => setChatOpen(true);
-    const openTerminal = () => setTerminalOpen(true);
+    const openTerminal = () => { setTerminalOpen(true); setProblemsOpen(false); };
     window.addEventListener("pipilot:open-chat", openChat);
     const openSettings = () => setActiveView("settings");
     const openFolderPicker = () => setShowOpenFolderPicker(true);
@@ -1052,19 +1052,19 @@ export function IDELayout() {
       onReplace: () => editorAction("replace"),
 
       onToggleSidebar: () => setActiveView((prev) => (prev ? null : "explorer")),
-      onToggleTerminal: () => setTerminalOpen((p) => !p),
+      onToggleTerminal: () => setTerminalOpen((p) => { if (!p) setProblemsOpen(false); return !p; }),
       onToggleChat: () => setChatOpen((p) => !p),
       onCommandPalette: () => setCommandPaletteOpen((p) => !p),
       onOpenExplorer: () => setActiveView("explorer"),
       onOpenSearch: () => setActiveView("search"),
       onOpenSourceControl: () => setActiveView("source-control"),
-      onOpenProblems: () => setProblemsOpen(true),
+      onOpenProblems: () => { setProblemsOpen(true); setTerminalOpen(false); },
       onOpenExtensions: () => setActiveView("extensions"),
 
       onRunPreview: handleOpenPreview,
       onDeploy: handleDeploy,
 
-      onNewTerminal: () => setTerminalOpen(true),
+      onNewTerminal: () => { setTerminalOpen(true); setProblemsOpen(false); },
 
       onWelcome: () => { setTabs([]); setActiveTabId(null); },
       onKeyboardShortcuts: () => setHelpOpen(true),
@@ -1096,7 +1096,7 @@ export function IDELayout() {
       // Ctrl+` - toggle terminal
       if ((e.ctrlKey || e.metaKey) && e.key === "`") {
         e.preventDefault();
-        setTerminalOpen((p) => !p);
+        setTerminalOpen((p) => { if (!p) setProblemsOpen(false); return !p; });
       }
       // Ctrl+, - toggle settings
       if ((e.ctrlKey || e.metaKey) && e.key === ",") {
@@ -1347,7 +1347,7 @@ export function IDELayout() {
                 onSelectFile={handleSelectFile}
                 files={files}
                 onRunPreview={handleOpenPreview}
-                onOpenTerminal={() => setTerminalOpen(true)}
+                onOpenTerminal={() => { setTerminalOpen(true); setProblemsOpen(false); }}
                 onOpenCommit={handleOpenCommit}
                 onOpenDiff={handleOpenDiff}
                 onCreateFile={handleCreateFile}
@@ -1682,14 +1682,14 @@ export function IDELayout() {
         </div>
         <button
           className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
-          onClick={() => setProblemsOpen((p) => !p)}
+          onClick={() => setProblemsOpen((p) => { if (!p) setTerminalOpen(false); return !p; })}
         >
           {errorCount > 0 ? <AlertCircle size={13} style={{ color: C.error }} /> : <CheckCircle2 size={11} style={{ color: C.ok }} />}
           <span>{errorCount > 0 || warningCount > 0 ? `${errorCount} errors, ${warningCount} warnings` : "No Problems"}</span>
         </button>
         <button
           className="flex items-center gap-1 hover:opacity-80 transition-opacity"
-          onClick={() => setTerminalOpen((p) => !p)}
+          onClick={() => setTerminalOpen((p) => { if (!p) setProblemsOpen(false); return !p; })}
         >
           <Terminal size={11} />
           <span>Terminal</span>
