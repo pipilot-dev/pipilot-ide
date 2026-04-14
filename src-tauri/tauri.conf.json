@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:51730",
     "beforeDevCommand": "pnpm dev:client",
-    "beforeBuildCommand": "pnpm build && node scripts/bundle-server.mjs"
+    "beforeBuildCommand": "pnpm build:all"
   },
   "app": {
     "windows": [
