@@ -38,6 +38,7 @@ export interface ChatMessage {
   checkpointId?: string;
   parts?: MessagePart[];  // ordered sequence of text chunks and tool calls
   interrupted?: boolean;  // marks a session that was interrupted (e.g. by page refresh)
+  reverted?: boolean;     // true when user restored to an earlier checkpoint — message is kept but dimmed
 }
 
 function generateId() {

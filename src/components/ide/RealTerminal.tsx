@@ -53,32 +53,38 @@ export function RealTerminal({ sessionId, projectId, initialCommand, profile, on
 
     const term = new Terminal({
       cursorBlink: getSetting("terminalCursorBlink", "true") !== "false",
-      fontSize: parseInt(getSetting("terminalFontSize", "12")) || 12,
-      scrollback: parseInt(getSetting("terminalScrollback", "10000")) || 10000,
-      fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace",
+      fontSize: parseInt(getSetting("terminalFontSize", "13")) || 13,
+      scrollback: parseInt(getSetting("terminalScrollback", "5000")) || 5000,
+      fontFamily: '"JetBrains Mono", "Cascadia Code", "Fira Code", "Consolas", monospace',
+      fontWeight: "500",
+      fontWeightBold: "500",
+      letterSpacing: 1,
+      drawBoldTextInBrightColors: false,
+      allowProposedApi: true,
+      allowTransparency: true,
       theme: {
         background: "#16161a",
-        foreground: "#a0a0a8",
-        cursor: "#8a8a94",
-        selectionBackground: "#2a3a5040",
+        foreground: "#e0e0e6",
+        cursor: "#a1e67b",
+        cursorAccent: "#16161a",
+        selectionBackground: "rgba(161, 230, 123, 0.18)",
         black: "#16161a",
-        red: "#c06a64",
-        green: "#7ea868",
-        yellow: "#b09060",
-        blue: "#6a9ec0",
-        magenta: "#9880b8",
-        cyan: "#5aab9e",
-        white: "#a0a0a8",
-        brightBlack: "#5f5f6a",
-        brightRed: "#c06a64",
-        brightGreen: "#7ea868",
-        brightYellow: "#b09060",
-        brightBlue: "#6a9ec0",
-        brightMagenta: "#9880b8",
-        brightCyan: "#5aab9e",
-        brightWhite: "#b0b0b8",
+        red: "#e06c75",
+        green: "#98c379",
+        yellow: "#e5c07b",
+        blue: "#61afef",
+        magenta: "#c678dd",
+        cyan: "#56b6c2",
+        white: "#abb2bf",
+        brightBlack: "#5c6370",
+        brightRed: "#e06c75",
+        brightGreen: "#98c379",
+        brightYellow: "#e5c07b",
+        brightBlue: "#61afef",
+        brightMagenta: "#c678dd",
+        brightCyan: "#56b6c2",
+        brightWhite: "#f0f0f4",
       },
-      allowProposedApi: true,
     });
 
     const fitAddon = new FitAddon();
@@ -119,10 +125,11 @@ export function RealTerminal({ sessionId, projectId, initialCommand, profile, on
       }).catch(() => {});
     };
 
-    // Fit after layout settles
-    const fitTimer = setTimeout(() => {
+    // Fit after next render frame (smoother than setTimeout)
+    let fitTimer: ReturnType<typeof setTimeout>;
+    requestAnimationFrame(() => {
       try { fitAddon.fit(); } catch {}
-    }, 100);
+    });
 
     // Create PTY session
     fetch("/api/terminal/create", {
@@ -250,14 +257,19 @@ export function RealTerminal({ sessionId, projectId, initialCommand, profile, on
   }, []); // Empty deps — init once, use refs for mutable values
 
   return (
-    <div
-      ref={containerRef}
-      style={{
-        width: "100%",
-        height: "100%",
-        background: "#0d1117",
-        overflow: "hidden",
-      }}
-    />
+    <>
+      <style>{`
+        .pipilot-terminal { width: 100%; height: 100%; overflow: hidden; }
+        .pipilot-terminal .xterm { height: 100%; }
+        .pipilot-terminal .xterm-viewport {
+          background: transparent !important;
+          overflow-y: hidden !important;
+          font-variant-ligatures: none;
+          -webkit-font-smoothing: antialiased;
+        }
+        .pipilot-terminal .xterm-screen { padding: 0 8px; }
+      `}</style>
+      <div ref={containerRef} className="pipilot-terminal" />
+    </>
   );
 }

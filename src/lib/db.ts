@@ -24,6 +24,7 @@ export interface DBChatMessage {
   tool_call_id?: string;
   sessionId: string;
   timestamp: Date;
+  reverted?: boolean;
 }
 
 export interface DBChatSession {

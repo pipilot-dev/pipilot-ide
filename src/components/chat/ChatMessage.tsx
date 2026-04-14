@@ -39,6 +39,9 @@ import {
   Package,
   ScrollText,
   Terminal,
+  Bookmark,
+  CheckCircle,
+  Redo2,
 } from "lucide-react";
 
 interface ChatMessageProps {
@@ -395,13 +398,13 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
     toolCall.name === "write_file";
   const summaryFilePath = isFileTool && filePathArg ? filePathArg : null;
 
-  // For Bash: show description if available, command as subtitle
+  // For Bash: description shown separately above command
   const bashDescription = (toolCall.name === "Bash" && parsedArgs.description) ? parsedArgs.description as string : null;
 
   const summary = filePathArg
     ? filePathArg
     : parsedArgs.command
-    ? (bashDescription || `$ ${(parsedArgs.command as string).substring(0, 80)}`)
+    ? `$ ${(parsedArgs.command as string).substring(0, 80)}`
     : parsedArgs.pattern
     ? parsedArgs.pattern as string
     : parsedArgs.content && typeof parsedArgs.content === "string"
@@ -433,11 +436,20 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
         transition: "border-color 0.2s ease",
       }}
     >
+      {/* Bash description label — sits above the pill row */}
+      {bashDescription && (
+        <div style={{
+          padding: "4px 10px 0", fontSize: 10, color: C.textMid,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {bashDescription}
+        </div>
+      )}
       <button
         className="w-full flex items-center gap-2 text-xs"
         style={{
           background: "transparent",
-          padding: "6px 10px",
+          padding: bashDescription ? "3px 10px 6px" : "6px 10px",
           fontFamily: "'JetBrains Mono', 'Cascadia Code', ui-monospace, monospace",
           border: "none",
           cursor: "pointer",
@@ -530,6 +542,7 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
             {summary}
           </span>
         ) : null}
+
 
         {/* Expand arrow */}
         <span className="ml-auto flex-shrink-0" style={{ color: C.textFaint }}>
@@ -729,6 +742,149 @@ function MessageActions({
   );
 }
 
+/* ─── Checkpoint Separator ───────────────────────────────────────────── */
+function formatRelativeTime(date: Date): string {
+  const now = Date.now();
+  const diff = now - date.getTime();
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+interface CheckpointSeparatorProps {
+  messageId: string;
+  timestamp: Date;
+  isRestored: boolean;
+  showRedo: boolean;
+  showRestore: boolean;
+  onRestore: (messageId: string) => void;
+  onRedo: (messageId: string) => void;
+}
+
+export function CheckpointSeparator({
+  messageId,
+  timestamp,
+  isRestored,
+  showRedo,
+  showRestore,
+  onRestore,
+  onRedo,
+}: CheckpointSeparatorProps) {
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <div
+      className="flex items-center gap-2 my-3 px-1"
+      style={{ minHeight: 28 }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      data-testid={`checkpoint-${messageId}`}
+    >
+      {/* Left line */}
+      <div style={{ flex: 1, height: 1, background: "hsl(220 13% 24%)" }} />
+
+      {/* Center content */}
+      <div
+        className="flex items-center gap-1.5"
+        style={{
+          padding: "3px 10px",
+          borderRadius: 12,
+          background: isRestored ? `${C.ok}12` : "transparent",
+          border: `1px solid ${isRestored ? `${C.ok}30` : "hsl(220 13% 24%)"}`,
+          transition: "all 0.15s ease",
+        }}
+      >
+        {isRestored ? (
+          <CheckCircle size={11} style={{ color: C.ok, flexShrink: 0 }} />
+        ) : (
+          <Bookmark size={11} style={{ color: C.textDim, flexShrink: 0 }} />
+        )}
+
+        <span
+          style={{
+            fontSize: 10,
+            fontFamily: FONTS.sans,
+            fontWeight: 500,
+            color: isRestored ? C.ok : C.textDim,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {isRestored ? "Restored" : "Checkpoint"}
+        </span>
+
+        <span
+          style={{
+            fontSize: 9,
+            fontFamily: FONTS.sans,
+            color: C.textFaint,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {formatRelativeTime(timestamp)}
+        </span>
+
+        {/* Action buttons — show on hover or when restored */}
+        {(hovered || isRestored) && (
+          <>
+            {showRestore && (
+              <button
+                onClick={() => onRestore(messageId)}
+                style={{
+                  marginLeft: 4,
+                  padding: "1px 8px",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  fontFamily: FONTS.sans,
+                  color: C.accent,
+                  background: C.accentDim,
+                  border: `1px solid ${C.accentLine}`,
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  transition: "all 0.15s ease",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Restore
+              </button>
+            )}
+            {showRedo && (
+              <button
+                onClick={() => onRedo(messageId)}
+                className="flex items-center gap-1"
+                style={{
+                  marginLeft: 4,
+                  padding: "1px 8px",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  fontFamily: FONTS.sans,
+                  color: C.info,
+                  background: `${C.info}12`,
+                  border: `1px solid ${C.info}30`,
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  transition: "all 0.15s ease",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <Redo2 size={9} />
+                Redo
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Right line */}
+      <div style={{ flex: 1, height: 1, background: "hsl(220 13% 24%)" }} />
+    </div>
+  );
+}
+
 /* ─── Single Message Item (used for user messages) ───────────────────── */
 const TRUNCATE_WORD_LIMIT = 35;
 
@@ -740,6 +896,28 @@ export function ChatMessageItem({ message, onDelete, onRevert }: ChatMessageProp
   if (!isUser) {
     return (
       <AssistantTurnGroup messages={[message]} onDelete={onDelete} />
+    );
+  }
+
+  // Reverted user messages: collapsed to a single dimmed line
+  if (message.reverted) {
+    const summary = message.content.replace(/\n/g, " ").slice(0, 80) + (message.content.length > 80 ? "..." : "");
+    return (
+      <div
+        className="flex gap-2 mb-2 flex-row items-center"
+        style={{ opacity: 0.3, animation: "fadeInMsg 0.3s ease-out" }}
+        data-testid={`chat-message-${message.id}`}
+      >
+        <div className="flex-shrink-0 flex items-center justify-center" style={{ width: 14, color: C.textMid }}>
+          <User size={10} strokeWidth={1.8} />
+        </div>
+        <div
+          className="text-xs truncate"
+          style={{ color: C.textDim, fontFamily: FONTS.sans, maxWidth: "100%", overflow: "hidden" }}
+        >
+          {summary}
+        </div>
+      </div>
     );
   }
 
@@ -1002,9 +1180,10 @@ interface AssistantTurnGroupProps {
   onDelete?: (messageId: string) => void;
   onContinueInterrupted?: (messageId: string) => void;
   onDismissInterruption?: (messageId: string, newMessage: string) => void;
+  reverted?: boolean;
 }
 
-export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, onDismissInterruption }: AssistantTurnGroupProps) {
+export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, onDismissInterruption, reverted }: AssistantTurnGroupProps) {
   const [copied, setCopied] = useState(false);
 
   // Aggregate all text content for the copy button
@@ -1038,6 +1217,30 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
     borderRadius: "6px",
     transition: "all 0.15s ease",
   };
+
+  // Reverted turns are collapsed to a single-line summary at low opacity
+  if (reverted) {
+    const summary = allContent
+      ? allContent.replace(/\n/g, " ").slice(0, 80) + (allContent.length > 80 ? "..." : "")
+      : "Assistant response";
+    return (
+      <div
+        className="flex gap-2 mb-2 flex-row items-center"
+        style={{ opacity: 0.3, animation: "fadeInMsg 0.3s ease-out" }}
+        data-testid={`chat-turn-${messages[0]?.id}`}
+      >
+        <div className="flex-shrink-0 flex items-center justify-center" style={{ width: 14, color: C.accent }}>
+          <Sparkles size={10} strokeWidth={1.8} />
+        </div>
+        <div
+          className="text-xs truncate"
+          style={{ color: C.textDim, fontFamily: FONTS.sans, maxWidth: "100%", overflow: "hidden" }}
+        >
+          {summary}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

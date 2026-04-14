@@ -31,7 +31,7 @@ import { TodoPanel } from "./TodoPanel";
 import { SessionPicker } from "./SessionPicker";
 import { AskUserDialog } from "./AskUserDialog";
 import { QueuePanel } from "./QueuePanel";
-import { ChatMessageItem, AssistantTurnGroup } from "./ChatMessage";
+import { ChatMessageItem, AssistantTurnGroup, CheckpointSeparator } from "./ChatMessage";
 import { ChatMessage } from "@/hooks/useChat";
 import { FileNode } from "@/hooks/useFileSystem";
 import { AtSign, FolderOpen, FileCode2, AlertTriangle } from "lucide-react";
@@ -196,7 +196,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   // "agent" (autonomous build) and "plan" (research + plan only, no edits).
   const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, projectId);
 
-  const { messages, isStreaming, mode, setMode, sendMessage, stopStreaming, clearMessages, deleteMessage, revertToMessage } = agentSdk;
+  const { messages, isStreaming, mode, setMode, sendMessage, stopStreaming, clearMessages, deleteMessage, revertToMessage, redoToMessage } = agentSdk;
   const agentTodos = (agentSdk as any).todos || [];
   const agentPendingQuestion = (agentSdk as any).pendingQuestion || null;
   const agentAnswerQuestion = (agentSdk as any).answerQuestion;
@@ -273,6 +273,13 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
       if (content) setInput(content);
     },
     [revertToMessage, isStreaming]
+  );
+  const handleRedoToMessage = useCallback(
+    async (messageId: string) => {
+      if (isStreaming) return;
+      await redoToMessage(messageId);
+    },
+    [redoToMessage, isStreaming]
   );
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1099,11 +1106,13 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           // the full `messages` array.
           const result: React.ReactNode[] = [];
           let currentTurn: ChatMessage[] = [];
+          let lastAssistantTurnEnd = false; // tracks if the previous item was an assistant turn
 
           function flushTurn() {
             if (currentTurn.length > 0) {
               const turnMsgs = [...currentTurn];
               const firstId = turnMsgs[0].id;
+              const isReverted = turnMsgs.some((m) => m.reverted);
               result.push(
                 <AssistantTurnGroup
                   key={`turn-${firstId}`}
@@ -1111,15 +1120,41 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                   onDelete={handleDeleteMessage}
                   onContinueInterrupted={agentContinueInterrupted || undefined}
                   onDismissInterruption={handleSendNewAfterInterrupt}
+                  reverted={isReverted}
                 />
               );
               currentTurn = [];
+              lastAssistantTurnEnd = true;
             }
           }
 
-          for (const msg of visibleMessages) {
+          for (let vi = 0; vi < visibleMessages.length; vi++) {
+            const msg = visibleMessages[vi];
             if (msg.role === "user") {
               flushTurn();
+
+              // Insert a checkpoint separator BEFORE this user message
+              // (i.e. between the previous assistant turn and this user message)
+              if (lastAssistantTurnEnd) {
+                // Determine if any messages from this user message onward are reverted
+                const isRestoredHere = msg.reverted === true;
+                // Check if a later checkpoint was reverted (for "Redo" button):
+                // the redo target is this user message's id
+                const hasRevertedAfter = visibleMessages.slice(vi).some((m) => m.reverted);
+                result.push(
+                  <CheckpointSeparator
+                    key={`cp-${msg.id}`}
+                    messageId={msg.id}
+                    timestamp={msg.timestamp}
+                    isRestored={isRestoredHere}
+                    showRedo={isRestoredHere}
+                    showRestore={!isRestoredHere && !hasRevertedAfter}
+                    onRestore={handleRevertToMessage}
+                    onRedo={handleRedoToMessage}
+                  />
+                );
+              }
+
               result.push(
                 <ChatMessageItem
                   key={msg.id}
@@ -1128,6 +1163,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                   onRevert={handleRevertToMessage}
                 />
               );
+              lastAssistantTurnEnd = false;
             } else {
               // assistant or tool — accumulate into current turn
               currentTurn.push(msg);

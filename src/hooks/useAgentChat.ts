@@ -208,6 +208,7 @@ export function useAgentChat(
           toolCalls: m.toolCalls ? JSON.parse(m.toolCalls) : undefined,
           parts: m.parts ? JSON.parse(m.parts) : undefined,
           tool_call_id: m.tool_call_id,
+          reverted: m.reverted || undefined,
         }));
         setMessages(loaded);
       })
@@ -380,6 +381,7 @@ export function useAgentChat(
               tool_call_id: m.tool_call_id,
               sessionId,
               timestamp: m.timestamp,
+              reverted: m.reverted || undefined,
             }))
           );
         })
@@ -916,10 +918,8 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
    *   1. Capture the original user-message content (so the chat input can
    *      be prefilled and the user can re-send / edit it)
    *   2. Restore the disk snapshot taken right before that message
-   *   3. Slice the in-memory message list to remove that message and
-   *      everything after it
-   *   4. Delete the corresponding rows from IndexedDB so the truncation
-   *      survives reloads
+   *   3. Mark that message and everything after it as `reverted: true`
+   *      (messages are kept for redo support, just rendered dimmed)
    *
    * Returns the original message content so the caller can prefill it
    * into the chat input.
@@ -943,32 +943,73 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
       console.warn("[revert] no checkpoint found for message", messageId, "— input will still be prefilled");
     }
 
-    // 3. Slice messages: drop the user message and everything after.
-    //    Capture the IDs we removed so we can also delete them from IndexedDB.
-    let removedIds: string[] = [];
+    // 3. Mark messages from this point onward as reverted (keep them in state).
     setMessages((prev) => {
       const idx = prev.findIndex((m) => m.id === messageId);
       if (idx < 0) return prev;
-      removedIds = prev.slice(idx).map((m) => m.id);
-      return prev.slice(0, idx);
+      return prev.map((m, i) => (i >= idx ? { ...m, reverted: true } : m));
     });
 
-    // 4. Delete the dropped messages from IndexedDB so they don't come back
-    //    on the next session load. Use the ACTIVE session id, not the legacy
-    //    `agent-<projectId>` key.
-    const sid = currentSessionIdRef.current;
-    if (sid && removedIds.length > 0) {
-      try {
-        await db.chatMessages
-          .where("sessionId").equals(sid)
-          .and((m) => removedIds.includes(m.id))
-          .delete();
-      } catch (err) {
-        console.warn("[revert] failed to delete messages from IDB:", err);
+    return originalContent;
+  }, []);
+
+  /**
+   * Redo: un-revert messages from `messageId` onward (restore them to visible).
+   * Also restores the checkpoint associated with the LAST assistant message
+   * before the next reverted block, so the file state matches.
+   */
+  const redoToMessage = useCallback(async (messageId: string) => {
+    // Find the target message — it should be a user message that starts a reverted block
+    const target = messagesRef.current.find((m) => m.id === messageId);
+    if (!target) return;
+
+    // Find the last assistant message in the block that we're un-reverting,
+    // so we can restore files to match that state. Walk forward from messageId
+    // until we hit a non-reverted message or the end.
+    const msgs = messagesRef.current;
+    const startIdx = msgs.findIndex((m) => m.id === messageId);
+    if (startIdx < 0) return;
+
+    // Find the next user message that is ALSO reverted — that's where the next
+    // checkpoint boundary would be. Un-revert everything up to (but not including) it.
+    let endIdx = msgs.length;
+    for (let i = startIdx + 1; i < msgs.length; i++) {
+      if (msgs[i].role === "user" && msgs[i].reverted) {
+        endIdx = i;
+        break;
       }
     }
 
-    return originalContent;
+    // Try to restore the checkpoint that belongs to the end boundary
+    // (i.e., the checkpoint taken before endIdx's user message, which is the
+    // state AFTER the block we're un-reverting completed).
+    if (checkpointManagerRef.current && endIdx < msgs.length) {
+      const cpId = await checkpointManagerRef.current.findCheckpointBeforeMessage(msgs[endIdx].id);
+      if (cpId) {
+        try {
+          await checkpointManagerRef.current.restoreToCheckpoint(cpId);
+        } catch (err) {
+          console.error("[redo] checkpoint restore failed:", err);
+        }
+      }
+    } else if (checkpointManagerRef.current) {
+      // Un-reverting to the very end — restore the latest checkpoint
+      // by finding the last assistant message's checkpoint
+      const lastAssistant = [...msgs].reverse().find((m) => m.role === "assistant" && m.checkpointId);
+      if (lastAssistant?.checkpointId) {
+        try {
+          await checkpointManagerRef.current.restoreToCheckpoint(lastAssistant.checkpointId);
+        } catch (err) {
+          console.error("[redo] checkpoint restore failed:", err);
+        }
+      }
+    }
+
+    // Un-revert the messages in range [startIdx, endIdx)
+    setMessages((prev) => {
+      const idSet = new Set(prev.slice(startIdx, endIdx).map((m) => m.id));
+      return prev.map((m) => (idSet.has(m.id) ? { ...m, reverted: undefined } : m));
+    });
   }, []);
 
   const answerQuestion = useCallback(async (requestId: string, answers: Record<string, string>) => {
@@ -1009,6 +1050,7 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
     clearMessages,
     deleteMessage,
     revertToMessage,
+    redoToMessage,
     todos,
     pendingQuestion,
     answerQuestion,
