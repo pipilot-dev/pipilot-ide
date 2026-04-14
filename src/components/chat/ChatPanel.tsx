@@ -957,6 +957,32 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         onScroll={handleScroll}
         data-testid="chat-messages"
       >
+        {/* No-project notice — user must create/open a project before chatting */}
+        {!projectId && (
+          <div style={{
+            margin: "16px 12px 0", padding: "12px 14px", borderRadius: 8,
+            background: `${C.accent}08`, border: `1px solid ${C.accent}20`,
+            display: "flex", flexDirection: "column", gap: 8,
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>No workspace open</div>
+            <div style={{ fontSize: 11, color: C.textMid, lineHeight: 1.5 }}>
+              Open a folder or create a new project to start chatting with the AI agent.
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"))} style={{
+                display: "flex", alignItems: "center", gap: 4, padding: "5px 12px", borderRadius: 5,
+                background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text,
+                fontFamily: FONTS.mono, fontSize: 10, fontWeight: 600, cursor: "pointer",
+              }}>Open Folder</button>
+              <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-generate-modal"))} style={{
+                display: "flex", alignItems: "center", gap: 4, padding: "5px 12px", borderRadius: 5,
+                background: C.accent, border: "none", color: "#fff",
+                fontFamily: FONTS.mono, fontSize: 10, fontWeight: 600, cursor: "pointer",
+              }}>Generate with AI</button>
+            </div>
+          </div>
+        )}
+
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-4 py-8">
             {/* Editorial empty-state — display heading + numbered prompts */}
@@ -1819,7 +1845,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
               maxHeight: "180px",
               caretColor: C.accent,
             }}
-            placeholder={mode === "plan" ? "describe what to research..." : "build something..."}
+            placeholder={!projectId ? "Open a workspace to start..." : mode === "plan" ? "describe what to research..." : "build something..."}
+            disabled={!projectId}
             defaultValue={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}

@@ -38,6 +38,13 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
   const [newFileName, setNewFileName] = useState("");
   const [newFileError, setNewFileError] = useState<string | null>(null);
   const [showGenerate, setShowGenerate] = useState(false);
+
+  // Listen for external trigger (e.g. from ChatPanel's "Generate with AI" button)
+  useEffect(() => {
+    const handler = () => { setGeneratePrompt(""); setGenerateError(null); setShowGenerate(true); };
+    window.addEventListener("pipilot:show-generate-modal", handler);
+    return () => window.removeEventListener("pipilot:show-generate-modal", handler);
+  }, []);
   const [generatePrompt, setGeneratePrompt] = useState("");
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);

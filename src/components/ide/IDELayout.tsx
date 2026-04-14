@@ -964,12 +964,18 @@ export function IDELayout() {
     const openTerminal = () => setTerminalOpen(true);
     window.addEventListener("pipilot:open-chat", openChat);
     const openSettings = () => setActiveView("settings");
+    const openFolderPicker = () => setShowOpenFolderPicker(true);
+    const openGenerateModal = () => window.dispatchEvent(new CustomEvent("pipilot:show-generate-modal"));
     window.addEventListener("pipilot:open-terminal", openTerminal);
     window.addEventListener("pipilot:open-settings", openSettings);
+    window.addEventListener("pipilot:open-folder-picker", openFolderPicker);
+    window.addEventListener("pipilot:open-generate-modal", openGenerateModal);
     return () => {
       window.removeEventListener("pipilot:open-chat", openChat);
       window.removeEventListener("pipilot:open-terminal", openTerminal);
       window.removeEventListener("pipilot:open-settings", openSettings);
+      window.removeEventListener("pipilot:open-folder-picker", openFolderPicker);
+      window.removeEventListener("pipilot:open-generate-modal", openGenerateModal);
     };
   }, []);
 

@@ -65,9 +65,9 @@ export function useFileSystem() {
   const [changeLog, setChangeLog] = useState<FileChangeEvent[]>([]);
   const { activeProjectId } = useActiveProject();
 
-  // Seed database on first load
+  // Mark filesystem as ready (no longer seeds a default project)
   useEffect(() => {
-    seedDatabaseIfEmpty().then(() => setIsReady(true));
+    setIsReady(true);
   }, []);
 
   // Live query - scoped to active project

@@ -9,10 +9,8 @@ interface ProjectContextValue {
 
 const ProjectContext = createContext<ProjectContextValue | null>(null);
 
-const DEFAULT_PROJECT_ID = "default-project";
-
 export function ProjectProvider({ children }: { children: ReactNode }) {
-  const [activeProjectId, setActiveProjectId] = useState<string>(DEFAULT_PROJECT_ID);
+  const [activeProjectId, setActiveProjectId] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -20,7 +18,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     async function load() {
       const setting = await db.settings.get("activeProjectId");
       if (!cancelled) {
-        setActiveProjectId(setting?.value ?? DEFAULT_PROJECT_ID);
+        setActiveProjectId(setting?.value ?? "");
         setLoading(false);
       }
     }
