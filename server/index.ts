@@ -4772,6 +4772,13 @@ app.get("/api/project/scripts", (req, res) => {
 });
 
 // Cleanup on shutdown
+// Prevent unhandled errors from crashing the server
+process.on("uncaughtException", (err) => {
+  console.error("[server] Uncaught exception (non-fatal):", err.message);
+});
+process.on("unhandledRejection", (reason: any) => {
+  console.error("[server] Unhandled rejection (non-fatal):", reason?.message || reason);
+});
 process.on("SIGTERM", () => { stopAllDevServers(); activePtys.forEach(p => p.kill()); process.exit(0); });
 process.on("SIGINT", () => { stopAllDevServers(); activePtys.forEach(p => p.kill()); process.exit(0); });
 

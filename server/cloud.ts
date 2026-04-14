@@ -92,6 +92,136 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
     } catch (e: any) { res.status(502).json({ error: e.message }); }
   });
 
+  // GET /api/cloud/github/workflows — list workflow files
+  router.get("/github/workflows", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "github");
+    if (!token) return res.status(401).json({ error: "GitHub not connected" });
+    try {
+      const r = await fetch(`https://api.github.com/repos/${req.query.owner}/${req.query.repo}/actions/workflows`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } });
+      res.json(await r.json());
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // POST /api/cloud/github/workflows/dispatch — manually trigger a workflow
+  router.post("/github/workflows/dispatch", async (req, res) => {
+    const { projectId, owner, repo, workflow_id, ref } = req.body;
+    const token = getToken(projectId, "github");
+    if (!token) return res.status(401).json({ error: "GitHub not connected" });
+    try {
+      const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflow_id}/dispatches`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+        body: JSON.stringify({ ref: ref || "main" }),
+      });
+      if (r.status === 204 || r.status === 201) return res.json({ success: true });
+      try { res.status(r.status).json(await r.json()); } catch { res.status(r.status).json({ error: `GitHub returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/github/actions/logs — get run logs URL
+  router.get("/github/actions/logs", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "github");
+    if (!token) return res.status(401).json({ error: "GitHub not connected" });
+    try {
+      const r = await fetch(`https://api.github.com/repos/${req.query.owner}/${req.query.repo}/actions/runs/${req.query.run_id}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } });
+      const data = await r.json();
+      res.json({ logs_url: data.logs_url, html_url: data.html_url, jobs_url: data.jobs_url });
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // POST /api/cloud/github/actions/rerun — re-run a failed workflow
+  router.post("/github/actions/rerun", async (req, res) => {
+    const { projectId, owner, repo, run_id } = req.body;
+    const token = getToken(projectId, "github");
+    if (!token) return res.status(401).json({ error: "GitHub not connected" });
+    try {
+      const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs/${run_id}/rerun`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+      });
+      if (r.status === 201 || r.status === 204) return res.json({ success: true });
+      // Try to parse error body safely
+      try { res.status(r.status).json(await r.json()); } catch { res.status(r.status).json({ error: `GitHub returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/github/commit — single commit with file changes
+  router.get("/github/commit", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "github");
+    if (!token) return res.status(401).json({ error: "GitHub not connected" });
+    try {
+      const r = await fetch(`https://api.github.com/repos/${req.query.owner}/${req.query.repo}/commits/${req.query.sha}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } });
+      res.json(await r.json());
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/github/commit/diff — raw diff for a commit
+  router.get("/github/commit/diff", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "github");
+    if (!token) return res.status(401).json({ error: "GitHub not connected" });
+    try {
+      const r = await fetch(`https://api.github.com/repos/${req.query.owner}/${req.query.repo}/commits/${req.query.sha}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.diff" } });
+      const diff = await r.text();
+      res.json({ diff });
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/github/tree — file tree for a branch/ref
+  router.get("/github/tree", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "github");
+    if (!token) return res.status(401).json({ error: "GitHub not connected" });
+    try {
+      const r = await fetch(`https://api.github.com/repos/${req.query.owner}/${req.query.repo}/git/trees/${req.query.ref}?recursive=1`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } });
+      res.json(await r.json());
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/github/file — file content from a specific ref
+  router.get("/github/file", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "github");
+    if (!token) return res.status(401).json({ error: "GitHub not connected" });
+    try {
+      const r = await fetch(`https://api.github.com/repos/${req.query.owner}/${req.query.repo}/contents/${req.query.path}?ref=${req.query.ref}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } });
+      const data = await r.json();
+      const content = data.encoding === "base64" ? Buffer.from(data.content, "base64").toString("utf8") : data.content;
+      res.json({ content, name: data.name, path: data.path, size: data.size, sha: data.sha });
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // POST /api/cloud/github/branches/create — create a new branch
+  router.post("/github/branches/create", async (req, res) => {
+    const { projectId, owner, repo, branch, from_branch } = req.body;
+    const token = getToken(projectId, "github");
+    if (!token) return res.status(401).json({ error: "GitHub not connected" });
+    try {
+      const refRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${from_branch}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } });
+      const refData = await refRes.json();
+      const sha = refData.object?.sha;
+      if (!sha) return res.status(400).json({ error: "Could not resolve source branch SHA" });
+      const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+        body: JSON.stringify({ ref: `refs/heads/${branch}`, sha }),
+      });
+      res.status(r.status).json(await r.json());
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // DELETE /api/cloud/github/branches — delete a branch
+  router.delete("/github/branches", async (req, res) => {
+    const { projectId, owner, repo, branch } = req.body;
+    const token = getToken(projectId, "github");
+    if (!token) return res.status(401).json({ error: "GitHub not connected" });
+    try {
+      const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branch}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+      });
+      if (r.status === 204) return res.json({ ok: true });
+      res.status(r.status).json(await r.json());
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
   // ── Vercel ──
 
   // GET /api/cloud/vercel/user
@@ -497,6 +627,90 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
     } catch (e: any) { res.status(502).json({ error: e.message }); }
   });
 
+  // POST /api/cloud/vercel/projects/create — create a Vercel project from a GitHub repo
+  router.post("/vercel/projects/create", async (req, res) => {
+    const { projectId, name, framework, gitRepository } = req.body;
+    const token = getToken(projectId, "vercel");
+    if (!token) return res.status(401).json({ error: "Vercel not connected" });
+    try {
+      const r = await fetch("https://api.vercel.com/v10/projects", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ name, framework, gitRepository }),
+      });
+      try { res.status(r.status).json(await r.json()); } catch { res.status(r.status).json({ error: `Vercel returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // DELETE /api/cloud/vercel/projects — delete a Vercel project
+  router.delete("/vercel/projects", async (req, res) => {
+    const { projectId, vercelProjectId } = req.body;
+    const token = getToken(projectId, "vercel");
+    if (!token) return res.status(401).json({ error: "Vercel not connected" });
+    try {
+      const r = await fetch(`https://api.vercel.com/v9/projects/${vercelProjectId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.status === 204) return res.json({ ok: true });
+      try { res.status(r.status).json(await r.json()); } catch { res.status(r.status).json({ error: `Vercel returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // POST /api/cloud/vercel/domains/add — add a custom domain to a project
+  router.post("/vercel/domains/add", async (req, res) => {
+    const { projectId, vercelProjectId, domain } = req.body;
+    const token = getToken(projectId, "vercel");
+    if (!token) return res.status(401).json({ error: "Vercel not connected" });
+    try {
+      const r = await fetch(`https://api.vercel.com/v10/projects/${vercelProjectId}/domains`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: domain }),
+      });
+      try { res.status(r.status).json(await r.json()); } catch { res.status(r.status).json({ error: `Vercel returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // DELETE /api/cloud/vercel/domains — remove a domain from a project
+  router.delete("/vercel/domains", async (req, res) => {
+    const { projectId, vercelProjectId, domain } = req.body;
+    const token = getToken(projectId, "vercel");
+    if (!token) return res.status(401).json({ error: "Vercel not connected" });
+    try {
+      const r = await fetch(`https://api.vercel.com/v9/projects/${vercelProjectId}/domains/${domain}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.status === 204) return res.json({ ok: true });
+      try { res.status(r.status).json(await r.json()); } catch { res.status(r.status).json({ error: `Vercel returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // POST /api/cloud/vercel/redeploy — redeploy latest deployment
+  router.post("/vercel/redeploy", async (req, res) => {
+    const { projectId, deploymentId } = req.body;
+    const token = getToken(projectId, "vercel");
+    if (!token) return res.status(401).json({ error: "Vercel not connected" });
+    try {
+      const r = await fetch(`https://api.vercel.com/v13/deployments/${deploymentId}/redeploy`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      try { res.status(r.status).json(await r.json()); } catch { res.status(r.status).json({ error: `Vercel returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/vercel/deployment/events — get deployment build logs
+  router.get("/vercel/deployment/events", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "vercel");
+    if (!token) return res.status(401).json({ error: "Vercel not connected" });
+    try {
+      const r = await fetch(`https://api.vercel.com/v2/deployments/${req.query.deploymentId}/events`, { headers: { Authorization: `Bearer ${token}` } });
+      try { res.json(await r.json()); } catch { res.status(r.status).json({ error: `Vercel returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
   // ── Supabase write APIs ──
 
   // POST /api/cloud/supabase/sql — execute SQL
@@ -528,6 +742,15 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
       });
       res.status(r.status).json(await r.json());
     } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // Global error handler — catches any unhandled errors in route handlers
+  // so they return 500 instead of crashing the server process.
+  router.use((err: any, _req: any, res: any, _next: any) => {
+    console.error("[cloud] Unhandled route error:", err?.message || err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err?.message || "Internal server error" });
+    }
   });
 
   return router;
