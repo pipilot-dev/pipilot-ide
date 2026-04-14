@@ -44,7 +44,6 @@
     ],
     "externalBin": [],
     "copyright": "© 2026 PiPilot",
-    "createUpdaterArtifacts": true,
     "category": "DeveloperTool",
     "shortDescription": "AI-native code editor",
     "longDescription": "PiPilot IDE is an AI-native code editor with integrated terminal, cloud management, autonomous agent, and real-time preview. Build full-stack apps with AI assistance.",
@@ -105,12 +104,6 @@
           "args": true
         }
       ]
-    },
-    "updater": {
-      "endpoints": [
-        "https://github.com/pipilot-dev/pipilot-ide/releases/latest/download/latest.json"
-      ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYxRTU4REEyQTg4MTc5NTAKUldSUWVZR29vbzNsWWZTZFoyV1NteE5ETEdRNG1QTDE5T2N5ZXowZDA1TlRiQlplb0k0MlRGRFMK"
     }
   }
 }

@@ -13,9 +13,9 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["custom-protocol", "devtools"] }
 tauri-plugin-shell = "2"
-tauri-plugin-updater = "2"
+# tauri-plugin-updater = "2"  # disabled until app launches reliably
 tauri-plugin-dialog = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }

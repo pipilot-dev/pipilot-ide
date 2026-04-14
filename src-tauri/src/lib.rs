@@ -15,7 +15,6 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .manage(terminal::TerminalState::new())
@@ -113,7 +112,7 @@ pub fn run() {
             codestral::codestral_chat,
         ])
         .setup(|app| {
-            // Spawn the Express servers as sidecar processes
+            // Spawn the agent server sidecar in production
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 start_servers(&handle);
@@ -125,31 +124,25 @@ pub fn run() {
 }
 
 fn start_servers(_handle: &tauri::AppHandle) {
-    // In dev mode, servers are started by the dev script (pnpm dev).
-    // In production, spawn the bundled agent server via Node.js.
-    // Only the agent SDK streaming needs Node.js — everything else
-    // (terminal, files, git, cloud, checkpoints) uses Rust IPC.
     #[cfg(not(debug_assertions))]
     {
         use std::process::Command;
-        let resource_dir = _handle
-            .path()
-            .resource_dir()
-            .expect("failed to get resource dir");
 
-        // Start the bundled agent server (single 2MB JS file)
-        let server_path = resource_dir.join("server-bundle").join("agent-server.mjs");
-        if server_path.exists() {
-            match Command::new("node")
-                .arg(&server_path)
-                .env("NODE_ENV", "production")
-                .spawn()
-            {
-                Ok(_) => println!("[tauri] Agent server started: {:?}", server_path),
-                Err(e) => eprintln!("[tauri] Failed to start agent server: {}", e),
+        // Try to find the bundled agent server
+        if let Ok(resource_dir) = _handle.path().resource_dir() {
+            let server_path = resource_dir.join("server-bundle").join("agent-server.mjs");
+            if server_path.exists() {
+                match Command::new("node")
+                    .arg(&server_path)
+                    .env("NODE_ENV", "production")
+                    .spawn()
+                {
+                    Ok(_) => eprintln!("[tauri] Agent server started"),
+                    Err(e) => eprintln!("[tauri] Agent server failed: {} (Node.js may not be installed)", e),
+                }
+            } else {
+                eprintln!("[tauri] Agent server bundle not found (app works without it, but AI chat won't stream)");
             }
-        } else {
-            eprintln!("[tauri] Agent server bundle not found at: {:?}", server_path);
         }
     }
 }
