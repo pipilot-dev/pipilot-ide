@@ -35,6 +35,7 @@ import {
   initCheckpoints, createCheckpoint, listCheckpoints, getCheckpoint,
   findCheckpointBeforeMessage as findCheckpointBeforeMessageFn,
   restoreCheckpoint, deleteCheckpoint, clearProjectCheckpoints,
+  isGitCheckpointsAvailable,
 } from "./checkpoints";
 import fs from "fs";
 import path from "path";
@@ -1996,6 +1997,11 @@ End your response with a section titled "## Plan" containing the numbered steps.
             type: "http" as any,
             url: "https://api-v2.appdeploy.ai/mcp",
           },
+          // DeepWiki — read wiki docs and ask questions about any GitHub repo
+          deepwiki: {
+            type: "http" as any,
+            url: "https://mcp.deepwiki.com/mcp",
+          },
           // Sequential Thinking — structured reasoning for complex tasks
           "sequential-thinking": {
             command: "npx",
@@ -2008,6 +2014,7 @@ End your response with a section titled "## Plan" containing the numbered steps.
           "mcp__pipilot__*",
           "mcp__context7__*",
           "mcp__appdeploy__*",
+          "mcp__deepwiki__*",
           "mcp__sequential-thinking__*",
           ...getUserMcpAllowedTools(workDir),
           "Agent",
@@ -4486,16 +4493,24 @@ app.post("/api/project/search", async (req, res) => {
 
 // ── Workspace Checkpoints (revert support for disk-backed projects) ─
 
+// GET /api/checkpoints/git-available — check if git is installed for checkpoints
+app.get("/api/checkpoints/git-available", async (_req, res) => {
+  try {
+    const available = await isGitCheckpointsAvailable();
+    res.json({ available });
+  } catch { res.json({ available: false }); }
+});
+
 // POST /api/checkpoints/create — snapshot the current workspace
-app.post("/api/checkpoints/create", (req, res) => {
-  const { projectId, label, messageId } = req.body;
+app.post("/api/checkpoints/create", async (req, res) => {
+  const { projectId, label, messageId, useGit } = req.body;
   if (!projectId || !label) {
     return res.status(400).json({ error: "projectId and label required" });
   }
   const workDir = getWorkDir(projectId);
   if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
   try {
-    const meta = createCheckpoint({ projectId, workDir, label, messageId });
+    const meta = await createCheckpoint({ projectId, workDir, label, messageId, useGit });
     res.json({ success: true, checkpoint: meta });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -4519,7 +4534,7 @@ app.get("/api/checkpoints/find-before", (req, res) => {
 });
 
 // POST /api/checkpoints/restore — restore the workspace to a checkpoint
-app.post("/api/checkpoints/restore", (req, res) => {
+app.post("/api/checkpoints/restore", async (req, res) => {
   const { projectId, checkpointId } = req.body;
   if (!projectId || !checkpointId) {
     return res.status(400).json({ error: "projectId and checkpointId required" });
@@ -4527,7 +4542,7 @@ app.post("/api/checkpoints/restore", (req, res) => {
   const workDir = getWorkDir(projectId);
   if (!fs.existsSync(workDir)) return res.status(404).json({ error: "Workspace not found" });
   try {
-    const result = restoreCheckpoint({ projectId, workDir, checkpointId });
+    const result = await restoreCheckpoint({ projectId, workDir, checkpointId });
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -5036,6 +5051,7 @@ app.get("/api/mcp/defaults", (_req, res) => {
     defaults: [
       { name: "context7", description: "Documentation search for any library or framework", type: "http", url: "https://mcp.context7.com/mcp", builtin: true },
       { name: "appdeploy", description: "Deploy full-stack web apps from chat prompts", type: "http", url: "https://api-v2.appdeploy.ai/mcp", builtin: true },
+      { name: "deepwiki", description: "Read wiki docs and ask questions about any public GitHub repository", type: "http", url: "https://mcp.deepwiki.com/mcp", builtin: true },
       { name: "sequential-thinking", description: "Structured reasoning for complex multi-step tasks", type: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-sequential-thinking"], builtin: true },
     ],
     configurable: [
