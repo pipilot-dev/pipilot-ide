@@ -112,7 +112,7 @@
       "dialog": true,
       "pubkey": "",
       "endpoints": [
-        "https://github.com/niccolowidberg/pipilot-ide/releases/latest/download/latest.json"
+        "https://github.com/pipilot-dev/pipilot-ide/releases/latest/download/latest.json"
       ]
     }
   }
