@@ -70,9 +70,11 @@ export function useFileSystem() {
     setIsReady(true);
   }, []);
 
-  // Live query - scoped to active project
+  // Live query - scoped to active project (skip if no project)
   const dbFiles = useLiveQuery(
-    () => db.files.where("projectId").equals(activeProjectId).toArray(),
+    () => activeProjectId
+      ? db.files.where("projectId").equals(activeProjectId).toArray()
+      : Promise.resolve([]),
     [activeProjectId]
   ) ?? [];
 
