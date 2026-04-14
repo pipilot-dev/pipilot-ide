@@ -1,3 +1,4 @@
+mod cloud;
 mod filesystem;
 mod git;
 mod terminal;
@@ -9,6 +10,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(terminal::TerminalState::new())
+        .manage(cloud::CloudState::new())
         .invoke_handler(tauri::generate_handler![
             terminal::terminal_create,
             terminal::terminal_write,
@@ -36,6 +38,30 @@ pub fn run() {
             git::git_branch_list,
             git::git_branch_create,
             git::git_checkout,
+            cloud::cloud_save_token,
+            cloud::cloud_status,
+            cloud::cloud_github_repos,
+            cloud::cloud_github_issues,
+            cloud::cloud_github_pulls,
+            cloud::cloud_github_actions,
+            cloud::cloud_github_branches,
+            cloud::cloud_github_commits,
+            cloud::cloud_github_create_repo,
+            cloud::cloud_github_create_issue,
+            cloud::cloud_github_create_pr,
+            cloud::cloud_vercel_projects,
+            cloud::cloud_vercel_deployments,
+            cloud::cloud_vercel_env,
+            cloud::cloud_vercel_domains,
+            cloud::cloud_supabase_projects,
+            cloud::cloud_supabase_sql,
+            cloud::cloud_neon_projects,
+            cloud::cloud_netlify_sites,
+            cloud::cloud_cloudflare_zones,
+            cloud::cloud_cloudflare_dns,
+            cloud::cloud_cloudflare_account,
+            cloud::cloud_cloudflare_workers,
+            cloud::cloud_cloudflare_pages,
         ])
         .setup(|app| {
             // Spawn the Express servers as sidecar processes

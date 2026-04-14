@@ -191,15 +191,75 @@ function createWebBridge(): CloudBridge {
 // ── Tauri IPC implementation ──
 
 function createTauriBridge(): CloudBridge {
-  // In Tauri mode, cloud API calls go through Rust which makes the
-  // external HTTP requests directly. For now, we proxy through the
-  // same Express server running as a sidecar — but the bridge abstraction
-  // means we can swap to pure Rust HTTP later without changing any UI code.
-  //
-  // The key win: if the cloud Express server crashes, the Tauri app
-  // can restart it automatically. And eventually we'll move the HTTP
-  // calls to reqwest in Rust (zero Node.js dependency for cloud ops).
-  return createWebBridge(); // Phase 1: same HTTP calls, will be replaced with invoke() later
+  // In Tauri mode, cloud API calls go through Rust reqwest — no Express server needed.
+  const inv = async (cmd: string, args: Record<string, unknown>) => {
+    const invoke = await getInvoke();
+    return invoke(cmd, args);
+  };
+
+  return {
+    status: (pid) => inv("cloud_status", { projectId: pid }),
+
+    // GitHub
+    githubRepos: (pid) => inv("cloud_github_repos", { projectId: pid }),
+    githubIssues: (pid, o, r) => inv("cloud_github_issues", { projectId: pid, owner: o, repo: r }),
+    githubPulls: (pid, o, r) => inv("cloud_github_pulls", { projectId: pid, owner: o, repo: r }),
+    githubActions: (pid, o, r) => inv("cloud_github_actions", { projectId: pid, owner: o, repo: r }),
+    githubWorkflows: (pid, o, r) => inv("cloud_github_actions", { projectId: pid, owner: o, repo: r }), // same endpoint
+    githubBranches: (pid, o, r) => inv("cloud_github_branches", { projectId: pid, owner: o, repo: r }),
+    githubCommits: (pid, o, r, n = 15) => inv("cloud_github_commits", { projectId: pid, owner: o, repo: r, perPage: n }),
+    githubCommit: (pid, o, r, sha) => inv("cloud_github_commits", { projectId: pid, owner: o, repo: r, perPage: 1 }), // fallback
+    githubTree: (pid, o, r, ref_) => cloudGet("/github/tree", { projectId: pid, owner: o, repo: r, ref: ref_ }), // complex, keep web
+    githubFile: (pid, o, r, path, ref_) => cloudGet("/github/file", { projectId: pid, owner: o, repo: r, path, ref: ref_ }), // complex, keep web
+    githubIssueComments: (pid, o, r, num) => cloudGet("/github/issues/comments", { projectId: pid, owner: o, repo: r, issue_number: String(num) }), // keep web
+    githubCreateRepo: (pid, name, desc, priv_) => inv("cloud_github_create_repo", { projectId: pid, name, description: desc, private: priv_ }),
+    githubCreateIssue: (pid, o, r, title, body) => inv("cloud_github_create_issue", { projectId: pid, owner: o, repo: r, title, body }),
+    githubCreatePR: (pid, o, r, title, body, head, base) => inv("cloud_github_create_pr", { projectId: pid, owner: o, repo: r, title, body, head, base }),
+    githubCommentIssue: (pid, o, r, num, body) => cloudPost("/github/issues/comment", { projectId: pid, owner: o, repo: r, issue_number: num, body }), // keep web
+    githubMergePR: (pid, o, r, num) => cloudPost("/github/pulls/merge", { projectId: pid, owner: o, repo: r, pull_number: num }), // keep web
+    githubDispatchWorkflow: (pid, o, r, wid, ref_) => cloudPost("/github/workflows/dispatch", { projectId: pid, owner: o, repo: r, workflow_id: wid, ref: ref_ }), // keep web
+    githubRerunWorkflow: (pid, o, r, rid) => cloudPost("/github/actions/rerun", { projectId: pid, owner: o, repo: r, run_id: rid }), // keep web
+    githubCreateBranch: (pid, o, r, branch, from) => cloudPost("/github/branches/create", { projectId: pid, owner: o, repo: r, branch, from_branch: from }), // keep web
+    githubDeleteBranch: (pid, o, r, branch) => cloudDel("/github/branches", { projectId: pid, owner: o, repo: r, branch }), // keep web
+
+    // Git local — these still go through the git Tauri commands or web bridge
+    gitStatus: (pid) => cloudGet("/github/git-status", { projectId: pid }),
+    gitInit: (pid) => cloudPost("/github/git-init", { projectId: pid }),
+    gitCommit: (pid, msg) => cloudPost("/github/git-commit", { projectId: pid, message: msg }),
+    gitPush: (pid, remote, branch) => cloudPost("/github/git-push", { projectId: pid, remote, branch }),
+    gitAddRemote: (pid, name, url) => cloudPost("/github/git-add-remote", { projectId: pid, name, url }),
+
+    // Vercel
+    vercelProjects: (pid) => inv("cloud_vercel_projects", { projectId: pid }),
+    vercelDeployments: (pid, vpid) => inv("cloud_vercel_deployments", { projectId: pid, vercelProjectId: vpid }),
+    vercelEnv: (pid, vpid) => inv("cloud_vercel_env", { projectId: pid, vercelProjectId: vpid }),
+    vercelDomains: (pid, vpid) => inv("cloud_vercel_domains", { projectId: pid, vercelProjectId: vpid }),
+    vercelCreateProject: (pid, opts) => cloudPost("/vercel/projects/create", { projectId: pid, ...opts }), // keep web for complex payload
+    vercelAddEnv: (pid, vpid, key, value, target) => cloudPost("/vercel/env", { projectId: pid, vercelProjectId: vpid, key, value, target }), // keep web
+    vercelAddDomain: (pid, vpid, domain) => cloudPost("/vercel/domains/add", { projectId: pid, vercelProjectId: vpid, domain }), // keep web
+    vercelRedeploy: (pid, did) => cloudPost("/vercel/redeploy", { projectId: pid, deploymentId: did }), // keep web
+
+    // Supabase
+    supabaseProjects: (pid) => inv("cloud_supabase_projects", { projectId: pid }),
+    supabaseSql: (pid, ref_, query) => inv("cloud_supabase_sql", { projectId: pid, sbRef: ref_, query }),
+
+    // Neon
+    neonProjects: (pid) => inv("cloud_neon_projects", { projectId: pid }),
+
+    // Netlify
+    netlifySites: (pid) => inv("cloud_netlify_sites", { projectId: pid }),
+
+    // Cloudflare
+    cloudflareZones: (pid) => inv("cloud_cloudflare_zones", { projectId: pid }),
+    cloudflareDns: (pid, zid) => inv("cloud_cloudflare_dns", { projectId: pid, zoneId: zid }),
+    cloudflareWorkers: (pid, aid) => inv("cloud_cloudflare_workers", { projectId: pid, accountId: aid }),
+    cloudflarePages: (pid, aid) => inv("cloud_cloudflare_pages", { projectId: pid, accountId: aid }),
+    cloudflareAccount: (pid) => inv("cloud_cloudflare_account", { projectId: pid }),
+
+    // Connectors — save token goes through Rust, list falls back to web
+    connectorsList: (pid) => fetch(`/api/connectors/list?projectId=${encodeURIComponent(pid)}`).then(r => r.json()),
+    connectorSave: (pid, cid, token, _enabled) => inv("cloud_save_token", { projectId: pid, connectorId: cid, token }),
+  };
 }
 
 // ── Export ──
