@@ -22,7 +22,7 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
   router.get("/status", (req, res) => {
     const projectId = req.query.projectId as string;
     if (!projectId) return res.status(400).json({ error: "projectId required" });
-    const providers = ["github", "vercel", "supabase", "neon", "netlify"];
+    const providers = ["github", "vercel", "supabase", "neon", "netlify", "cloudflare"];
     const status: Record<string, boolean> = {};
     for (const p of providers) status[p] = !!getToken(projectId, p);
     res.json({ providers: status });
@@ -741,6 +741,109 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
         headers: { Authorization: `Bearer ${token}` },
       });
       res.status(r.status).json(await r.json());
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // ── Cloudflare ──
+
+  // GET /api/cloud/cloudflare/zones — list zones (domains)
+  router.get("/cloudflare/zones", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "cloudflare");
+    if (!token) return res.status(401).json({ error: "Cloudflare not connected" });
+    try {
+      const r = await fetch("https://api.cloudflare.com/client/v4/zones?per_page=20", { headers: { Authorization: `Bearer ${token}` } });
+      const data = await r.json();
+      res.json(data);
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/cloudflare/dns — list DNS records for a zone
+  router.get("/cloudflare/dns", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "cloudflare");
+    if (!token) return res.status(401).json({ error: "Cloudflare not connected" });
+    const zoneId = req.query.zoneId as string;
+    if (!zoneId) return res.status(400).json({ error: "zoneId required" });
+    try {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?per_page=50`, { headers: { Authorization: `Bearer ${token}` } });
+      try { res.json(await r.json()); } catch { res.status(r.status).json({ error: `Cloudflare returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // POST /api/cloud/cloudflare/dns — create DNS record
+  router.post("/cloudflare/dns", async (req, res) => {
+    const { projectId, zoneId, type, name, content, ttl, proxied } = req.body;
+    const token = getToken(projectId, "cloudflare");
+    if (!token) return res.status(401).json({ error: "Cloudflare not connected" });
+    if (!zoneId) return res.status(400).json({ error: "zoneId required" });
+    try {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ type, name, content, ttl, proxied }),
+      });
+      try { res.status(r.status).json(await r.json()); } catch { res.status(r.status).json({ error: `Cloudflare returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // DELETE /api/cloud/cloudflare/dns — delete DNS record
+  router.delete("/cloudflare/dns", async (req, res) => {
+    const { projectId, zoneId, recordId } = req.body;
+    const token = getToken(projectId, "cloudflare");
+    if (!token) return res.status(401).json({ error: "Cloudflare not connected" });
+    if (!zoneId || !recordId) return res.status(400).json({ error: "zoneId and recordId required" });
+    try {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${recordId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      try { res.status(r.status).json(await r.json()); } catch { res.status(r.status).json({ error: `Cloudflare returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/cloudflare/workers — list Workers scripts
+  router.get("/cloudflare/workers", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "cloudflare");
+    if (!token) return res.status(401).json({ error: "Cloudflare not connected" });
+    const accountId = req.query.accountId as string;
+    if (!accountId) return res.status(400).json({ error: "accountId required" });
+    try {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts`, { headers: { Authorization: `Bearer ${token}` } });
+      try { res.json(await r.json()); } catch { res.status(r.status).json({ error: `Cloudflare returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/cloudflare/pages — list Pages projects
+  router.get("/cloudflare/pages", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "cloudflare");
+    if (!token) return res.status(401).json({ error: "Cloudflare not connected" });
+    const accountId = req.query.accountId as string;
+    if (!accountId) return res.status(400).json({ error: "accountId required" });
+    try {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects`, { headers: { Authorization: `Bearer ${token}` } });
+      try { res.json(await r.json()); } catch { res.status(r.status).json({ error: `Cloudflare returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/cloudflare/pages/deployments — list deployments for a Pages project
+  router.get("/cloudflare/pages/deployments", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "cloudflare");
+    if (!token) return res.status(401).json({ error: "Cloudflare not connected" });
+    const accountId = req.query.accountId as string;
+    const projectName = req.query.projectName as string;
+    if (!accountId || !projectName) return res.status(400).json({ error: "accountId and projectName required" });
+    try {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects/${projectName}/deployments`, { headers: { Authorization: `Bearer ${token}` } });
+      try { res.json(await r.json()); } catch { res.status(r.status).json({ error: `Cloudflare returned ${r.status}` }); }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // GET /api/cloud/cloudflare/account — get account details (to find accountId)
+  router.get("/cloudflare/account", async (req, res) => {
+    const token = getToken(req.query.projectId as string, "cloudflare");
+    if (!token) return res.status(401).json({ error: "Cloudflare not connected" });
+    try {
+      const r = await fetch("https://api.cloudflare.com/client/v4/accounts", { headers: { Authorization: `Bearer ${token}` } });
+      try { res.json(await r.json()); } catch { res.status(r.status).json({ error: `Cloudflare returned ${r.status}` }); }
     } catch (e: any) { res.status(502).json({ error: e.message }); }
   });
 

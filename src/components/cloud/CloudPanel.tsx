@@ -18,7 +18,7 @@ import remarkGfm from "remark-gfm";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { COLORS as C, FONTS } from "@/lib/design-tokens";
 
-type Provider = "github" | "vercel" | "supabase" | "neon" | "netlify";
+type Provider = "github" | "vercel" | "supabase" | "neon" | "netlify" | "cloudflare";
 
 const PROVIDERS: { id: Provider; name: string; icon: React.ReactNode; color: string; tokenUrl: string }[] = [
   { id: "github", name: "GitHub", icon: <GitBranch size={14} />, color: "#f0f6fc", tokenUrl: "github.com/settings/tokens" },
@@ -26,6 +26,7 @@ const PROVIDERS: { id: Provider; name: string; icon: React.ReactNode; color: str
   { id: "supabase", name: "Supabase", icon: <Database size={14} />, color: "#3ecf8e", tokenUrl: "supabase.com/dashboard/account/tokens" },
   { id: "neon", name: "Neon", icon: <Database size={14} />, color: "#00e599", tokenUrl: "console.neon.tech/app/settings/api-keys" },
   { id: "netlify", name: "Netlify", icon: <Server size={14} />, color: "#00c7b7", tokenUrl: "app.netlify.com/user/applications#personal-access-tokens" },
+  { id: "cloudflare", name: "Cloudflare", icon: <Cloud size={14} />, color: "#f38020", tokenUrl: "dash.cloudflare.com/profile/api-tokens" },
 ];
 
 async function api(url: string, opts?: RequestInit) { return (await fetch(url, opts)).json(); }
@@ -136,6 +137,7 @@ export function CloudPanel() {
             {prov === "supabase" && <SupabaseView pid={p} />}
             {prov === "neon" && <SimpleListView pid={p} provider="neon" endpoint="neon/projects" dataKey="projects" icon={<Database size={14} />} title="Projects" urlFn={(p: any) => `https://console.neon.tech/app/projects/${p.id}`} badgeFn={(p: any) => [{ label: `PG ${p.pg_version || "?"}`, color: "#818cf8" }]} />}
             {prov === "netlify" && <SimpleListView pid={p} provider="netlify" endpoint="netlify/sites" icon={<Server size={14} />} title="Sites" urlFn={(s: any) => s.admin_url} badgeFn={(s: any) => [s.published_deploy?.branch && { label: s.published_deploy.branch, color: "#818cf8" }].filter(Boolean) as any} />}
+            {prov === "cloudflare" && <CloudflareView pid={p} />}
           </>
         )}
       </div>
@@ -941,6 +943,12 @@ function VercelView({ pid }: { pid: string }) {
                   <button onClick={() => deleteEnv(v.id)} title="Delete" style={{ background: "none", border: "none", color: C.textDim, cursor: "pointer", padding: 1 }}><Trash2 size={9} /></button>
                 </div>
               ))}
+              {tab === "domains" && (
+                <div style={{ padding: "6px 10px", marginBottom: 6, borderRadius: 4, background: "#f59e0b0a", border: "1px solid #f59e0b30", fontSize: 9, color: "#f59e0b", lineHeight: 1.5 }}>
+                  <AlertCircle size={10} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />
+                  Custom domains require a credit card on your Vercel account. <a href="https://vercel.com/account/billing" target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: "none" }}>Configure billing →</a>
+                </div>
+              )}
               {tab === "domains" && showNewDomain && (
                 <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
                   <input value={newDomain} onChange={(e) => setNewDomain(e.target.value)} placeholder="example.com" style={{ ...inputSm, flex: 1 }} onKeyDown={(e) => { if (e.key === "Enter") addDomain(); }} />
@@ -1263,6 +1271,214 @@ function SimpleListView({ pid, provider, endpoint, dataKey, icon, title, urlFn, 
 }
 
 // ── Commit Files with inline diff ──
+// ═══════════════════════════════════════════════════════════════
+// Cloudflare View — Zones, DNS, Workers, Pages
+// ═══════════════════════════════════════════════════════════════
+function CloudflareView({ pid }: { pid: string }) {
+  const [tab, setTab] = useState<"zones" | "workers" | "pages">("zones");
+  const [zones, setZones] = useState<any[]>([]);
+  const [workers, setWorkers] = useState<any[]>([]);
+  const [pages, setPages] = useState<any[]>([]);
+  const [selectedZone, setSelectedZone] = useState<any>(null);
+  const [dnsRecords, setDnsRecords] = useState<any[]>([]);
+  const [accountId, setAccountId] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [showNewDns, setShowNewDns] = useState(false);
+  const [newDns, setNewDns] = useState({ type: "A", name: "", content: "", ttl: 1, proxied: true });
+  const [pageDeployments, setPageDeployments] = useState<any[]>([]);
+  const [selectedPage, setSelectedPage] = useState<any>(null);
+  const q = `projectId=${encodeURIComponent(pid)}`;
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const acc = await api(`/api/cloud/cloudflare/account?${q}`);
+        const aid = acc?.result?.[0]?.id || "";
+        setAccountId(aid);
+        const [z, w, p] = await Promise.all([
+          api(`/api/cloud/cloudflare/zones?${q}`),
+          aid ? api(`/api/cloud/cloudflare/workers?${q}&accountId=${aid}`) : { result: [] },
+          aid ? api(`/api/cloud/cloudflare/pages?${q}&accountId=${aid}`) : { result: [] },
+        ]);
+        setZones(z?.result || []);
+        setWorkers(w?.result || []);
+        setPages(p?.result || []);
+      } catch {}
+    })();
+  }, [q]);
+
+  const loadDns = async (zone: any) => {
+    setSelectedZone(zone);
+    try {
+      const d = await api(`/api/cloud/cloudflare/dns?${q}&zoneId=${zone.id}`);
+      setDnsRecords(d?.result || []);
+    } catch {}
+  };
+
+  const addDns = async () => {
+    if (!selectedZone || !newDns.name || !newDns.content) return;
+    await post("/api/cloud/cloudflare/dns", { projectId: pid, zoneId: selectedZone.id, ...newDns });
+    setShowNewDns(false); setNewDns({ type: "A", name: "", content: "", ttl: 1, proxied: true });
+    loadDns(selectedZone); notify("success", "DNS record added");
+  };
+
+  const deleteDns = async (recordId: string) => {
+    if (!selectedZone || !confirm("Delete this DNS record?")) return;
+    await del("/api/cloud/cloudflare/dns", { projectId: pid, zoneId: selectedZone.id, recordId });
+    loadDns(selectedZone); notify("info", "DNS record deleted");
+  };
+
+  const loadPageDeploys = async (project: any) => {
+    setSelectedPage(project);
+    try {
+      const d = await api(`/api/cloud/cloudflare/pages/deployments?${q}&accountId=${accountId}&projectName=${project.name}`);
+      setPageDeployments(d?.result || []);
+    } catch {}
+  };
+
+  const ts = (a: boolean): React.CSSProperties => ({ padding: "5px 10px", border: "none", cursor: "pointer", fontSize: 10, fontWeight: 600, fontFamily: FONTS.mono, color: a ? C.accent : C.textDim, background: "transparent", borderBottom: a ? `2px solid ${C.accent}` : "2px solid transparent" });
+
+  return (
+    <div style={{ display: "flex", height: "100%" }}>
+      {/* Sidebar — zones or pages list depending on tab */}
+      {sidebarOpen && (
+        <div style={{ width: 220, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column", flexShrink: 0 }}>
+          <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, padding: "0 4px" }}>
+            <button style={ts(tab === "zones")} onClick={() => setTab("zones")}>Zones</button>
+            <button style={ts(tab === "workers")} onClick={() => setTab("workers")}>Workers</button>
+            <button style={ts(tab === "pages")} onClick={() => setTab("pages")}>Pages</button>
+            <div style={{ flex: 1 }} />
+            <button onClick={() => setSidebarOpen(false)} style={{ background: "none", border: "none", color: C.textDim, cursor: "pointer", padding: 2, display: "flex", alignSelf: "center" }}><PanelLeftClose size={10} /></button>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {tab === "zones" && zones.map((z: any) => (
+              <button key={z.id} onClick={() => loadDns(z)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 5, padding: "6px 8px", background: selectedZone?.id === z.id ? C.surfaceAlt : "transparent", border: "none", color: selectedZone?.id === z.id ? C.text : C.textMid, fontFamily: FONTS.mono, fontSize: 9, cursor: "pointer", textAlign: "left", borderBottom: `1px solid ${C.border}` }}>
+                <Globe size={9} style={{ color: "#f38020", flexShrink: 0 }} />
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{z.name}</span>
+                <span style={{ fontSize: 7, color: z.status === "active" ? "#22c55e" : C.textDim }}>{z.status}</span>
+              </button>
+            ))}
+            {tab === "workers" && workers.map((w: any) => (
+              <div key={w.id} style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 8px", borderBottom: `1px solid ${C.border}`, fontSize: 9, fontFamily: FONTS.mono, color: C.textMid }}>
+                <Settings size={9} style={{ color: "#f38020" }} />
+                <span style={{ flex: 1 }}>{w.id}</span>
+              </div>
+            ))}
+            {tab === "pages" && pages.map((p: any) => (
+              <button key={p.name} onClick={() => loadPageDeploys(p)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 5, padding: "6px 8px", background: selectedPage?.name === p.name ? C.surfaceAlt : "transparent", border: "none", color: selectedPage?.name === p.name ? C.text : C.textMid, fontFamily: FONTS.mono, fontSize: 9, cursor: "pointer", textAlign: "left", borderBottom: `1px solid ${C.border}` }}>
+                <Rocket size={9} style={{ color: "#f38020" }} />
+                <span style={{ flex: 1 }}>{p.name}</span>
+              </button>
+            ))}
+            {tab === "zones" && zones.length === 0 && <Empty msg="No zones" />}
+            {tab === "workers" && workers.length === 0 && <Empty msg="No workers" />}
+            {tab === "pages" && pages.length === 0 && <Empty msg="No pages projects" />}
+          </div>
+        </div>
+      )}
+
+      {!sidebarOpen && (
+        <button onClick={() => setSidebarOpen(true)} style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", background: C.surface, border: "none", borderRight: `1px solid ${C.border}`, color: C.textDim, cursor: "pointer", flexShrink: 0 }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }} onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}>
+          <ChevronDown size={12} style={{ transform: "rotate(-90deg)" }} />
+        </button>
+      )}
+
+      {/* Detail panel */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflowY: "auto" }}>
+        {/* DNS Records for selected zone */}
+        {tab === "zones" && selectedZone && (
+          <div style={{ padding: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <Globe size={14} style={{ color: "#f38020" }} />
+              <span style={{ fontWeight: 600, fontSize: 13, color: C.text }}>{selectedZone.name}</span>
+              <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 3, background: selectedZone.status === "active" ? "#22c55e18" : "#f59e0b18", color: selectedZone.status === "active" ? "#22c55e" : "#f59e0b", fontFamily: FONTS.mono }}>{selectedZone.status}</span>
+              <div style={{ flex: 1 }} />
+              <button onClick={() => setShowNewDns(!showNewDns)} style={{ ...btnPrimary, padding: "3px 8px", fontSize: 9 }}><Plus size={9} /> DNS Record</button>
+            </div>
+
+            {showNewDns && (
+              <div style={{ padding: 10, marginBottom: 8, background: C.surfaceAlt, borderRadius: 5, border: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <select value={newDns.type} onChange={(e) => setNewDns({ ...newDns, type: e.target.value })} style={{ ...inputSm, width: 70 }}>
+                    {["A", "AAAA", "CNAME", "TXT", "MX", "NS"].map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <input value={newDns.name} onChange={(e) => setNewDns({ ...newDns, name: e.target.value })} placeholder="Name" style={{ ...inputSm, flex: 1 }} />
+                  <input value={newDns.content} onChange={(e) => setNewDns({ ...newDns, content: e.target.value })} placeholder="Content" style={{ ...inputSm, flex: 2 }} />
+                </div>
+                <div style={{ display: "flex", gap: 4, marginTop: 4, alignItems: "center" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9, color: C.textDim, cursor: "pointer" }}>
+                    <input type="checkbox" checked={newDns.proxied} onChange={(e) => setNewDns({ ...newDns, proxied: e.target.checked })} /> Proxied
+                  </label>
+                  <div style={{ flex: 1 }} />
+                  <button onClick={addDns} disabled={!newDns.name || !newDns.content} style={btnPrimary}>Add</button>
+                </div>
+              </div>
+            )}
+
+            {dnsRecords.map((r: any) => (
+              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", marginBottom: 2, borderRadius: 4, background: C.surface, border: `1px solid ${C.border}`, fontSize: 10, fontFamily: FONTS.mono }}>
+                <span style={{ width: 40, color: "#f38020", fontWeight: 600, fontSize: 8 }}>{r.type}</span>
+                <span style={{ flex: 1, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                <span style={{ color: C.textDim, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.content}</span>
+                {r.proxied && <span style={{ fontSize: 7, padding: "1px 4px", borderRadius: 2, background: "#f3802018", color: "#f38020" }}>proxied</span>}
+                <button onClick={() => deleteDns(r.id)} style={{ background: "none", border: "none", color: C.textDim, cursor: "pointer", padding: 1 }}><Trash2 size={8} /></button>
+              </div>
+            ))}
+            {dnsRecords.length === 0 && <Empty msg="No DNS records" />}
+          </div>
+        )}
+        {tab === "zones" && !selectedZone && <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, fontSize: 11 }}>Select a zone to manage DNS</div>}
+
+        {/* Workers detail */}
+        {tab === "workers" && (
+          <div style={{ padding: 12 }}>
+            <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8 }}>
+              {workers.length} Worker script{workers.length !== 1 ? "s" : ""} deployed
+            </div>
+            {workers.map((w: any) => (
+              <div key={w.id} style={{ padding: "8px 10px", marginBottom: 4, borderRadius: 5, background: C.surface, border: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
+                <Settings size={11} style={{ color: "#f38020" }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: C.text }}>{w.id}</div>
+                  <div style={{ fontSize: 8, color: C.textDim, fontFamily: FONTS.mono }}>{w.modified_on ? timeAgo(w.modified_on) : ""}</div>
+                </div>
+                <button onClick={() => window.open(`https://dash.cloudflare.com/${accountId}/workers/services/view/${w.id}`, "_blank")} style={{ ...btnGhost, padding: "2px 6px", fontSize: 8 }}><ExternalLink size={8} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Pages detail */}
+        {tab === "pages" && selectedPage && (
+          <div style={{ padding: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <Rocket size={14} style={{ color: "#f38020" }} />
+              <span style={{ fontWeight: 600, fontSize: 13, color: C.text }}>{selectedPage.name}</span>
+              {selectedPage.subdomain && (
+                <button onClick={() => window.open(`https://${selectedPage.subdomain}`, "_blank")} style={{ ...btnGhost, padding: "2px 6px", fontSize: 8 }}><ExternalLink size={8} /> {selectedPage.subdomain}</button>
+              )}
+            </div>
+            <div style={{ fontFamily: FONTS.mono, fontSize: 9, color: C.textDim, marginBottom: 6, textTransform: "uppercase" }}>Deployments ({pageDeployments.length})</div>
+            {pageDeployments.map((d: any) => (
+              <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", marginBottom: 2, borderRadius: 4, background: C.surface, border: `1px solid ${C.border}` }}>
+                {d.latest_stage?.status === "success" ? <CheckCircle2 size={10} color="#22c55e" /> : d.latest_stage?.status === "failure" ? <X size={10} color="#ef4444" /> : <Clock size={10} style={{ color: "#f59e0b" }} />}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 10, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.deployment_trigger?.metadata?.commit_message || "Deploy"}</div>
+                  <div style={{ fontSize: 8, color: C.textDim, fontFamily: FONTS.mono }}>{d.environment} · {timeAgo(d.created_on)}</div>
+                </div>
+                {d.url && <button onClick={() => window.open(d.url, "_blank")} style={{ background: "none", border: "none", color: C.textDim, cursor: "pointer" }}><ExternalLink size={8} /></button>}
+              </div>
+            ))}
+            {pageDeployments.length === 0 && <Empty msg="No deployments" />}
+          </div>
+        )}
+        {tab === "pages" && !selectedPage && <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: C.textDim, fontSize: 11 }}>Select a Pages project</div>}
+      </div>
+    </div>
+  );
+}
+
 function CommitFiles({ files }: { files: any[] }) {
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
 
