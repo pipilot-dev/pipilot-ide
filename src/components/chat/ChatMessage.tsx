@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { COLORS as C } from "@/lib/design-tokens";
+import { COLORS as C, FONTS } from "@/lib/design-tokens";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChatMessage as ChatMessageType, ToolCallInfo, BuiltinToolStatus } from "@/hooks/useChat";
@@ -38,6 +38,7 @@ import {
   Server,
   Package,
   ScrollText,
+  Terminal,
 } from "lucide-react";
 
 interface ChatMessageProps {
@@ -251,6 +252,111 @@ function ToolResultDisplay({ result, isError }: { result: string; isError: boole
   );
 }
 
+// ── Sequential Thinking — collapsible reasoning card ──
+function ThinkingCard({ toolCall }: { toolCall: ToolCallInfo }) {
+  const [expanded, setExpanded] = useState(false);
+  let args: any = {};
+  try { args = JSON.parse(toolCall.arguments); } catch {}
+  const thought = args.thought || "";
+  const num = args.thoughtNumber || "?";
+  const total = args.totalThoughts || "?";
+
+  return (
+    <div style={{ margin: "4px 0", borderRadius: 5, overflow: "hidden" }}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 6,
+          padding: "6px 10px", background: "transparent", border: "none",
+          cursor: "pointer", textAlign: "left",
+          color: C.textDim, fontSize: 11,
+        }}
+      >
+        <span style={{ fontSize: 10, color: "#818cf8" }}>💭</span>
+        <span style={{ fontFamily: FONTS.mono, fontSize: 9, color: "#818cf8", fontWeight: 600 }}>
+          Thinking {num}/{total}
+        </span>
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10, color: C.textDim }}>
+          {!expanded && thought.slice(0, 80)}{!expanded && thought.length > 80 ? "..." : ""}
+        </span>
+        <ChevronDown size={10} style={{ color: C.textDim, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
+      </button>
+      {expanded && (
+        <div style={{
+          padding: "8px 12px 10px 28px", fontSize: 11, lineHeight: 1.6,
+          color: C.textMid, whiteSpace: "pre-wrap",
+        }}>
+          {thought}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Terminal Command Card — Open Shell + Run Command buttons ──
+function TerminalCommandCard({ toolCall }: { toolCall: ToolCallInfo }) {
+  const [shellOpened, setShellOpened] = useState(false);
+  const [cmdSent, setCmdSent] = useState(false);
+  let args: any = {};
+  try { args = JSON.parse(toolCall.arguments); } catch {}
+  const command = args.command || "";
+
+  const openShell = () => {
+    window.dispatchEvent(new CustomEvent("pipilot:open-terminal"));
+    setShellOpened(true);
+  };
+
+  const runCommand = () => {
+    window.dispatchEvent(new CustomEvent("pipilot:terminal-send", { detail: { command } }));
+    setCmdSent(true);
+  };
+
+  return (
+    <div style={{
+      margin: "4px 0", padding: "8px 10px", borderRadius: 5,
+      background: "hsl(220 13% 14%)", border: `1px solid ${C.border}`,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+        <Terminal size={11} style={{ color: C.accent }} />
+        <span style={{ fontFamily: FONTS.mono, fontSize: 9, fontWeight: 600, color: C.accent, textTransform: "uppercase", letterSpacing: "0.04em" }}>Terminal</span>
+      </div>
+      <div style={{
+        padding: "6px 8px", borderRadius: 3, background: "hsl(220 13% 10%)",
+        fontFamily: FONTS.mono, fontSize: 11, color: C.text,
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        marginBottom: 8,
+      }}>
+        $ {command}
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={openShell} disabled={shellOpened} style={{
+          display: "flex", alignItems: "center", gap: 4, padding: "4px 10px",
+          fontSize: 9, fontFamily: FONTS.mono, fontWeight: 600,
+          background: shellOpened ? "hsl(142 50% 20%)" : C.surfaceAlt,
+          color: shellOpened ? "#6ee7b7" : C.textMid,
+          border: `1px solid ${shellOpened ? "#6ee7b740" : C.border}`,
+          borderRadius: 3, cursor: shellOpened ? "default" : "pointer",
+        }}>
+          {shellOpened ? <CheckCircle2 size={9} /> : <Terminal size={9} />}
+          {shellOpened ? "Shell Open" : "Open Shell"}
+        </button>
+        <button onClick={runCommand} disabled={!shellOpened || cmdSent} style={{
+          display: "flex", alignItems: "center", gap: 4, padding: "4px 10px",
+          fontSize: 9, fontFamily: FONTS.mono, fontWeight: 600,
+          background: cmdSent ? "hsl(142 50% 20%)" : (shellOpened ? C.accent : C.surfaceAlt),
+          color: cmdSent ? "#6ee7b7" : (shellOpened ? C.bg : C.textDim),
+          border: `1px solid ${cmdSent ? "#6ee7b740" : (shellOpened ? C.accent : C.border)}`,
+          borderRadius: 3, cursor: (!shellOpened || cmdSent) ? "default" : "pointer",
+          opacity: shellOpened ? 1 : 0.5,
+        }}>
+          {cmdSent ? <CheckCircle2 size={9} /> : <Play size={9} />}
+          {cmdSent ? "Sent" : "Run Command"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -289,10 +395,13 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
     toolCall.name === "write_file";
   const summaryFilePath = isFileTool && filePathArg ? filePathArg : null;
 
+  // For Bash: show description if available, command as subtitle
+  const bashDescription = (toolCall.name === "Bash" && parsedArgs.description) ? parsedArgs.description as string : null;
+
   const summary = filePathArg
     ? filePathArg
     : parsedArgs.command
-    ? `$ ${(parsedArgs.command as string).substring(0, 80)}`
+    ? (bashDescription || `$ ${(parsedArgs.command as string).substring(0, 80)}`)
     : parsedArgs.pattern
     ? parsedArgs.pattern as string
     : parsedArgs.content && typeof parsedArgs.content === "string"
@@ -999,7 +1108,16 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                     {msg.parts.map((part, pi) => {
                       if (part.type === "tool" && part.toolCallId) {
                         const tc = msg.toolCalls?.find(t => t.id === part.toolCallId);
-                        return tc ? <ToolCallCard key={`${msg.id}-pt-${pi}`} toolCall={tc} /> : null;
+                        if (!tc) return null;
+                        // Sequential thinking → collapsible reasoning card
+                        if (tc.name.includes("sequentialthinking") || tc.name.includes("sequential_thinking") || tc.name.includes("Sequentialthinking")) {
+                          return <ThinkingCard key={`${msg.id}-think-${pi}`} toolCall={tc} />;
+                        }
+                        // Run in terminal → command card with buttons
+                        if (tc.name === "run_in_terminal" || tc.name.includes("run_in_terminal")) {
+                          return <TerminalCommandCard key={`${msg.id}-term-${pi}`} toolCall={tc} />;
+                        }
+                        return <ToolCallCard key={`${msg.id}-pt-${pi}`} toolCall={tc} />;
                       }
                       if (part.type === "text" && part.content) {
                         return (
@@ -1035,9 +1153,15 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                             in multiple stream chunks during a step */}
                         {Array.from(
                           new Map(msg.toolCalls!.map((tc) => [tc.id, tc])).values()
-                        ).map((tc, idx) => (
-                          <ToolCallCard key={`${msg.id}-fb-${tc.id}-${idx}`} toolCall={tc} />
-                        ))}
+                        ).map((tc, idx) => {
+                          if (tc.name.includes("sequentialthinking") || tc.name.includes("sequential_thinking") || tc.name.includes("Sequentialthinking")) {
+                            return <ThinkingCard key={`${msg.id}-fb-think-${idx}`} toolCall={tc} />;
+                          }
+                          if (tc.name === "run_in_terminal" || tc.name.includes("run_in_terminal")) {
+                            return <TerminalCommandCard key={`${msg.id}-fb-term-${idx}`} toolCall={tc} />;
+                          }
+                          return <ToolCallCard key={`${msg.id}-fb-${tc.id}-${idx}`} toolCall={tc} />;
+                        })}
                       </div>
                     )}
                     {(hasContent || msg.streaming) && (
