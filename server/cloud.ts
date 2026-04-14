@@ -861,11 +861,13 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
 }
 
 // ── Standalone server mode ──
-// When run directly (not imported), starts its own Express server on port 3002.
+// When run directly (not imported), starts its own Express server.
 // This isolates cloud API calls from the main agent server so slow external
 // requests (GitHub, Vercel, Cloudflare) don't block agent streaming or terminal.
 if (process.argv[1]?.includes("cloud") || process.argv.includes("--standalone")) {
-  const WORKSPACE_BASE = path.join(process.cwd(), "workspaces");
+  // Dynamic import for standalone mode — avoid circular deps when imported as router
+  const cfg = await import("./config.js");
+  const WORKSPACE_BASE = cfg.WORKSPACE_BASE;
 
   // Workspace resolution — same logic as index.ts
   function resolveWorkDir(projectId: string): string {
@@ -889,7 +891,7 @@ if (process.argv[1]?.includes("cloud") || process.argv.includes("--standalone"))
   app.use(express.json({ limit: "5mb" }));
   app.use("/api/cloud", createCloudRouter(resolveWorkDir));
 
-  const PORT = 3002;
+  const PORT = cfg.PORT_CLOUD;
 
   // Crash protection
   process.on("uncaughtException", (err) => {

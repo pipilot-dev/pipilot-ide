@@ -48,15 +48,16 @@ app.use(cors());
 // even small video clips) inflated by base64 (~33% overhead) fit comfortably.
 app.use(express.json({ limit: "1gb" }));
 
-const PORT = process.env.PORT || 3001;
+import { PORT_AGENT, WORKSPACE_BASE as WORKSPACE_DIR, CHECKPOINT_DIR } from "./config";
+const PORT = process.env.PORT || PORT_AGENT;
 // Workspaces live in the project root, not in temp
-const WORKSPACE_BASE = path.join(process.cwd(), "workspaces");
+const WORKSPACE_BASE = WORKSPACE_DIR;
 
 // Initialize the linked-workspaces registry (Open Folder feature)
 initWorkspaces({ workspaceBase: WORKSPACE_BASE });
 
 // Initialize the checkpoints data dir (separate from workspace files)
-initCheckpoints({ dataDir: path.join(process.cwd(), ".pipilot-data", "checkpoints") });
+initCheckpoints({ dataDir: CHECKPOINT_DIR });
 
 /**
  * Resolve a projectId to its absolute working directory.

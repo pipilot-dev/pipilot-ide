@@ -3,6 +3,11 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
+// Port config — must match server/config.ts values
+const PORT_AGENT = parseInt(process.env.PIPILOT_PORT_AGENT || "51731");
+const PORT_CLOUD = parseInt(process.env.PIPILOT_PORT_CLOUD || "51732");
+const PORT_VITE = parseInt(process.env.PIPILOT_PORT_VITE || "51730");
+
 export default defineConfig({
   plugins: [
     react(),
@@ -16,12 +21,13 @@ export default defineConfig({
     dedupe: ["react", "react-dom"],
   },
   server: {
+    port: PORT_VITE,
     watch: {
-      ignored: ["**/workspaces/**", "**/node_modules/**"],
+      ignored: ["**/workspaces/**", "**/node_modules/**", "**/PiPilot/**"],
     },
     proxy: {
       "/api/files": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
         // Disable buffering for SSE streaming (file watcher)
         configure: (proxy) => {
@@ -34,11 +40,11 @@ export default defineConfig({
         },
       },
       "/api/preview": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/dev-server": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on("proxyRes", (proxyRes) => {
@@ -50,11 +56,11 @@ export default defineConfig({
         },
       },
       "/api/dev-preview": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/terminal": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on("proxyRes", (proxyRes) => {
@@ -66,51 +72,51 @@ export default defineConfig({
         },
       },
       "/api/git": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/project": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/diagnostics": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/checkpoints": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/workspaces": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/fs": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/mcp": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/connectors": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/cloud": {
-        target: "http://localhost:3002",
+        target: `http://localhost:${PORT_CLOUD}`,
         changeOrigin: true,
       },
       "/api/agents": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/wiki": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
       },
       "/api/codestral": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on("proxyRes", (proxyRes) => {
@@ -122,7 +128,7 @@ export default defineConfig({
         },
       },
       "/api/agent": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${PORT_AGENT}`,
         changeOrigin: true,
         // Disable buffering for SSE streaming
         configure: (proxy) => {
