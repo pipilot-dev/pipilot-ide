@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:51730",
     "beforeDevCommand": "pnpm dev:client",
-    "beforeBuildCommand": "pnpm build"
+    "beforeBuildCommand": "pnpm build && node scripts/bundle-server.mjs"
   },
   "app": {
     "windows": [
@@ -39,7 +39,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [],
+    "resources": [
+      "server-bundle/agent-server.mjs"
+    ],
     "externalBin": [],
     "copyright": "© 2026 PiPilot",
     "createUpdaterArtifacts": true,

@@ -125,8 +125,10 @@ pub fn run() {
 }
 
 fn start_servers(_handle: &tauri::AppHandle) {
-    // In dev mode, servers are started by the dev script.
-    // In production, spawn tsx/node to run the Express servers.
+    // In dev mode, servers are started by the dev script (pnpm dev).
+    // In production, spawn the bundled agent server via Node.js.
+    // Only the agent SDK streaming needs Node.js — everything else
+    // (terminal, files, git, cloud, checkpoints) uses Rust IPC.
     #[cfg(not(debug_assertions))]
     {
         use std::process::Command;
@@ -135,15 +137,19 @@ fn start_servers(_handle: &tauri::AppHandle) {
             .resource_dir()
             .expect("failed to get resource dir");
 
-        // Start agent server
-        let _ = Command::new("node")
-            .arg(resource_dir.join("server").join("index.js"))
-            .spawn();
-
-        // Start cloud server
-        let _ = Command::new("node")
-            .arg(resource_dir.join("server").join("cloud.js"))
-            .arg("--standalone")
-            .spawn();
+        // Start the bundled agent server (single 2MB JS file)
+        let server_path = resource_dir.join("server-bundle").join("agent-server.mjs");
+        if server_path.exists() {
+            match Command::new("node")
+                .arg(&server_path)
+                .env("NODE_ENV", "production")
+                .spawn()
+            {
+                Ok(_) => println!("[tauri] Agent server started: {:?}", server_path),
+                Err(e) => eprintln!("[tauri] Failed to start agent server: {}", e),
+            }
+        } else {
+            eprintln!("[tauri] Agent server bundle not found at: {:?}", server_path);
+        }
     }
 }
