@@ -1688,7 +1688,8 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
         <RunDebugPanel onRunPreview={onRunPreview} onOpenTerminal={onOpenTerminal} />
       )}
 
-      {view === "extensions" && (
+      {view === "extensions" && isDefaultProject && <NoProjectGuard />}
+      {view === "extensions" && !isDefaultProject && (
         <ExtensionMarketplace />
       )}
 
