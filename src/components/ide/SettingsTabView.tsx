@@ -458,6 +458,17 @@ export function SettingsTabView() {
               <SettingRow label="Auto-resume on refresh" hint="Continue interrupted streams without prompting">
                 <Toggle checked={get("aiAutoResume") === "true"} onChange={(v) => save("aiAutoResume", String(v))} />
               </SettingRow>
+
+              <SectionHeading label="Checkpoints" />
+              <SettingRow label="Enable checkpoints" hint="Automatically snapshot your project before and after every AI action. Lets you revert any change instantly.">
+                <Toggle checked={get("checkpointsEnabled") !== "false"} onChange={(v) => save("checkpointsEnabled", String(v))} />
+              </SettingRow>
+              <SettingRow label="Git-backed checkpoints" hint="Use git commits for checkpoints (faster, smaller storage). Requires git to be installed. Falls back to file snapshots if unavailable.">
+                <Toggle checked={get("checkpointsUseGit") !== "false"} onChange={(v) => save("checkpointsUseGit", String(v))} />
+              </SettingRow>
+              <SettingRow label="Max checkpoints per project" hint="Oldest checkpoints are auto-deleted when this limit is reached">
+                <NumberInput value={get("checkpointsMax") || "50"} onChange={(v) => save("checkpointsMax", v)} min={5} max={200} step={5} />
+              </SettingRow>
             </>
           )}
 

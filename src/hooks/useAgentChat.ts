@@ -441,7 +441,9 @@ export function useAgentChat(
 
     // Create checkpoint in background — never blocks the thinking bubble
     // or the POST to the agent. If it fails, streaming still proceeds.
-    if (checkpointManagerRef.current) {
+    // Respects the checkpointsEnabled setting.
+    const checkpointsOn = (() => { try { return localStorage.getItem("pipilot:checkpointsEnabled") !== "false"; } catch { return true; } })();
+    if (checkpointManagerRef.current && checkpointsOn) {
       checkpointManagerRef.current
         .createCheckpoint(
           `Before: ${userContent.slice(0, 50)}`,
@@ -774,8 +776,8 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
         m.id === assistantId ? { ...m, streaming: false } : m
       ));
 
-      // Create checkpoint after
-      if (checkpointManagerRef.current) {
+      // Create checkpoint after (respects setting)
+      if (checkpointManagerRef.current && checkpointsOn) {
         try {
           await checkpointManagerRef.current.createCheckpoint(
             `After: ${userContent.slice(0, 50)}`,

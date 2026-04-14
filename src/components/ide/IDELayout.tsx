@@ -963,10 +963,13 @@ export function IDELayout() {
     const openChat = () => setChatOpen(true);
     const openTerminal = () => setTerminalOpen(true);
     window.addEventListener("pipilot:open-chat", openChat);
+    const openSettings = () => setActiveView("settings");
     window.addEventListener("pipilot:open-terminal", openTerminal);
+    window.addEventListener("pipilot:open-settings", openSettings);
     return () => {
       window.removeEventListener("pipilot:open-chat", openChat);
       window.removeEventListener("pipilot:open-terminal", openTerminal);
+      window.removeEventListener("pipilot:open-settings", openSettings);
     };
   }, []);
 

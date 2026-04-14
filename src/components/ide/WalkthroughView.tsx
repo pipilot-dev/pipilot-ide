@@ -13,7 +13,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   FolderOpen, FileText, Terminal, MessageSquare, Sparkles, Play,
   ChevronLeft, ChevronRight, CheckCircle2, Circle, Rocket, Eye,
-  PanelLeft, Search, Keyboard, Settings,
+  PanelLeft, Search, Keyboard, Settings, RotateCcw, GitBranch, Shield,
 } from "lucide-react";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 
@@ -143,6 +143,15 @@ export function WalkthroughView({ walkthroughId, onOpenPreview }: WalkthroughVie
         accentColor: "#22d3ee",
         actionLabel: "Open Preview",
         action: () => onOpenPreview?.(),
+      },
+      {
+        title: "Checkpoints & Safety Net",
+        description: "Every AI action is automatically checkpointed \u2014 revert any change instantly.",
+        detail: "PiPilot creates a snapshot of your project before and after every AI action. This means you can:\n\n\u2022 Click the \u21A9 Revert button on any message to undo all changes from that point\n\u2022 Use the Checkpoint Bar (Undo/Redo arrows at the top) to step through history\n\u2022 Open the checkpoint dropdown to jump to any point in time\n\nCheckpoints are git-backed \u2014 each one is a lightweight git commit. No file copying, no storage bloat.\n\nYou can configure checkpoints in Settings \u2192 AI Assistant:\n\u2022 Enable/disable checkpoints entirely\n\u2022 Toggle git-backed mode\n\u2022 Set the maximum number of checkpoints to keep\n\nWith checkpoints enabled, you can let the AI make bold changes fearlessly \u2014 you\u2019re always one click away from going back.",
+        icon: <Shield size={28} />,
+        accentColor: "#22c55e",
+        actionLabel: "Open Settings",
+        action: () => window.dispatchEvent(new CustomEvent("pipilot:open-settings")),
       },
       {
         title: "You\u2019re an AI Power User!",

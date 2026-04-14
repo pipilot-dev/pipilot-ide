@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
-import { Undo2, Redo2, History } from "lucide-react";
+import { Undo2, Redo2, History, GitBranch, ShieldCheck, ShieldOff } from "lucide-react";
 import { useCheckpoints } from "@/hooks/useCheckpoints";
+import { COLORS as C } from "@/lib/design-tokens";
 
 function formatRelativeTime(date: Date): string {
   const now = Date.now();
@@ -29,6 +30,10 @@ export function CheckpointBar() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Read checkpoint settings
+  const checkpointsEnabled = (() => { try { return localStorage.getItem("pipilot:checkpointsEnabled") !== "false"; } catch { return true; } })();
+  const useGit = (() => { try { return localStorage.getItem("pipilot:checkpointsUseGit") !== "false"; } catch { return true; } })();
+
   // Close dropdown on outside click
   useEffect(() => {
     if (!dropdownOpen) return;
@@ -49,10 +54,19 @@ export function CheckpointBar() {
       className="flex items-center gap-0.5 px-1"
       style={{ height: "100%" }}
     >
+      {/* Status indicator */}
+      <span title={checkpointsEnabled ? (useGit ? "Git-backed checkpoints active" : "File-snapshot checkpoints active") : "Checkpoints disabled"} style={{ display: "flex", alignItems: "center", marginRight: 2 }}>
+        {checkpointsEnabled ? (
+          <ShieldCheck size={11} style={{ color: "#22c55e" }} />
+        ) : (
+          <ShieldOff size={11} style={{ color: "#6b7280" }} />
+        )}
+      </span>
+
       {/* Undo */}
       <button
         onClick={undo}
-        disabled={!canUndo}
+        disabled={!canUndo || !checkpointsEnabled}
         title="Undo (restore previous checkpoint)"
         className="flex items-center justify-center rounded p-1 transition-colors"
         style={{
