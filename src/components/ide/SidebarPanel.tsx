@@ -25,6 +25,8 @@ import {
   Trash2,
   X,
   CheckSquare,
+  FolderOpen,
+  Sparkles,
 } from "lucide-react";
 import { exportProjectAsZip } from "@/lib/exportZip";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
@@ -1302,7 +1304,29 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
                   }}
                 />
               )}
-              <FileTree
+              {activeProjectId === "default-project" ? (
+                <div style={{ padding: "24px 16px", textAlign: "center" }}>
+                  <div style={{ fontSize: 11, color: C.textDim, marginBottom: 16, lineHeight: 1.6 }}>
+                    Open a folder or generate a project to get started.
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"))} style={{
+                      padding: "8px 14px", borderRadius: 6, fontSize: 11, fontFamily: FONTS.mono, fontWeight: 600,
+                      background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text, cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                    }}>
+                      <FolderOpen size={13} /> Open Folder
+                    </button>
+                    <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:show-generate-modal"))} style={{
+                      padding: "8px 14px", borderRadius: 6, fontSize: 11, fontFamily: FONTS.mono, fontWeight: 600,
+                      background: C.accent, border: "none", color: "#fff", cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                    }}>
+                      <Sparkles size={13} /> Generate with AI
+                    </button>
+                  </div>
+                </div>
+              ) : <FileTree
                 nodes={filteredFiles}
                 selectedFileId={selectedFileId}
                 onSelectFile={onSelectFile}
@@ -1327,7 +1351,7 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
                 onRenameSubmit={handleRenameSubmit}
                 onRenameCancel={handleRenameCancel}
                 onExpandLazyFolder={onExpandLazyFolder}
-              />
+              />}
             </div>
           </div>
         </>

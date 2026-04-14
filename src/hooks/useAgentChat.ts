@@ -392,8 +392,8 @@ export function useAgentChat(
   const sendMessage = useCallback(async (userContent: string) => {
     if (!userContent.trim()) return;
 
-    // Block sending if no project is active — user needs to create or open one first
-    if (!projectIdRef.current) return;
+    // Block sending if no real project is active
+    if (!projectIdRef.current || projectIdRef.current === "default-project") return;
 
     // If agent is busy, push to the LOCAL queue (server-side queue is disabled
     // because it kept piling up duplicates). The queue auto-drains when the

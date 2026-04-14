@@ -958,7 +958,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         data-testid="chat-messages"
       >
         {/* No-project notice — user must create/open a project before chatting */}
-        {!projectId && (
+        {(!projectId || projectId === "default-project") && (
           <div style={{
             margin: "16px 12px 0", padding: "12px 14px", borderRadius: 8,
             background: `${C.accent}08`, border: `1px solid ${C.accent}20`,
@@ -1845,8 +1845,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
               maxHeight: "180px",
               caretColor: C.accent,
             }}
-            placeholder={!projectId ? "Open a workspace to start..." : mode === "plan" ? "describe what to research..." : "build something..."}
-            disabled={!projectId}
+            placeholder={(!projectId || projectId === "default-project") ? "Open a workspace to start..." : mode === "plan" ? "describe what to research..." : "build something..."}
+            disabled={!projectId || projectId === "default-project"}
             defaultValue={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
