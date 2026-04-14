@@ -1,7 +1,13 @@
+mod checkpoint;
 mod cloud;
+mod codestral;
+mod devserver;
+mod diagnostics;
 mod filesystem;
 mod git;
 mod terminal;
+mod wiki;
+mod workspace;
 
 use tauri::Manager;
 
@@ -11,11 +17,14 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(terminal::TerminalState::new())
         .manage(cloud::CloudState::new())
+        .manage(devserver::DevServerState::new())
         .invoke_handler(tauri::generate_handler![
+            // Terminal
             terminal::terminal_create,
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_kill,
+            // Filesystem
             filesystem::fs_read_file,
             filesystem::fs_write_file,
             filesystem::fs_create_dir,
@@ -26,6 +35,7 @@ pub fn run() {
             filesystem::fs_stat,
             filesystem::fs_exists,
             filesystem::fs_watch,
+            // Git
             git::git_check,
             git::git_status,
             git::git_init,
@@ -38,6 +48,7 @@ pub fn run() {
             git::git_branch_list,
             git::git_branch_create,
             git::git_checkout,
+            // Cloud
             cloud::cloud_save_token,
             cloud::cloud_status,
             cloud::cloud_github_repos,
@@ -62,6 +73,41 @@ pub fn run() {
             cloud::cloud_cloudflare_account,
             cloud::cloud_cloudflare_workers,
             cloud::cloud_cloudflare_pages,
+            // Checkpoint
+            checkpoint::checkpoint_create,
+            checkpoint::checkpoint_list,
+            checkpoint::checkpoint_restore,
+            checkpoint::checkpoint_find_before,
+            checkpoint::checkpoint_delete,
+            checkpoint::checkpoint_clear,
+            checkpoint::checkpoint_git_available,
+            // Workspace
+            workspace::workspace_link,
+            workspace::workspace_unlink,
+            workspace::workspace_list,
+            workspace::workspace_info,
+            workspace::workspace_touch,
+            workspace::fs_home,
+            workspace::fs_list_directory,
+            workspace::project_detect_framework,
+            workspace::project_scripts,
+            workspace::project_search,
+            // Dev Server
+            devserver::dev_server_start,
+            devserver::dev_server_stop,
+            devserver::dev_server_status,
+            devserver::dev_server_logs,
+            // Wiki
+            wiki::wiki_tree,
+            wiki::wiki_page,
+            wiki::wiki_scan,
+            wiki::wiki_save,
+            // Diagnostics
+            diagnostics::diagnostics_check,
+            diagnostics::diagnostics_install_deps,
+            // Codestral
+            codestral::codestral_fim,
+            codestral::codestral_chat,
         ])
         .setup(|app| {
             // Spawn the Express servers as sidecar processes
