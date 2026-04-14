@@ -73,47 +73,97 @@ interface ContextMenuState {
 }
 
 // Editorial-terminal icon colors — quiet, one muted hue per family
-const ICON_COLORS = {
-  ts:    "#7ad6ff", // sky
-  js:    "#ffb86b", // amber
-  json:  "#ffd96b", // gold
-  md:    "#a8ff7a", // mint
-  css:   "#c6a6ff", // lavender
-  html:  "#ff9b6b", // coral
-  yaml:  "#a8a8b3", // mid
-  py:    "#7adfff", // bright sky
-  go:    "#7adfff",
-  rs:    "#ff9b6b",
+// Devicon class mapping: extension → devicon class name
+// Uses the CDN loaded in index.html: https://cdn.jsdelivr.net/gh/devicons/devicon@latest/devicon.min.css
+const DEVICON_MAP: Record<string, string> = {
+  ts: "devicon-typescript-plain",
+  tsx: "devicon-typescript-plain",
+  js: "devicon-javascript-plain",
+  jsx: "devicon-javascript-plain",
+  mjs: "devicon-javascript-plain",
+  cjs: "devicon-javascript-plain",
+  py: "devicon-python-plain",
+  go: "devicon-go-plain",
+  rs: "devicon-rust-original",
+  java: "devicon-java-plain",
+  kt: "devicon-kotlin-plain",
+  swift: "devicon-swift-plain",
+  rb: "devicon-ruby-plain",
+  php: "devicon-php-plain",
+  cs: "devicon-csharp-plain",
+  cpp: "devicon-cplusplus-plain",
+  c: "devicon-c-plain",
+  html: "devicon-html5-plain",
+  htm: "devicon-html5-plain",
+  css: "devicon-css3-plain",
+  scss: "devicon-sass-original",
+  sass: "devicon-sass-original",
+  less: "devicon-less-plain-wordmark",
+  json: "devicon-json-plain",
+  md: "devicon-markdown-original",
+  mdx: "devicon-markdown-original",
+  yml: "devicon-yaml-plain",
+  yaml: "devicon-yaml-plain",
+  docker: "devicon-docker-plain",
+  dockerfile: "devicon-docker-plain",
+  sh: "devicon-bash-plain",
+  bash: "devicon-bash-plain",
+  sql: "devicon-azuresqldatabase-plain",
+  graphql: "devicon-graphql-plain",
+  vue: "devicon-vuejs-plain",
+  svelte: "devicon-svelte-plain",
+  dart: "devicon-dart-plain",
+  lua: "devicon-lua-plain",
+  r: "devicon-r-plain",
+  toml: "devicon-tomcat-line",
+  xml: "devicon-xml-plain",
+  svg: "devicon-svg-plain",
+};
+
+// Special filename matches (not just extension)
+const DEVICON_FILENAME_MAP: Record<string, string> = {
+  "package.json": "devicon-npm-original-wordmark",
+  "tsconfig.json": "devicon-typescript-plain",
+  "vite.config.ts": "devicon-vitejs-plain",
+  "vite.config.js": "devicon-vitejs-plain",
+  "next.config.js": "devicon-nextjs-plain",
+  "next.config.mjs": "devicon-nextjs-plain",
+  "next.config.ts": "devicon-nextjs-plain",
+  "tailwind.config.js": "devicon-tailwindcss-original",
+  "tailwind.config.ts": "devicon-tailwindcss-original",
+  "postcss.config.js": "devicon-postcss-plain",
+  ".gitignore": "devicon-git-plain",
+  ".env": "devicon-dotnetcore-plain",
+  "dockerfile": "devicon-docker-plain",
+  "docker-compose.yml": "devicon-docker-plain",
+  ".eslintrc": "devicon-eslint-original",
+  ".eslintrc.js": "devicon-eslint-original",
+  "jest.config.js": "devicon-jest-plain",
+  "webpack.config.js": "devicon-webpack-plain",
+};
+
+const FALLBACK_COLORS: Record<string, string> = {
   default: "#5e5e68",
-} as const;
+};
 
 function getFileIcon(name: string) {
-  const ext = name.split(".").pop()?.toLowerCase();
-  const sz = 12;
-  switch (ext) {
-    case "tsx": case "ts":
-      return <FileCode2 size={sz} style={{ color: ICON_COLORS.ts, flexShrink: 0 }} />;
-    case "jsx": case "js": case "mjs": case "cjs":
-      return <FileCode2 size={sz} style={{ color: ICON_COLORS.js, flexShrink: 0 }} />;
-    case "json":
-      return <FileJson size={sz} style={{ color: ICON_COLORS.json, flexShrink: 0 }} />;
-    case "md": case "mdx":
-      return <FileText size={sz} style={{ color: ICON_COLORS.md, flexShrink: 0 }} />;
-    case "css": case "scss": case "sass":
-      return <FileType size={sz} style={{ color: ICON_COLORS.css, flexShrink: 0 }} />;
-    case "html": case "htm":
-      return <FileType size={sz} style={{ color: ICON_COLORS.html, flexShrink: 0 }} />;
-    case "yml": case "yaml": case "toml":
-      return <FileText size={sz} style={{ color: ICON_COLORS.yaml, flexShrink: 0 }} />;
-    case "py":
-      return <FileCode2 size={sz} style={{ color: ICON_COLORS.py, flexShrink: 0 }} />;
-    case "go":
-      return <FileCode2 size={sz} style={{ color: ICON_COLORS.go, flexShrink: 0 }} />;
-    case "rs":
-      return <FileCode2 size={sz} style={{ color: ICON_COLORS.rs, flexShrink: 0 }} />;
-    default:
-      return <FileText size={sz} style={{ color: ICON_COLORS.default, flexShrink: 0 }} />;
+  const lower = name.toLowerCase();
+  const ext = lower.split(".").pop() || "";
+
+  // Check filename match first (package.json, vite.config.ts, etc.)
+  const filenameIcon = DEVICON_FILENAME_MAP[lower];
+  if (filenameIcon) {
+    return <i className={`${filenameIcon} colored`} style={{ fontSize: 13, flexShrink: 0, width: 14, textAlign: "center" }} />;
   }
+
+  // Check extension match
+  const deviconClass = DEVICON_MAP[ext];
+  if (deviconClass) {
+    return <i className={`${deviconClass} colored`} style={{ fontSize: 13, flexShrink: 0, width: 14, textAlign: "center" }} />;
+  }
+
+  // Fallback to Lucide icons
+  return <FileText size={12} style={{ color: FALLBACK_COLORS.default, flexShrink: 0 }} />;
 }
 
 // ---------- Context Menu Component (rendered via portal) ----------

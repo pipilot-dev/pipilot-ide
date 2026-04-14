@@ -402,6 +402,8 @@ export function ExtensionMarketplace() {
               const isInstalled = sanitizedName in userMcp || server.name in userMcp;
               const remote = server.remotes[0];
               const pkg = server.packages[0];
+              const needsConfig = pkg?.envVars?.some((v: any) => v.required) || false;
+              const isConfigOpen = configuring === sanitizedName;
               return (
                 <div key={`${server.name}-${server.version}`} style={{
                   padding: "8px 10px", margin: "4px 0", borderRadius: 6,
@@ -429,6 +431,7 @@ export function ExtensionMarketplace() {
                       <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
                         {remote && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 2, background: "hsl(207 60% 25%)", color: "hsl(207 80% 70%)" }}>{remote.type}</span>}
                         {pkg && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 2, background: "hsl(142 40% 22%)", color: "hsl(142 60% 65%)" }}>{pkg.registry}</span>}
+                        {needsConfig && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 2, background: "hsl(38 80% 22%)", color: "hsl(38 90% 65%)" }}>needs key</span>}
                       </div>
                     </div>
                     {isInstalled ? (
@@ -436,10 +439,15 @@ export function ExtensionMarketplace() {
                     ) : (
                       <button
                         onClick={() => {
+                          if (needsConfig) {
+                            setConfiguring(isConfigOpen ? null : sanitizedName);
+                            setConfigValues({});
+                            return;
+                          }
                           if (remote) {
-                            installMcp(server.name.replace(/[^a-z0-9]/gi, "-"), { type: remote.type === "sse" ? "sse" : "http", url: remote.url });
+                            installMcp(sanitizedName, { type: remote.type === "sse" ? "sse" : "http", url: remote.url });
                           } else if (pkg) {
-                            installMcp(server.name.replace(/[^a-z0-9]/gi, "-"), { command: "npx", args: ["-y", pkg.identifier] });
+                            installMcp(sanitizedName, { command: "npx", args: ["-y", pkg.identifier] });
                           }
                         }}
                         disabled={installing === server.name}
@@ -449,10 +457,52 @@ export function ExtensionMarketplace() {
                           border: "none", borderRadius: 3, cursor: "pointer", flexShrink: 0,
                         }}
                       >
-                        Install
+                        {needsConfig ? "Configure" : "Install"}
                       </button>
                     )}
                   </div>
+
+                  {/* Env var config form for registry servers that need API keys */}
+                  {isConfigOpen && pkg?.envVars?.length > 0 && (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid hsl(220 13% 22%)" }}>
+                      {pkg.envVars.map((v: any) => (
+                        <div key={v.name} style={{ marginBottom: 5 }}>
+                          <label style={{ fontSize: 9, color: "hsl(220 14% 50%)", fontFamily: FONTS.mono, display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+                            <Key size={9} />
+                            {v.name} {v.required && <span style={{ color: C.accent }}>*</span>}
+                          </label>
+                          <input
+                            type={v.secret ? "password" : "text"}
+                            value={configValues[v.name] || ""}
+                            onChange={(e) => setConfigValues((p) => ({ ...p, [v.name]: e.target.value }))}
+                            placeholder={v.description || v.name}
+                            style={inputStyle}
+                          />
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => {
+                          const env: Record<string, string> = {};
+                          for (const v of pkg.envVars) env[v.name] = configValues[v.name] || "";
+                          if (pkg.transport === "stdio") {
+                            installMcp(sanitizedName, { command: "npx", args: ["-y", pkg.identifier], env });
+                          } else if (remote) {
+                            installMcp(sanitizedName, { type: remote.type === "sse" ? "sse" : "http", url: remote.url, headers: env });
+                          }
+                          setConfiguring(null);
+                          setConfigValues({});
+                        }}
+                        disabled={pkg.envVars.filter((v: any) => v.required).some((v: any) => !configValues[v.name])}
+                        style={{
+                          padding: "4px 12px", fontSize: 9, fontFamily: FONTS.mono, fontWeight: 600,
+                          background: C.accent, color: "hsl(220 13% 10%)",
+                          border: "none", borderRadius: 3, cursor: "pointer", marginTop: 4,
+                        }}
+                      >
+                        Install
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}

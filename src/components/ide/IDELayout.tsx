@@ -5,6 +5,7 @@ import { TitleBar } from "./TitleBar";
 import { SidebarPanel } from "./SidebarPanel";
 import { EditorArea, EditorTab } from "./EditorArea";
 import { ChatPanel } from "../chat/ChatPanel";
+import { CloudPanel } from "../cloud/CloudPanel";
 import { CommandPalette } from "./CommandPalette";
 import { TerminalPanel } from "./TerminalPanel";
 import SettingsPanel from "@/components/ide/SettingsPanel";
@@ -1302,8 +1303,15 @@ export function IDELayout() {
           badges={{ "source-control": gitChangeCount }}
         />
 
-        {/* Sidebar */}
-        {activeView && (
+        {/* Cloud panel — full width, replaces sidebar + editor */}
+        {activeView === "cloud" && (
+          <div className="flex-1 overflow-hidden">
+            <CloudPanel />
+          </div>
+        )}
+
+        {/* Sidebar (hidden when cloud panel is active) */}
+        {activeView && activeView !== "cloud" && (
           <>
             <div
               className="overflow-hidden border-r"
@@ -1344,8 +1352,8 @@ export function IDELayout() {
           </>
         )}
 
-        {/* Editor + Terminal area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Editor + Terminal area (hidden when cloud panel is active) */}
+        <div className="flex-1 flex flex-col overflow-hidden" style={{ display: activeView === "cloud" ? "none" : undefined }}>
           <EditorArea
             tabs={tabs}
             activeTabId={activeTabId}

@@ -22,6 +22,9 @@ import {
   History,
   FilePlus,
   FolderPlus,
+  Trash2,
+  X,
+  CheckSquare,
 } from "lucide-react";
 import { exportProjectAsZip } from "@/lib/exportZip";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
@@ -663,8 +666,14 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
   }, [lastClickedFileId, flatNodeIds]);
 
   const handleSelectAll = useCallback(() => {
-    setSelectedSet(new Set(flatNodeIds));
-  }, [flatNodeIds]);
+    // Toggle: if all are already selected, deselect all
+    if (selectedSet.size === flatNodeIds.length && flatNodeIds.length > 0) {
+      setSelectedSet(new Set());
+      setLastClickedFileId(null);
+    } else {
+      setSelectedSet(new Set(flatNodeIds));
+    }
+  }, [flatNodeIds, selectedSet.size]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedSet(new Set());
@@ -1181,6 +1190,47 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
             </div>
           </div>
 
+          {/* Bulk-selection strip — floats over filter input when files selected */}
+          {selectedSet.size > 0 && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 2,
+              padding: "4px 8px",
+              margin: "-30px 8px 4px",
+              position: "relative", zIndex: 5,
+              background: "hsl(220 13% 14%)",
+              border: `1px solid ${C.accentLine}`,
+              borderRadius: 5,
+            }}>
+              <span style={{
+                fontFamily: FONTS.mono, fontSize: 8, fontWeight: 600,
+                color: C.accent, marginRight: 2,
+              }}>
+                {selectedSet.size}
+              </span>
+              <div style={{ flex: 1 }} />
+              <button onClick={handleSelectAll} title="Select all (⌘A)" style={bulkBtnStyle}
+                onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}>
+                <CheckSquare size={11} />
+              </button>
+              <button onClick={handleBulkDownload} title="Download as ZIP" style={bulkBtnStyle}
+                onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}>
+                <Download size={11} />
+              </button>
+              <button onClick={handleBulkDelete} title="Delete selected" style={bulkBtnStyle}
+                onMouseEnter={(e) => { e.currentTarget.style.color = "#ff9b9b"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}>
+                <Trash2 size={11} />
+              </button>
+              <button onClick={handleClearSelection} title="Clear selection (Esc)" style={bulkBtnStyle}
+                onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}>
+                <X size={10} />
+              </button>
+            </div>
+          )}
+
           <div style={{ borderTop: `1px solid ${C.border}` }}>
             <div
               style={{
@@ -1202,62 +1252,6 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
               </span>
             </div>
 
-            {/* Bulk-selection action strip — visible when files are multi-selected */}
-            {selectedSet.size > 0 && (
-              <div style={{
-                display: "flex", alignItems: "center", gap: 6,
-                padding: "8px 14px",
-                margin: "0 8px 6px",
-                background: C.accentDim,
-                border: `1px solid ${C.accentLine}`,
-                borderRadius: 3,
-              }}>
-                <span style={{
-                  fontFamily: FONTS.mono, fontSize: 9, fontWeight: 600,
-                  letterSpacing: "0.12em", textTransform: "uppercase",
-                  color: C.accent,
-                }}>
-                  {String(selectedSet.size).padStart(2, "0")} selected
-                </span>
-                <div style={{ flex: 1 }} />
-                <button
-                  onClick={handleSelectAll}
-                  title="Select all (⌘A)"
-                  style={bulkBtnStyle}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
-                >
-                  All
-                </button>
-                <button
-                  onClick={handleBulkDownload}
-                  title="Download as ZIP"
-                  style={bulkBtnStyle}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
-                >
-                  ↓ ZIP
-                </button>
-                <button
-                  onClick={handleBulkDelete}
-                  title="Delete selected"
-                  style={bulkBtnStyle}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = "#ff9b9b"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
-                >
-                  Delete
-                </button>
-                <button
-                  onClick={handleClearSelection}
-                  title="Clear selection (Esc)"
-                  style={{ ...bulkBtnStyle, padding: "2px 4px" }}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
-                >
-                  ✕
-                </button>
-              </div>
-            )}
             <div
               ref={fileTreeWrapperRef}
               className="pb-2 overflow-y-auto"

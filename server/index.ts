@@ -39,6 +39,7 @@ import {
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { createCloudRouter } from "./cloud";
 
 const app = express();
 app.use(cors());
@@ -5231,6 +5232,8 @@ app.post("/api/connectors/remove", express.json(), (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.use("/api/cloud", createCloudRouter(getWorkDir));
 
 app.listen(PORT, () => {
   console.log(`[agent-server] Running on http://localhost:${PORT}`);
