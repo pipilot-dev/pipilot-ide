@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { db } from "@/lib/db";
+import { terminalBridge } from "@/lib/terminal-bridge";
 
 // Read terminal settings — prefer localStorage (always up-to-date from
 // SettingsTabView save()), fall back to IndexedDB cache.
@@ -95,62 +96,27 @@ export function RealTerminal({ sessionId, projectId, initialCommand, profile, on
     termRef.current = term;
     fitRef.current = fitAddon;
 
-    // Helper functions using closure over sid
-    // Batch keystrokes: buffer input and flush after 8ms of silence.
-    // Sends one HTTP request per typing burst instead of one per character.
-    let writeBuffer = "";
-    let writeTimer: ReturnType<typeof setTimeout> | null = null;
-    const flushWrite = () => {
-      if (!writeBuffer) return;
-      const data = writeBuffer;
-      writeBuffer = "";
-      writeTimer = null;
-      fetch("/api/terminal/write", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: sid, data }),
-      }).catch(() => {});
-    };
-    const writeToPty = (data: string) => {
-      writeBuffer += data;
-      if (writeTimer) clearTimeout(writeTimer);
-      writeTimer = setTimeout(flushWrite, 8);
-    };
+    // Bridge handles Tauri IPC (desktop) vs HTTP+SSE (web) automatically
+    const writeToPty = (data: string) => terminalBridge.write(sid, data);
+    const resizePty = (cols: number, rows: number) => terminalBridge.resize(sid, cols, rows);
 
-    const resizePty = (cols: number, rows: number) => {
-      fetch("/api/terminal/resize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: sid, cols, rows }),
-      }).catch(() => {});
-    };
-
-    // Fit after next render frame (smoother than setTimeout)
+    // Fit after next render frame
     let fitTimer: ReturnType<typeof setTimeout>;
     requestAnimationFrame(() => {
       try { fitAddon.fit(); } catch {}
     });
 
-    // Create PTY session
-    fetch("/api/terminal/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: pid,
-        sessionId: sid,
-        profile: profileRef.current,
-      }),
-    }).then(async (res) => {
-      if (!res.ok) {
-        term.writeln("\r\n\x1b[31mFailed to create terminal session\x1b[0m");
-        return;
-      }
+    // Track cleanup functions from bridge listeners
+    let unlistenData: (() => void) | null = null;
+    let unlistenExit: (() => void) | null = null;
 
-      // Connect SSE for output
-      const es = new EventSource(`/api/terminal/stream?sessionId=${encodeURIComponent(sid)}`);
-      sseRef.current = es;
-
-      // Track when shell is ready (first output received) to send initial command
+    // Create PTY session via bridge
+    terminalBridge.create({
+      projectId: pid,
+      sessionId: sid,
+      profile: profileRef.current,
+    }).then(({ id: termId }) => {
+      // Listen for PTY output → write to xterm
       let firstOutputReceived = false;
       let initialCmdSent = false;
       const sendInitialCmd = () => {
@@ -158,29 +124,23 @@ export function RealTerminal({ sessionId, projectId, initialCommand, profile, on
         const cmd = initialCommandRef.current;
         if (!cmd) return;
         initialCmdSent = true;
-        // Small delay to let the prompt render
         setTimeout(() => writeToPty(cmd + "\r"), 250);
       };
 
-      es.onmessage = (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (data.output) {
-            term.write(data.output);
-            if (!firstOutputReceived) {
-              firstOutputReceived = true;
-              sendInitialCmd();
-            }
-          }
-          if (data.exit) {
-            term.writeln("\r\n\x1b[33m[Process exited]\x1b[0m");
-            es.close();
-            onExitRef.current?.();
-          }
-        } catch {}
-      };
+      unlistenData = terminalBridge.onData(termId, (data) => {
+        term.write(data);
+        if (!firstOutputReceived) {
+          firstOutputReceived = true;
+          sendInitialCmd();
+        }
+      });
 
-      // Send initial resize after SSE connects
+      unlistenExit = terminalBridge.onExit(termId, () => {
+        term.writeln("\r\n\x1b[33m[Process exited]\x1b[0m");
+        onExitRef.current?.();
+      });
+
+      // Send initial resize after connection
       setTimeout(() => {
         try {
           fitAddon.fit();
@@ -188,11 +148,10 @@ export function RealTerminal({ sessionId, projectId, initialCommand, profile, on
         } catch {}
       }, 150);
 
-      // Fallback: if no output arrives within 2s (e.g. very fast empty prompt),
-      // still try to send the initial command
+      // Fallback: send initial command after 2s if no output yet
       setTimeout(sendInitialCmd, 2000);
     }).catch(() => {
-      term.writeln("\r\n\x1b[31mFailed to connect to terminal server\x1b[0m");
+      term.writeln("\r\n\x1b[31mFailed to connect to terminal\x1b[0m");
     });
 
     // Forward keyboard input
@@ -246,8 +205,10 @@ export function RealTerminal({ sessionId, projectId, initialCommand, profile, on
       dataDisposable.dispose();
       window.removeEventListener("pipilot:terminal-send", onTerminalSend);
       window.removeEventListener("pipilot:setting-changed", onSettingChanged);
-      sseRef.current?.close();
-      sseRef.current = null;
+      // Cleanup bridge listeners + kill PTY
+      unlistenData?.();
+      unlistenExit?.();
+      terminalBridge.kill(sid);
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
