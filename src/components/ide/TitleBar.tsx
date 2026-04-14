@@ -199,8 +199,8 @@ export function TitleBar(props: TitleBarHandlers) {
     {
       label: "File",
       items: [
-        { label: "New File", shortcut: "⌘N", onClick: run(props.onNewFile) },
-        { label: "New Folder", onClick: run(props.onNewFolder) },
+        { label: "New File", shortcut: "⌘N", onClick: run(props.onNewFile), disabled: !activeProjectId || activeProjectId === "default-project" },
+        { label: "New Folder", onClick: run(props.onNewFolder), disabled: !activeProjectId || activeProjectId === "default-project" },
         { separator: true },
         { label: "Open Folder…", shortcut: "⌘O", onClick: run(props.onOpenFolder) },
         { label: "Clone Repository…", onClick: run(props.onCloneRepo) },
