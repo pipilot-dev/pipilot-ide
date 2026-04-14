@@ -1,3 +1,5 @@
+mod filesystem;
+mod git;
 mod terminal;
 
 use tauri::Manager;
@@ -12,6 +14,28 @@ pub fn run() {
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_kill,
+            filesystem::fs_read_file,
+            filesystem::fs_write_file,
+            filesystem::fs_create_dir,
+            filesystem::fs_delete,
+            filesystem::fs_rename,
+            filesystem::fs_copy,
+            filesystem::fs_list_dir,
+            filesystem::fs_stat,
+            filesystem::fs_exists,
+            filesystem::fs_watch,
+            git::git_check,
+            git::git_status,
+            git::git_init,
+            git::git_add,
+            git::git_commit,
+            git::git_log,
+            git::git_diff,
+            git::git_push,
+            git::git_pull,
+            git::git_branch_list,
+            git::git_branch_create,
+            git::git_checkout,
         ])
         .setup(|app| {
             // Spawn the Express servers as sidecar processes
