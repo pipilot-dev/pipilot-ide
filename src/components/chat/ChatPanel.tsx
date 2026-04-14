@@ -957,33 +957,35 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         onScroll={handleScroll}
         data-testid="chat-messages"
       >
-        {/* No-project notice — user must create/open a project before chatting */}
-        {(!projectId || projectId === "default-project") && (
-          <div style={{
-            margin: "16px 12px 0", padding: "12px 14px", borderRadius: 8,
-            background: `${C.accent}08`, border: `1px solid ${C.accent}20`,
-            display: "flex", flexDirection: "column", gap: 8,
-          }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>No workspace open</div>
-            <div style={{ fontSize: 11, color: C.textMid, lineHeight: 1.5 }}>
-              Open a folder or create a new project to start chatting with the AI agent.
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"))} style={{
-                display: "flex", alignItems: "center", gap: 4, padding: "5px 12px", borderRadius: 5,
-                background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text,
-                fontFamily: FONTS.mono, fontSize: 10, fontWeight: 600, cursor: "pointer",
-              }}>Open Folder</button>
-              <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-generate-modal"))} style={{
-                display: "flex", alignItems: "center", gap: 4, padding: "5px 12px", borderRadius: 5,
-                background: C.accent, border: "none", color: "#fff",
-                fontFamily: FONTS.mono, fontSize: 10, fontWeight: 600, cursor: "pointer",
-              }}>Generate with AI</button>
+        {messages.length === 0 && (!projectId || projectId === "default-project") && (
+          <div className="flex flex-col items-center justify-center h-full text-center gap-4 py-8">
+            <div style={{ width: "100%", maxWidth: 340, padding: "32px 16px" }}>
+              <div style={{ fontFamily: FONTS.mono, fontSize: 9, fontWeight: 500, letterSpacing: "0.18em", textTransform: "uppercase", color: C.accent, marginBottom: 12 }}>
+                <span style={{ color: C.textDim }}>// </span>get started
+              </div>
+              <h2 style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 300, color: C.text, margin: "0 0 6px", letterSpacing: "-0.02em" }}>
+                open a <em style={{ fontWeight: 500, fontStyle: "normal", color: C.accent }}>workspace</em>
+              </h2>
+              <p style={{ fontSize: 12, color: C.textDim, lineHeight: 1.6, margin: "0 0 20px" }}>
+                Open a folder or generate a new project to start building with the AI agent.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"))} style={{
+                  padding: "9px 16px", borderRadius: 6, fontSize: 11, fontFamily: FONTS.mono, fontWeight: 600,
+                  background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text, cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                }}>Open Folder</button>
+                <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:show-generate-modal"))} style={{
+                  padding: "9px 16px", borderRadius: 6, fontSize: 11, fontFamily: FONTS.mono, fontWeight: 600,
+                  background: C.accent, border: "none", color: "#fff", cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                }}>Generate with AI</button>
+              </div>
             </div>
           </div>
         )}
 
-        {messages.length === 0 && (
+        {messages.length === 0 && projectId && projectId !== "default-project" && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-4 py-8">
             {/* Editorial empty-state — display heading + numbered prompts */}
             <div style={{ width: "100%", maxWidth: 360, padding: "32px 8px" }}>
