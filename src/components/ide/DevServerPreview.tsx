@@ -306,6 +306,7 @@ export function DevServerPreview() {
           const indent = "  ".repeat(depth);
           const ref = `e${refCounter++}`;
           const tag = el.tagName.toLowerCase();
+          const cs = getComputedStyle(el);
 
           // Map to semantic roles
           const roleMap: Record<string, string> = {
@@ -325,10 +326,50 @@ export function DevServerPreview() {
           if (text) parts[0] = `${role} "${text}" [ref=${ref}]`;
           if (tag.match(/^h[1-6]$/)) parts.push(`[level=${tag[1]}]`);
           if (el instanceof HTMLAnchorElement && el.href) parts.push(`\n${indent}  - /url: ${el.getAttribute("href") || ""}`);
-          const cursor = getComputedStyle(el).cursor;
-          if (cursor === "pointer") parts[0] += ` [cursor=pointer]`;
+          if (cs.cursor === "pointer") parts[0] += ` [cursor=pointer]`;
 
           const lines: string[] = [`${indent}- ${parts.join(" ")}`];
+
+          // ── Computed styles (only non-default, layout-relevant) ──
+          const styles: string[] = [];
+          // Layout
+          if (cs.display !== "block" && cs.display !== "inline") styles.push(`display:${cs.display}`);
+          if (cs.position !== "static") styles.push(`position:${cs.position}`);
+          if (cs.flexDirection && cs.display.includes("flex")) styles.push(`flex-direction:${cs.flexDirection}`);
+          if (cs.gap && cs.gap !== "normal" && cs.gap !== "0px") styles.push(`gap:${cs.gap}`);
+          if (cs.overflow !== "visible") styles.push(`overflow:${cs.overflow}`);
+          if (cs.zIndex !== "auto") styles.push(`z-index:${cs.zIndex}`);
+          // Sizing
+          const rect = el.getBoundingClientRect();
+          styles.push(`${Math.round(rect.width)}×${Math.round(rect.height)}`);
+          if (cs.padding !== "0px") styles.push(`padding:${cs.padding}`);
+          if (cs.margin !== "0px" && cs.margin !== "0px 0px") {
+            const m = cs.margin.replace(/ 0px/g, "").replace(/^0px /, "");
+            if (m && m !== "0px") styles.push(`margin:${cs.margin}`);
+          }
+          // Colors (only non-transparent/non-default)
+          const bg = cs.backgroundColor;
+          if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") styles.push(`bg:${bg}`);
+          const color = cs.color;
+          if (color) styles.push(`color:${color}`);
+          // Font (only on text-bearing elements)
+          const hasDirectText = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent || "").trim());
+          if (hasDirectText) {
+            styles.push(`font:${cs.fontSize}/${cs.lineHeight} ${cs.fontWeight}`);
+          }
+          // Border/radius
+          if (cs.borderWidth !== "0px" && cs.borderStyle !== "none") styles.push(`border:${cs.borderWidth} ${cs.borderStyle} ${cs.borderColor}`);
+          if (cs.borderRadius !== "0px") styles.push(`radius:${cs.borderRadius}`);
+          // Opacity
+          if (cs.opacity !== "1") styles.push(`opacity:${cs.opacity}`);
+          // Transform
+          if (cs.transform && cs.transform !== "none") styles.push(`transform:${cs.transform.slice(0, 40)}`);
+
+          if (styles.length > 0) lines.push(`${indent}  /style: ${styles.join("; ")}`);
+
+          // Classes (compact — first 3 only)
+          const classes = el.className && typeof el.className === "string" ? el.className.trim().split(/\s+/).slice(0, 3).join(" ") : "";
+          if (classes) lines.push(`${indent}  /class: ${classes}`);
 
           // Direct text content (not from children)
           for (const child of el.childNodes) {
@@ -341,9 +382,8 @@ export function DevServerPreview() {
           // Recurse visible children
           for (const child of el.children) {
             if (child instanceof HTMLElement) {
-              const style = getComputedStyle(child);
-              if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") continue;
-              // Skip script/style/svg internals
+              const childStyle = getComputedStyle(child);
+              if (childStyle.display === "none" || childStyle.visibility === "hidden" || childStyle.opacity === "0") continue;
               if (["SCRIPT", "STYLE", "NOSCRIPT", "SVG", "PATH"].includes(child.tagName)) continue;
               lines.push(buildTree(child, depth + 1));
             }
@@ -355,7 +395,7 @@ export function DevServerPreview() {
         if (body) {
           domTree = buildTree(body, 0);
           // Limit size for chat context
-          if (domTree.length > 15000) domTree = domTree.slice(0, 15000) + "\n... (truncated)";
+          if (domTree.length > 30000) domTree = domTree.slice(0, 30000) + "\n... (truncated)";
         }
       }
 
