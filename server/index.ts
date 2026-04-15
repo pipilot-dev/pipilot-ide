@@ -1394,7 +1394,7 @@ function readWorkspaceFiles(workDir: string): { path: string; content: string }[
       // Skip node_modules and dot folders (except dist, build, .env files)
       if (entry.name === "node_modules") continue;
       if (entry.name.startsWith(".") && entry.isDirectory()) continue; // .git, .next, .cache, .claude, etc.
-      if (entry.name === ".claude_history.json" || entry.name === "PIPILOT.md" || entry.name === "CLAUDE.md") continue;
+      if (entry.name === ".claude_history.json" || entry.name === "CLAUDE.md") continue;
 
       if (entry.isDirectory()) {
         walk(fullPath, relativePath);
@@ -1529,7 +1529,7 @@ app.post("/api/agent", async (req, res) => {
     } else {
       sendSSE(res, { type: "status", message: `Using existing workspace`, sessionId });
     }
-  // Write PIPILOT.md — Claude Code reads this automatically as project instructions
+  // Write CLAUDE.md — Claude Code reads this automatically as project instructions
   try {
     // Detect project type from existing files in workspace
     const hasNextConfig = fs.existsSync(path.join(workDir, "next.config.mjs")) || fs.existsSync(path.join(workDir, "next.config.js")) || fs.existsSync(path.join(workDir, "next.config.ts"));
@@ -1685,9 +1685,7 @@ ${systemPrompt ? "\n## Additional Context\n" + systemPrompt.replace(/^(  (?:Acti
       return prefix + abs;
     }) : ""}
 `;
-    fs.writeFileSync(path.join(workDir, "PIPILOT.md"), claudeMd, "utf8");
-    // Also write CLAUDE.md so the Agent SDK auto-reads project instructions
-    fs.writeFileSync(path.join(workDir, "CLAUDE.md"), `<!-- Auto-generated — see PIPILOT.md -->\n${claudeMd}`, "utf8");
+    fs.writeFileSync(path.join(workDir, "CLAUDE.md"), claudeMd, "utf8");
   } catch {}
 
   } catch (err: any) {
@@ -1728,7 +1726,7 @@ ${systemPrompt ? "\n## Additional Context\n" + systemPrompt.replace(/^(  (?:Acti
   sendSSE(res, { type: "start", sessionId, timestamp: Date.now() });
 
   // ── Build prompt ──
-  // PIPILOT.md is on disk — Agent SDK reads it automatically.
+  // CLAUDE.md is on disk — Agent SDK reads it automatically.
   // Only inject minimal context into the prompt to keep it lean.
   let fullPrompt = prompt;
   try {
@@ -1891,7 +1889,7 @@ You have custom tools beyond the standard Read/Write/Edit/Bash:
 
 ## Rules
 - Never create subfolders for the project (no "my-app/", etc.). Files go in the project root.
-- Read PIPILOT.md if it exists for additional project-specific instructions.
+- Read CLAUDE.md if it exists for additional project-specific instructions.
 - ALWAYS maintain design consistency — read .pipilot/design.md before any UI work and follow it precisely.
 - After completing a significant feature, update .pipilot/project.md with the new feature in the Features section.`;
 
@@ -2643,7 +2641,6 @@ const LAZY_DIRS = new Set([
 
 // Files that should NEVER appear (PiPilot internals).
 const HIDDEN_NAMES = new Set([
-  "PIPILOT.md",
   "CLAUDE.md",
   ".claude_history.json",
   ".pipilot-tsconfig.json",
@@ -2752,7 +2749,7 @@ app.get("/api/files/zip", async (req, res) => {
     "target", "vendor", ".pipilot-data",
   ]);
   const SKIP_FILES = new Set([
-    "PIPILOT.md", "CLAUDE.md", ".claude_history.json", ".pipilot-tsconfig.json",
+    "CLAUDE.md", ".claude_history.json", ".pipilot-tsconfig.json",
   ]);
   const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25MB cap per file
   const MAX_TOTAL_BYTES = 500 * 1024 * 1024; // 500MB cap total
@@ -3364,7 +3361,6 @@ app.get("/api/files/watch", (req, res) => {
       "**/.cache/**",
       "**/.claude/**",
       "**/.claude_history.json",
-      "**/PIPILOT.md",
       "**/CLAUDE.md",
     ],
     persistent: true,
