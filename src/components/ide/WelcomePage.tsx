@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import {
-  FilePlus, FolderOpen, GitBranch, Sparkles,
+  FilePlus, FolderOpen, GitBranch, Sparkles, Upload, X, Paperclip,
   Zap, MessageSquare, ChevronRight, BookOpen,
 } from "lucide-react";
 import { useProjects } from "@/hooks/useProjects";
@@ -49,6 +49,8 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const generateTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const generateFileInputRef = useRef<HTMLInputElement>(null);
+  const [generateFiles, setGenerateFiles] = useState<{ name: string; path: string }[]>([]);
   const [logoLoaded, setLogoLoaded] = useState(false);
 
   useEffect(() => { injectFonts(); }, []);
@@ -75,6 +77,24 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
     setNewFileName("");
   };
 
+  const uploadFileToTemp = async (file: File): Promise<{ name: string; path: string } | null> => {
+    try {
+      const base64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch("/api/files/upload-temp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName: file.name, base64 }),
+      });
+      const data = await res.json();
+      if (data.path) return { name: file.name, path: data.path };
+    } catch {}
+    return null;
+  };
+
   const handleGenerate = async () => {
     const prompt = generatePrompt.trim();
     if (!prompt) { setGenerateError("Describe what you want to build"); return; }
@@ -87,6 +107,12 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
       window.dispatchEvent(new CustomEvent("pipilot:open-chat"));
       setShowGenerate(false);
       setGeneratePrompt("");
+      // Build the full prompt with file references
+      let fullPrompt = prompt;
+      if (generateFiles.length > 0) {
+        fullPrompt += "\n\n--- Attached reference files ---\n" + generateFiles.map((f) => `- ${f.name}: ${f.path}`).join("\n") + "\n\nRead these files for reference context before building.";
+      }
+      setGenerateFiles([]);
 
       // Wait for the chat session to initialize for the new project.
       // useAgentChat emits "pipilot:chat-session-ready" after the
@@ -106,7 +132,7 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
 
       // One more tick for React to commit the state update
       await new Promise((r) => setTimeout(r, 200));
-      window.dispatchEvent(new CustomEvent("pipilot:focus-chat-input", { detail: { prefill: prompt, submit: true } }));
+      window.dispatchEvent(new CustomEvent("pipilot:focus-chat-input", { detail: { prefill: fullPrompt, submit: true } }));
     } catch (err: any) {
       setGenerateError(err?.message || "Failed to start project");
     } finally {
@@ -187,7 +213,7 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
           {[
             { icon: <FolderOpen size={18} />, label: "Open Folder", color: C.info, onClick: () => setShowOpenFolder(true) },
             { icon: <GitBranch size={18} />, label: "Clone Repo", color: "#c678dd", onClick: () => setShowClone(true) },
-            { icon: <Sparkles size={18} />, label: "Generate", color: C.accent, onClick: () => { setGeneratePrompt(""); setGenerateError(null); setShowGenerate(true); setTimeout(() => generateTextareaRef.current?.focus(), 80); } },
+            { icon: <Sparkles size={18} />, label: "Generate", color: C.accent, onClick: () => { setShowGenerate((p) => !p); setGenerateError(null); setTimeout(() => generateTextareaRef.current?.focus(), 80); } },
             { icon: <FilePlus size={18} />, label: "New File", color: "#98c379", onClick: () => { if (onNewFile) { onNewFile(); return; } setNewFileError(!activeProjectId || activeProjectId === "default-project" ? "Open or create a project first." : null); setNewFileName(""); setShowNewFile(true); } },
           ].map((a, i) => (
             <button key={i} type="button" onClick={a.onClick} style={{
@@ -306,36 +332,116 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
         </ModalBackdrop>
       )}
 
+      {/* Inline Generate composer (replaces modal) */}
       {showGenerate && (
-        <ModalBackdrop onClose={() => !generating && setShowGenerate(false)}>
-          <ModalCard title="Generate with AI" subtitle="Describe what you want and PiPilot will scaffold it" wide>
-            <textarea ref={generateTextareaRef} value={generatePrompt} rows={4}
-              onChange={(e) => { setGeneratePrompt(e.target.value); setGenerateError(null); }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !generating) { e.preventDefault(); handleGenerate(); }
-                if (e.key === "Escape" && !generating) setShowGenerate(false);
-              }}
-              placeholder="A retro-arcade landing page for a synthwave music label\u2026"
-              style={{
-                width: "100%", padding: "12px 14px", fontFamily: F.s, fontSize: 13,
-                background: C.bg, color: C.text,
-                border: `1px solid ${generateError ? "#ff6b6b55" : C.border}`,
-                borderRadius: 5, outline: "none", resize: "vertical",
-                marginBottom: 10, lineHeight: 1.5,
-              }}
-            />
-            {generateError && <ErrorBar>{generateError}</ErrorBar>}
-            <ModalActions>
-              <span style={{ fontFamily: F.m, fontSize: 9, color: C.textDim }}>{generatePrompt.length} chars</span>
-              <div style={{ display: "flex", gap: 8 }}>
-                <ModalBtn onClick={() => setShowGenerate(false)} disabled={generating}>Cancel</ModalBtn>
-                <ModalBtn primary onClick={handleGenerate} disabled={!generatePrompt.trim() || generating}>
-                  {generating ? "Starting\u2026" : "Generate \u2192"}
-                </ModalBtn>
+        <div style={{
+          position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
+          background: C.surface, borderTop: `1px solid ${C.border}`,
+          padding: "16px 24px 20px",
+          boxShadow: "0 -8px 32px rgba(0,0,0,0.4)",
+          animation: "wSlideUp 0.3s ease",
+        }}>
+          <div style={{ maxWidth: 680, margin: "0 auto" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Sparkles size={14} style={{ color: C.accent }} />
+                <span style={{ fontFamily: F.m, fontSize: 10, fontWeight: 600, color: C.accent, letterSpacing: "0.08em", textTransform: "uppercase" }}>Generate with AI</span>
               </div>
-            </ModalActions>
-          </ModalCard>
-        </ModalBackdrop>
+              <button onClick={() => { if (!generating) { setShowGenerate(false); setGenerateFiles([]); } }} style={{ background: "none", border: "none", color: C.textDim, cursor: "pointer", padding: 2 }}>
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* File attachment pills */}
+            {generateFiles.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                {generateFiles.map((f, i) => (
+                  <span key={i} style={{
+                    display: "flex", alignItems: "center", gap: 4,
+                    padding: "3px 8px", borderRadius: 4,
+                    background: C.surfaceAlt, border: `1px solid ${C.border}`,
+                    fontFamily: F.m, fontSize: 9, color: C.textMid,
+                  }}>
+                    <Paperclip size={9} /> {f.name}
+                    <button onClick={() => setGenerateFiles((prev) => prev.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: C.textDim, cursor: "pointer", padding: 0 }}>
+                      <X size={8} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Textarea with drag-drop */}
+            <div
+              onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.borderColor = C.accent; }}
+              onDragLeave={(e) => { e.currentTarget.style.borderColor = generateError ? "#ff6b6b55" : C.border; }}
+              onDrop={async (e) => {
+                e.preventDefault();
+                e.currentTarget.style.borderColor = C.border;
+                for (const file of Array.from(e.dataTransfer.files)) {
+                  const uploaded = await uploadFileToTemp(file);
+                  if (uploaded) setGenerateFiles((prev) => [...prev, uploaded]);
+                }
+              }}
+              style={{
+                border: `1px solid ${generateError ? "#ff6b6b55" : C.border}`,
+                borderRadius: 6, overflow: "hidden", transition: "border-color 0.2s",
+              }}
+            >
+              <textarea ref={generateTextareaRef} value={generatePrompt} rows={3}
+                onChange={(e) => { setGeneratePrompt(e.target.value); setGenerateError(null); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !generating) { e.preventDefault(); handleGenerate(); }
+                  if (e.key === "Escape" && !generating) { setShowGenerate(false); setGenerateFiles([]); }
+                }}
+                placeholder="Describe what you want to build… (drop files here for reference)"
+                style={{
+                  width: "100%", padding: "10px 12px", fontFamily: F.s, fontSize: 13,
+                  background: C.bg, color: C.text, border: "none",
+                  outline: "none", resize: "none", lineHeight: 1.5,
+                }}
+              />
+            </div>
+            {generateError && <ErrorBar>{generateError}</ErrorBar>}
+
+            {/* Actions */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+              <input type="file" ref={generateFileInputRef} style={{ display: "none" }} multiple
+                onChange={async (e) => {
+                  for (const file of Array.from(e.target.files || [])) {
+                    const uploaded = await uploadFileToTemp(file);
+                    if (uploaded) setGenerateFiles((prev) => [...prev, uploaded]);
+                  }
+                  e.target.value = "";
+                }}
+              />
+              <button onClick={() => generateFileInputRef.current?.click()} style={{
+                display: "flex", alignItems: "center", gap: 4,
+                padding: "5px 10px", borderRadius: 4, fontSize: 9,
+                fontFamily: F.m, fontWeight: 600, background: "transparent",
+                border: `1px solid ${C.border}`, color: C.textMid, cursor: "pointer",
+              }}>
+                <Upload size={10} /> Attach files
+              </button>
+              <div style={{ flex: 1 }} />
+              <span style={{ fontFamily: F.m, fontSize: 9, color: C.textDim }}>{generatePrompt.length} chars · {generateFiles.length} file{generateFiles.length !== 1 ? "s" : ""}</span>
+              <button onClick={() => { setShowGenerate(false); setGenerateFiles([]); }} disabled={generating} style={{
+                padding: "6px 14px", fontSize: 10, fontFamily: F.m, fontWeight: 500,
+                background: "transparent", color: C.textMid, border: `1px solid ${C.border}`,
+                borderRadius: 4, cursor: generating ? "not-allowed" : "pointer",
+                letterSpacing: "0.06em", textTransform: "uppercase",
+              }}>Cancel</button>
+              <button onClick={handleGenerate} disabled={!generatePrompt.trim() || generating} style={{
+                padding: "6px 14px", fontSize: 10, fontFamily: F.m, fontWeight: 600,
+                background: !generatePrompt.trim() || generating ? C.surfaceAlt : C.accent,
+                color: !generatePrompt.trim() || generating ? C.textFaint : "#fff",
+                border: "none", borderRadius: 4,
+                cursor: !generatePrompt.trim() || generating ? "not-allowed" : "pointer",
+                letterSpacing: "0.06em", textTransform: "uppercase",
+              }}>{generating ? "Starting…" : "Generate →"}</button>
+            </div>
+          </div>
+        </div>
       )}
 
       <style>{`
