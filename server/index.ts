@@ -28,7 +28,7 @@ import {
 } from "./diagnostics";
 import { seedMissingConfigs, detectFramework } from "./seed-config";
 import { CodeSearchIndex } from "./search-index";
-import { screenshot as chromeScreenshot, findChrome } from "./screenshot";
+import { screenshot as chromeScreenshot, findChrome, closeBrowser } from "./screenshot";
 import {
   initWorkspaces, resolveWorkspaceDir, linkFolder, unlinkFolder,
   listLinked, touchLinked, isLinked, getLinked,
@@ -1135,7 +1135,7 @@ function createIdeToolServer(projectId: string) {
         const status = getDevServerStatus(projectId);
         const devUrl = status?.url;
 
-        // ── Strategy 1: Headless Chrome (best — runs JS, real rendering) ──
+        // ── Strategy 1: puppeteer-core + system Chrome (best — runs JS, real rendering, persistent browser) ──
         if (devUrl && findChrome()) {
           try {
             const tmpDir = path.join(os.tmpdir(), "pipilot-uploads");
@@ -1143,40 +1143,14 @@ function createIdeToolServer(projectId: string) {
             const fileName = `screenshot-${projectId}-${Date.now()}.png`;
             const filePath = path.join(tmpDir, fileName);
 
-            chromeScreenshot(devUrl, filePath, { width: 1440, height: 900 });
+            const result = await chromeScreenshot(devUrl, filePath, { width: 1440, height: 900 });
 
-            if (fs.existsSync(filePath)) {
-              const base64 = fs.readFileSync(filePath).toString("base64");
-              const sizeKB = Math.round(fs.statSync(filePath).size / 1024);
-
-              // Also fetch HTML for text analysis (complements the image)
-              let textAnalysis = "";
-              try {
-                const res = await fetch(devUrl, { signal: AbortSignal.timeout(3000) });
-                const html = await res.text();
-                const lines: string[] = [];
-                const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
-                if (titleMatch) lines.push(`Title: ${titleMatch[1]}`);
-                const headings: string[] = [];
-                for (const m of html.matchAll(/<(h[1-6])[^>]*>([^<]+)/gi)) headings.push(`${m[1]}: "${m[2].trim().slice(0, 60)}"`);
-                if (headings.length > 0) lines.push(`Headings: ${headings.join(", ")}`);
-                const structureTags: Record<string, number> = {};
-                for (const m of html.matchAll(/<(header|nav|main|section|footer|form|button|img|a)\b/gi)) {
-                  const tag = m[1].toLowerCase();
-                  structureTags[tag] = (structureTags[tag] || 0) + 1;
-                }
-                if (Object.keys(structureTags).length) lines.push(`Structure: ${Object.entries(structureTags).map(([t, c]) => `${t}(${c})`).join(", ")}`);
-                lines.push(`HTML size: ${(html.length / 1024).toFixed(1)} KB`);
-                textAnalysis = lines.join("\n");
-              } catch {}
-
-              return {
-                content: [
-                  { type: "image" as const, data: base64, mimeType: "image/png" },
-                  { type: "text" as const, text: `Screenshot captured (${sizeKB}KB) via headless Chrome.\nSaved: ${filePath}\nURL: ${devUrl}\n${textAnalysis}` },
-                ],
-              };
-            }
+            return {
+              content: [
+                { type: "image" as const, data: result.base64, mimeType: "image/png" },
+                { type: "text" as const, text: `Screenshot captured (${result.sizeKB}KB) via headless Chrome.\nSaved: ${result.filePath}\nURL: ${devUrl}\n\n${result.analysis}` },
+              ],
+            };
           } catch {}
         }
 

@@ -1,15 +1,19 @@
 /**
- * screenshot.ts — Zero-dependency screenshot capture using system Chrome/Chromium.
+ * screenshot.ts — Lightweight screenshot capture using puppeteer-core + system Chrome.
  *
- * Uses Chrome's built-in --headless --screenshot flag.
- * Auto-detects Chrome/Chromium/Edge on Windows, macOS, and Linux.
- * No Puppeteer, no Playwright, no npm packages.
+ * Uses puppeteer-core (~3MB) with your already-installed Chrome/Chromium/Edge.
+ * No bundled Chromium download. Keeps a persistent browser instance so
+ * first screenshot is ~3-5s, subsequent ones are <2s.
+ *
+ * Auto-detects Chrome/Chromium/Edge/Brave on Windows, macOS, and Linux.
  */
 
-import { execSync, execFileSync } from "child_process";
+import { execSync } from "child_process";
 import { existsSync } from "fs";
+import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import puppeteer, { type Browser } from "puppeteer-core";
 
 // ── Chrome/Chromium/Edge discovery ───────────────────────────────────────────
 
@@ -84,30 +88,77 @@ export function findChrome(): string | null {
     } catch {}
   }
 
-  // 3. Windows: check registry for Chrome install path
+  // 3. Windows: check registry
   if (platform === "win32") {
-    try {
-      const regKeys = [
-        'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe',
-        'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe',
-      ];
-      for (const key of regKeys) {
-        try {
-          const result = execSync(`reg query "${key}" /ve`, { encoding: "utf8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] });
-          const match = result.match(/REG_SZ\s+(.+)/);
-          if (match) {
-            const p = match[1].trim();
-            if (existsSync(p)) {
-              _cachedChromePath = p;
-              return p;
-            }
-          }
-        } catch {}
-      }
-    } catch {}
+    const regKeys = [
+      'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe',
+      'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe',
+    ];
+    for (const key of regKeys) {
+      try {
+        const result = execSync(`reg query "${key}" /ve`, { encoding: "utf8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] });
+        const match = result.match(/REG_SZ\s+(.+)/);
+        if (match) {
+          const p = match[1].trim();
+          if (existsSync(p)) { _cachedChromePath = p; return p; }
+        }
+      } catch {}
+    }
   }
 
   return null;
+}
+
+// ── Persistent browser instance ──────────────────────────────────────────────
+
+let _browser: Browser | null = null;
+let _browserLaunching: Promise<Browser> | null = null;
+
+async function getBrowser(): Promise<Browser> {
+  // Return existing browser if still connected
+  if (_browser?.connected) return _browser;
+
+  // Guard against concurrent launches
+  if (_browserLaunching) return _browserLaunching;
+
+  const chrome = findChrome();
+  if (!chrome) throw new Error("Chrome/Chromium/Edge not found on this system");
+
+  _browserLaunching = puppeteer.launch({
+    executablePath: chrome,
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-gpu",
+      "--disable-software-rasterizer",
+      "--disable-dev-shm-usage",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--disable-sync",
+      "--no-first-run",
+      "--hide-scrollbars",
+    ],
+  });
+
+  try {
+    _browser = await _browserLaunching;
+
+    // Auto-cleanup if browser disconnects
+    _browser.on("disconnected", () => { _browser = null; });
+
+    console.log(`[screenshot] Browser launched: ${chrome}`);
+    return _browser;
+  } finally {
+    _browserLaunching = null;
+  }
+}
+
+/** Close the persistent browser instance (call on server shutdown). */
+export async function closeBrowser(): Promise<void> {
+  if (_browser) {
+    try { await _browser.close(); } catch {}
+    _browser = null;
+  }
 }
 
 // ── Screenshot capture ───────────────────────────────────────────────────────
@@ -115,61 +166,115 @@ export function findChrome(): string | null {
 interface ScreenshotOptions {
   width?: number;
   height?: number;
-  timeout?: number; // ms
+  timeout?: number;
+  waitForNetwork?: boolean;
+}
+
+export interface ScreenshotResult {
+  filePath: string;
+  base64: string;
+  sizeKB: number;
+  title: string;
+  analysis: string;
 }
 
 /**
- * Capture a screenshot of a URL using headless Chrome.
+ * Capture a screenshot of a URL.
  *
- * @param url      — URL to capture (e.g. "http://localhost:3000")
- * @param output   — Absolute path to save the PNG (e.g. "/tmp/screenshot.png")
- * @param options  — Width, height, timeout
- * @returns true if screenshot was saved successfully
+ * First call launches Chrome (~3-5s). Subsequent calls reuse the browser (<2s).
+ * Returns the PNG file path, base64 data, and a text analysis of the page.
  */
-export function screenshot(
+export async function screenshot(
   url: string,
-  output: string,
-  { width = 1440, height = 900, timeout = 15000 }: ScreenshotOptions = {}
-): boolean {
-  const chrome = findChrome();
-  if (!chrome) throw new Error("Chrome/Chromium/Edge not found on this system");
-
-  // Ensure output directory exists
-  const dir = path.dirname(output);
-  if (!existsSync(dir)) {
-    const { mkdirSync } = require("fs");
-    mkdirSync(dir, { recursive: true });
-  }
-
-  const args = [
-    "--headless=new",
-    "--disable-gpu",
-    "--no-sandbox",
-    "--disable-software-rasterizer",
-    "--disable-dev-shm-usage",
-    "--disable-extensions",
-    "--disable-background-networking",
-    "--disable-sync",
-    "--no-first-run",
-    "--hide-scrollbars",
-    `--screenshot=${output}`,
-    `--window-size=${width},${height}`,
-    // Wait for page to fully load
-    "--virtual-time-budget=5000",
-    url,
-  ];
+  outputPath: string,
+  { width = 1440, height = 900, timeout = 20000, waitForNetwork = true }: ScreenshotOptions = {}
+): Promise<ScreenshotResult> {
+  const browser = await getBrowser();
+  const page = await browser.newPage();
 
   try {
-    execFileSync(chrome, args, {
+    await page.setViewport({ width, height });
+
+    // Navigate and wait for page to be ready
+    await page.goto(url, {
+      waitUntil: waitForNetwork ? "networkidle0" : "domcontentloaded",
       timeout,
-      stdio: ["pipe", "pipe", "pipe"],
-      // Prevent Chrome from using too much memory
-      env: { ...process.env, CHROME_FLAGS: "--disable-gpu" },
     });
-    return existsSync(output);
-  } catch (err: any) {
-    // Chrome sometimes exits with code 1 but still saves the screenshot
-    if (existsSync(output)) return true;
-    throw new Error(`Chrome screenshot failed: ${err.message?.slice(0, 200)}`);
+
+    // Extra wait for JS rendering (SPAs, animations)
+    await new Promise((r) => setTimeout(r, 1000));
+
+    // Take screenshot
+    const dir = path.dirname(outputPath);
+    if (!existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    await page.screenshot({ path: outputPath, type: "png", fullPage: false });
+
+    // Read the file for base64
+    const buf = fs.readFileSync(outputPath);
+    const base64 = buf.toString("base64");
+    const sizeKB = Math.round(buf.length / 1024);
+
+    // Extract page analysis (runs inside Chrome — sees the real rendered DOM)
+    const analysis = await page.evaluate(() => {
+      const lines: string[] = [];
+
+      // Title
+      if (document.title) lines.push(`Title: ${document.title}`);
+
+      // Headings
+      const headings: string[] = [];
+      document.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((h) => {
+        headings.push(`${h.tagName.toLowerCase()}: "${(h.textContent || "").trim().slice(0, 60)}"`);
+      });
+      if (headings.length) lines.push(`Headings: ${headings.join(", ")}`);
+
+      // Structure
+      const tags: Record<string, number> = {};
+      ["header", "nav", "main", "section", "article", "aside", "footer", "form", "button", "input", "img", "a", "ul", "ol", "table"].forEach((tag) => {
+        const count = document.querySelectorAll(tag).length;
+        if (count) tags[tag] = count;
+      });
+      if (Object.keys(tags).length) {
+        lines.push(`Structure: ${Object.entries(tags).map(([t, c]) => `${t}(${c})`).join(", ")}`);
+      }
+
+      // Images
+      const imgs: string[] = [];
+      document.querySelectorAll("img").forEach((img) => {
+        if ((img as HTMLImageElement).src) imgs.push((img as HTMLImageElement).src.slice(0, 80));
+      });
+      if (imgs.length) lines.push(`Images (${imgs.length}): ${imgs.slice(0, 5).join(", ")}`);
+
+      // Computed colors from key elements
+      const colors: string[] = [];
+      ["body", "header", "nav", "main", "h1", "button"].forEach((sel) => {
+        const el = document.querySelector(sel);
+        if (el) {
+          const s = getComputedStyle(el);
+          colors.push(`${sel}: bg=${s.backgroundColor}, color=${s.color}`);
+        }
+      });
+      if (colors.length) { lines.push(""); lines.push("Colors:"); colors.forEach((c) => lines.push(`  ${c}`)); }
+
+      // Visible text (first 15 text nodes from main content)
+      const text: string[] = [];
+      const main = document.querySelector("main") || document.body;
+      const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+      let n;
+      while ((n = walker.nextNode()) && text.length < 15) {
+        const t = (n.textContent || "").trim();
+        if (t.length > 3) text.push(t.slice(0, 80));
+      }
+      if (text.length) { lines.push(""); lines.push("Visible text:"); text.slice(0, 10).forEach((t) => lines.push(`  "${t}"`)); }
+
+      return lines.join("\n");
+    });
+
+    const title = await page.title();
+
+    return { filePath: outputPath, base64, sizeKB, title, analysis };
+  } finally {
+    await page.close();
   }
 }
