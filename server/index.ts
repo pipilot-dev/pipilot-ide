@@ -1319,13 +1319,225 @@ function createIdeToolServer(projectId: string) {
     },
   );
 
+  // ── search_codebase ──
+  // Cursor-style smart codebase search: combines regex grep, fuzzy file name
+  // search, and symbol search (function/class/export defs) in one call.
+  // Returns ranked results with context snippets.
+  const searchCodebase = tool(
+    "search_codebase",
+    "Smart codebase search — combines regex grep, fuzzy file name matching, and symbol/definition search in one tool call. " +
+    "Use this instead of multiple Grep/Glob calls. Returns ranked results with context snippets. " +
+    "Modes: 'grep' for exact/regex pattern matching, 'files' for fuzzy file name search, 'symbols' for function/class/export definitions, 'all' to run all three.",
+    {
+      query: z.string().describe("Search query — a regex pattern, file name, symbol name, or natural language description"),
+      mode: z.enum(["grep", "files", "symbols", "all"]).default("all").describe("Search mode: grep (exact/regex), files (fuzzy filename), symbols (function/class/export defs), all (combined)"),
+      filePattern: z.string().optional().describe("Optional glob to filter files (e.g. '*.tsx', 'src/**/*.ts')"),
+      maxResults: z.number().optional().default(20).describe("Max results to return (default 20)"),
+      caseSensitive: z.boolean().optional().default(false).describe("Case-sensitive search (default false)"),
+    },
+    async (args) => {
+      const results: { type: string; file: string; line?: number; match: string; context?: string; score: number }[] = [];
+      const ignore = ["node_modules", ".git", ".next", ".cache", "dist", "build", ".pipilot", "coverage", "__pycache__"];
+      const ignoreArgs = ignore.map((d) => `--glob=!${d}`).join(" ");
+      const caseFlag = args.caseSensitive ? "" : "-i";
+      const globFlag = args.filePattern ? `--glob=${args.filePattern}` : "";
+
+      // Helper: run ripgrep (rg) with args
+      const rg = (rgArgs: string): Promise<string> => {
+        return new Promise((resolve) => {
+          const { execSync } = require("child_process");
+          try {
+            const out = execSync(`rg ${rgArgs}`, { cwd: workDir, encoding: "utf8", maxBuffer: 5 * 1024 * 1024, timeout: 10000 });
+            resolve(out);
+          } catch { resolve(""); }
+        });
+      };
+
+      // ── Grep: exact/regex pattern matching ──
+      if (args.mode === "grep" || args.mode === "all") {
+        try {
+          const out = rg(`${caseFlag} -n --no-heading --max-count=100 ${ignoreArgs} ${globFlag} -- "${args.query.replace(/"/g, '\\"')}" .`);
+          const lines = out.split("\n").filter(Boolean).slice(0, args.maxResults);
+          for (const line of lines) {
+            const m = line.match(/^(.+?):(\d+):(.*)$/);
+            if (m) {
+              results.push({
+                type: "grep",
+                file: m[1].replace(/\\/g, "/"),
+                line: parseInt(m[2]),
+                match: m[3].trim().slice(0, 200),
+                score: 10,
+              });
+            }
+          }
+        } catch {}
+      }
+
+      // ── Files: fuzzy file name search ──
+      if (args.mode === "files" || args.mode === "all") {
+        try {
+          const out = rg(`--files ${ignoreArgs} ${globFlag} .`);
+          const allFiles = out.split("\n").filter(Boolean);
+          const q = args.query.toLowerCase();
+          const scored = allFiles.map((f) => {
+            const name = path.basename(f).toLowerCase();
+            const rel = f.replace(/\\/g, "/").toLowerCase();
+            let score = 0;
+            if (name === q) score = 100;
+            else if (name.startsWith(q)) score = 80;
+            else if (name.includes(q)) score = 60;
+            else if (rel.includes(q)) score = 40;
+            else {
+              // Fuzzy: check if all chars appear in order
+              let qi = 0;
+              for (const c of rel) { if (c === q[qi]) qi++; if (qi >= q.length) break; }
+              if (qi >= q.length) score = 20;
+            }
+            return { file: f.replace(/\\/g, "/"), score };
+          }).filter((f) => f.score > 0).sort((a, b) => b.score - a.score).slice(0, args.maxResults);
+
+          for (const f of scored) {
+            results.push({ type: "file", file: f.file, match: path.basename(f.file), score: f.score });
+          }
+        } catch {}
+      }
+
+      // ── Symbols: function/class/export/interface definitions ──
+      if (args.mode === "symbols" || args.mode === "all") {
+        // Search for common definition patterns matching the query
+        const sym = args.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const patterns = [
+          `(function|const|let|var|class|interface|type|enum)\\s+${sym}`,
+          `export\\s+(default\\s+)?(function|const|class|interface|type)\\s+${sym}`,
+          `def\\s+${sym}`,           // Python
+          `func\\s+${sym}`,          // Go
+          `fn\\s+${sym}`,            // Rust
+          `public\\s+(static\\s+)?\\w+\\s+${sym}`, // Java/C#
+        ];
+        const combinedPattern = patterns.join("|");
+        try {
+          const out = rg(`${caseFlag} -n --no-heading --max-count=50 ${ignoreArgs} ${globFlag} -- "${combinedPattern}" .`);
+          const lines = out.split("\n").filter(Boolean).slice(0, args.maxResults);
+          for (const line of lines) {
+            const m = line.match(/^(.+?):(\d+):(.*)$/);
+            if (m) {
+              // Read surrounding context (2 lines before/after)
+              let context = "";
+              try {
+                const filePath = path.join(workDir, m[1]);
+                const content = fs.readFileSync(filePath, "utf8").split("\n");
+                const ln = parseInt(m[2]) - 1;
+                const start = Math.max(0, ln - 2);
+                const end = Math.min(content.length, ln + 3);
+                context = content.slice(start, end).map((l, i) => `${start + i + 1}: ${l}`).join("\n");
+              } catch {}
+              results.push({
+                type: "symbol",
+                file: m[1].replace(/\\/g, "/"),
+                line: parseInt(m[2]),
+                match: m[3].trim().slice(0, 200),
+                context,
+                score: 50, // symbols rank high
+              });
+            }
+          }
+        } catch {}
+      }
+
+      // Sort by score descending, dedupe by file+line
+      const seen = new Set<string>();
+      const deduped = results
+        .sort((a, b) => b.score - a.score)
+        .filter((r) => {
+          const key = `${r.file}:${r.line || 0}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, args.maxResults);
+
+      if (deduped.length === 0) {
+        return { content: [{ type: "text" as const, text: `No results found for "${args.query}" (mode: ${args.mode})` }] };
+      }
+
+      const output = deduped.map((r) => {
+        let line = `[${r.type}] ${r.file}`;
+        if (r.line) line += `:${r.line}`;
+        line += ` — ${r.match}`;
+        if (r.context) line += `\n${r.context}`;
+        return line;
+      }).join("\n\n");
+
+      return { content: [{ type: "text" as const, text: `Found ${deduped.length} results for "${args.query}":\n\n${output}` }] };
+    },
+  );
+
+  // ── generate_image ──
+  // Generates an image from a text description using the a0.dev image API,
+  // saves it to the project's assets/ folder, and returns the relative path.
+  const generateImage = tool(
+    "generate_image",
+    "Generate an image from a text description. The image is saved to the project's assets/ folder and the relative path is returned. " +
+    "Use this for hero images, backgrounds, avatars, product photos, illustrations — any visual content the project needs. " +
+    "The description should be specific and vivid for best results. Only 3 aspect ratios are supported.",
+    {
+      description: z.string().describe("Vivid, specific description of the image to generate (e.g. 'A neon-lit cyberpunk cityscape at night with flying cars and holographic billboards')"),
+      aspect: z.enum(["16:9", "1:1", "9:16"]).default("16:9").describe("Aspect ratio: 16:9 (landscape), 1:1 (square), 9:16 (portrait)"),
+      fileName: z.string().optional().describe("Output file name without extension (e.g. 'hero-bg'). Auto-generated from description if not provided."),
+    },
+    async (args) => {
+      try {
+        // Build the a0.dev image URL
+        const encodedDesc = encodeURIComponent(args.description);
+        const imageUrl = `https://api.a0.dev/assets/image?text=${encodedDesc}&aspect=${args.aspect}`;
+
+        // Fetch the image
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+          return { content: [{ type: "text" as const, text: `Image generation failed: HTTP ${response.status}` }] };
+        }
+
+        // Determine content type and extension
+        const contentType = response.headers.get("content-type") || "image/png";
+        const ext = contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "png";
+
+        // Generate file name
+        const safeName = args.fileName
+          ? args.fileName.replace(/[^a-zA-Z0-9_-]/g, "-")
+          : args.description.slice(0, 40).replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+        const fileName = `${safeName}.${ext}`;
+
+        // Ensure assets/ directory exists
+        const assetsDir = path.join(workDir, "assets");
+        if (!fs.existsSync(assetsDir)) fs.mkdirSync(assetsDir, { recursive: true });
+
+        // Save the image
+        const filePath = path.join(assetsDir, fileName);
+        const buffer = Buffer.from(await response.arrayBuffer());
+        fs.writeFileSync(filePath, buffer);
+
+        const relPath = `assets/${fileName}`;
+        const sizeKB = Math.round(buffer.length / 1024);
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Image generated and saved:\n- Path: ${relPath}\n- Size: ${sizeKB}KB\n- Aspect: ${args.aspect}\n- Description: ${args.description}\n\nUse this path in your HTML/code: <img src="${relPath}" alt="${args.description.slice(0, 80)}" />`,
+          }],
+        };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `Image generation error: ${err.message}` }] };
+      }
+    },
+  );
+
   return createSdkMcpServer({
     name: "pipilot",
     version: "1.0.0",
     tools: [
       getDiagnostics, manageDevServer, searchNpm, getDevServerLogs,
       updateProjectContext, frontendDesignGuide, analyzeUi, screenshotPreview,
-      memory, runInTerminal,
+      memory, runInTerminal, searchCodebase, generateImage,
     ],
   });
 }
