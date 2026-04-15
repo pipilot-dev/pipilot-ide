@@ -26,6 +26,8 @@ import {
 } from "lucide-react";
 import { useChat, ChatMode, ToolExecutor, WorkspaceContext, CheckpointManager } from "@/hooks/useChat";
 import { useAgentChat } from "@/hooks/useAgentChat";
+import { useMultiAgent } from "@/hooks/useMultiAgent";
+import { AgentTabBar } from "./AgentTabBar";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 import { TodoPanel } from "./TodoPanel";
 import { SessionPicker } from "./SessionPicker";
@@ -192,9 +194,17 @@ const atFootKbd: React.CSSProperties = {
 
 export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, projectId, fileTree, openTabIds, activeTabId }: ChatPanelProps) {
   useEffect(() => { injectFonts(); }, []);
-  // Single provider — PiPilot Agent. Mode toggles between
-  // "agent" (autonomous build) and "plan" (research + plan only, no edits).
-  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, projectId);
+
+  // ── Multi-agent tab management ──
+  const multiAgent = useMultiAgent(projectId || "default-project");
+  const { tabs: agentTabs, activeTab: activeAgentTab, activeTabId: activeAgentTabId,
+    switchTab: switchAgentTab, createTab: createAgentTab,
+    closeTab: closeAgentTab, renameTab: renameAgentTab,
+    updateTabStatus } = multiAgent;
+
+  // Single useAgentChat instance — we switch sessions when agent tabs change.
+  // This avoids the hooks-in-a-loop problem.
+  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, activeAgentTab?.projectId || projectId);
 
   const { messages, isStreaming, mode, setMode, sendMessage, stopStreaming, clearMessages, deleteMessage, revertToMessage, redoToMessage } = agentSdk;
   const agentTodos = (agentSdk as any).todos || [];
@@ -211,6 +221,27 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   const switchSession: (sid: string) => void = (agentSdk as any).switchSession || (() => {});
   const renameSession: (sid: string, name: string) => Promise<void> = (agentSdk as any).renameSession || (async () => {});
   const deleteSession: (sid: string) => Promise<void> = (agentSdk as any).deleteSession || (async () => {});
+
+  // Sync agent tab sessions: when switching tabs, switch the underlying session
+  useEffect(() => {
+    if (activeAgentTab && activeAgentTab.sessionId !== currentSessionId) {
+      switchSession(activeAgentTab.sessionId);
+    }
+  }, [activeAgentTab?.sessionId]);
+
+  // Update tab status based on streaming state
+  useEffect(() => {
+    if (activeAgentTab) {
+      updateTabStatus(activeAgentTab.id, isStreaming ? "streaming" : "idle");
+    }
+  }, [isStreaming, activeAgentTab?.id]);
+
+  // When creating a new agent tab, also create a new chat session
+  const handleCreateAgentTab = useCallback((name?: string) => {
+    const tab = createAgentTab(name);
+    // The session will be auto-created by useAgentChat when switchSession fires
+    createSession(name || tab.name);
+  }, [createAgentTab, createSession]);
 
   // Handler when user picks "Tell PiPilot something else" and submits a new message
   const handleSendNewAfterInterrupt = useCallback((messageId: string, newMessage: string) => {
@@ -949,6 +980,16 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
           )}
         </div>
       </div>
+
+      {/* ── Agent tab bar (visible when 2+ agents spawned) ── */}
+      <AgentTabBar
+        tabs={agentTabs}
+        activeTabId={activeAgentTabId}
+        onSwitch={switchAgentTab}
+        onCreate={handleCreateAgentTab}
+        onClose={closeAgentTab}
+        onRename={renameAgentTab}
+      />
 
       {/* ── Messages ── */}
       <div
