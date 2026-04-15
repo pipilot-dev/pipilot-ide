@@ -29,8 +29,8 @@ export function AgentTabBar({ tabs, activeTabId, onSwitch, onCreate, onClose, on
     if (editingId) editRef.current?.focus();
   }, [editingId]);
 
-  // Only show tab bar if there are 2+ tabs
-  if (tabs.length <= 1) return null;
+  // Only show tab bar when multiple agents exist
+  if (tabs.length < 2) return null;
 
   const statusColor = (status: AgentTab["status"]) => {
     switch (status) {

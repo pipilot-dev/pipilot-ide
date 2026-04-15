@@ -3,6 +3,7 @@ import {
   Send,
   Square,
   Trash2,
+  UserPlus,
   Bot,
   Zap,
   ChevronDown,
@@ -978,6 +979,21 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
               <Trash2 size={14} />
             </button>
           )}
+
+          {/* Spawn new agent button — always visible */}
+          <button
+            onClick={() => handleCreateAgentTab()}
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              color: C.textDim, padding: 4, display: "flex", alignItems: "center",
+              borderRadius: 3, transition: "color 0.12s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
+            title="Spawn new agent"
+          >
+            <UserPlus size={14} />
+          </button>
         </div>
       </div>
 
