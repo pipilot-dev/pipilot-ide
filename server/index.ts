@@ -2862,6 +2862,25 @@ app.post("/api/files/zip-selection", express.json({ limit: "1mb" }), async (req,
   }
 });
 
+// POST /api/files/upload-temp — upload a file to OS temp dir for agent access
+// Body: { fileName, base64 }
+// Returns: { path } — absolute path the agent can Read
+app.post("/api/files/upload-temp", express.json({ limit: "50mb" }), (req, res) => {
+  try {
+    const { fileName, base64 } = req.body;
+    if (!fileName || !base64) return res.status(400).json({ error: "fileName and base64 required" });
+    const tmpDir = path.join(os.tmpdir(), "pipilot-uploads");
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    // Add timestamp to avoid collisions
+    const safeName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    const filePath = path.join(tmpDir, safeName);
+    fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
+    res.json({ path: filePath, name: fileName });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/files/upload — bulk upload files into a folder.
 // Body: { projectId, targetFolder, files: [{ name, base64 }] }
 // Used by the explorer's drag-and-drop upload from the OS.

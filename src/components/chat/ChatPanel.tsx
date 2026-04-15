@@ -3,6 +3,7 @@ import {
   Send,
   Square,
   Trash2,
+  Upload,
   Bot,
   Zap,
   ChevronDown,
@@ -284,6 +285,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileUploadRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef(input);
 
   // Sync state → DOM for uncontrolled textarea when input changes
@@ -1711,6 +1713,38 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         </div>
 
         <div
+          onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.borderColor = C.accent; }}
+          onDragLeave={(e) => { e.currentTarget.style.borderColor = isStreaming ? C.accent : C.accentLine; }}
+          onDrop={async (e) => {
+            e.preventDefault();
+            e.currentTarget.style.borderColor = isStreaming ? C.accent : C.accentLine;
+            const files = Array.from(e.dataTransfer.files);
+            for (const file of files) {
+              try {
+                const base64 = await new Promise<string>((resolve) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve((reader.result as string).split(",")[1]);
+                  reader.readAsDataURL(file);
+                });
+                const res = await fetch("/api/files/upload-temp", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ fileName: file.name, base64 }),
+                });
+                const data = await res.json();
+                if (data.path) {
+                  setAttachments((prev) => [...prev, {
+                    id: `__upload_${Date.now()}_${file.name}__`,
+                    name: `📎 ${file.name}`,
+                    type: "file" as const,
+                    language: file.name.split(".").pop() || "unknown",
+                    lineCount: 0, charCount: 0, truncated: false,
+                    content: `[Uploaded file: ${file.name}]\nPath: ${data.path}\n\nThe user uploaded this file from their computer. Read it at the path above to access its contents.`,
+                  }]);
+                }
+              } catch {}
+            }
+          }}
           style={{
             overflow: "hidden",
             background: C.surfaceAlt,
@@ -1910,6 +1944,57 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                     {attachments.length}
                   </span>
                 )}
+              </button>
+
+              {/* Upload external file to temp dir */}
+              <input
+                type="file"
+                ref={fileUploadRef}
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    const base64 = await new Promise<string>((resolve) => {
+                      const reader = new FileReader();
+                      reader.onload = () => resolve((reader.result as string).split(",")[1]);
+                      reader.readAsDataURL(file);
+                    });
+                    const res = await fetch("/api/files/upload-temp", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ fileName: file.name, base64 }),
+                    });
+                    const data = await res.json();
+                    if (data.path) {
+                      setAttachments((prev) => [...prev, {
+                        id: `__upload_${Date.now()}__`,
+                        name: `📎 ${file.name}`,
+                        type: "file" as const,
+                        language: file.name.split(".").pop() || "unknown",
+                        lineCount: 0,
+                        charCount: 0,
+                        truncated: false,
+                        content: `[Uploaded file: ${file.name}]\nPath: ${data.path}\n\nThe user uploaded this file from their computer. Read it at the path above to access its contents.`,
+                      }]);
+                    }
+                  } catch {}
+                  e.target.value = "";
+                }}
+              />
+              <button
+                style={{
+                  display: "flex", alignItems: "center", gap: 4,
+                  background: "none", border: "none", cursor: "pointer",
+                  color: C.textDim, padding: "4px 6px", borderRadius: 4,
+                  fontFamily: FONTS.mono, fontSize: 9, letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                }}
+                onClick={() => fileUploadRef.current?.click()}
+                title="Upload file from computer (saved to temp)"
+              >
+                <Upload size={11} strokeWidth={1.6} />
+                <span>upload</span>
               </button>
 
               {!isStreaming && (

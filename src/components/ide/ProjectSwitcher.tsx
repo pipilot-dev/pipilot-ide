@@ -81,8 +81,8 @@ export function ProjectSwitcher() {
         }}
       >
         <FolderOpen size={12} style={{ color: "hsl(220 14% 55%)" }} />
-        <span className="truncate" style={{ maxWidth: 120 }}>
-          {activeProject?.name ?? "No Project"}
+        <span className="truncate" style={{ maxWidth: 100 }}>
+          {(activeProject?.name ?? "No Project").length > 12 ? (activeProject?.name ?? "No Project").slice(0, 12) + "…" : (activeProject?.name ?? "No Project")}
         </span>
         <ChevronDown
           size={12}
