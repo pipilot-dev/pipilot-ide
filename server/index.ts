@@ -1679,7 +1679,11 @@ When you need to run a dev server (npm run dev, node server.js, etc.):
 
 5. **If a port is in use**, pick a different random port. Never force-kill other processes.
 
-${systemPrompt ? "\n## Additional Context\n" + systemPrompt : ""}
+${systemPrompt ? "\n## Additional Context\n" + systemPrompt.replace(/^(  (?:Active: |- ))(.+)$/gm, (_, prefix, relPath) => {
+      // Convert relative tab paths to absolute so the agent can Read them directly
+      const abs = relPath.startsWith("/") || relPath.includes(":\\") ? relPath : path.join(workDir, relPath).replace(/\\/g, "/");
+      return prefix + abs;
+    }) : ""}
 `;
     fs.writeFileSync(path.join(workDir, "CLAUDE.md"), claudeMd, "utf8");
   } catch {}

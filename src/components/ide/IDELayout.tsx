@@ -30,6 +30,9 @@ import {
   Wifi,
   WifiOff,
   Clock,
+  Upload,
+  X,
+  Paperclip,
 } from "lucide-react";
 import { deploySite, DeployResult } from "@/lib/deploy";
 import { useProjects } from "@/hooks/useProjects";
@@ -1791,13 +1794,36 @@ export function IDELayout() {
 function GenerateModal({ onClose, onGenerate }: { onClose: () => void; onGenerate: (prompt: string) => void }) {
   const [prompt, setPrompt] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [files, setFiles] = useState<{ name: string; path: string }[]>([]);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => { ref.current?.focus(); }, []);
+
+  const uploadFile = async (file: File) => {
+    try {
+      const base64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch("/api/files/upload-temp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName: file.name, base64 }),
+      });
+      const data = await res.json();
+      if (data.path) setFiles((prev) => [...prev, { name: file.name, path: data.path }]);
+    } catch {}
+  };
 
   const handleSubmit = () => {
     if (!prompt.trim() || generating) return;
     setGenerating(true);
-    onGenerate(prompt.trim());
+    let fullPrompt = prompt.trim();
+    if (files.length > 0) {
+      fullPrompt += "\n\n--- Attached reference files ---\n" + files.map((f) => `- ${f.name}: ${f.path}`).join("\n") + "\n\nRead these files for reference context before building.";
+    }
+    onGenerate(fullPrompt);
   };
 
   return (
@@ -1814,21 +1840,67 @@ function GenerateModal({ onClose, onGenerate }: { onClose: () => void; onGenerat
       }}>
         <h3 style={{ fontSize: 16, fontWeight: 600, color: "#b0b0b8", margin: "0 0 4px" }}>Generate with AI</h3>
         <p style={{ fontSize: 12, color: "#6b6b76", margin: "0 0 18px", lineHeight: 1.5 }}>
-          Describe what you want and PiPilot will scaffold it
+          Describe what you want and PiPilot will scaffold it. Drop files for reference.
         </p>
-        <textarea
-          ref={ref} value={prompt} rows={4}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSubmit(); if (e.key === "Escape" && !generating) onClose(); }}
-          placeholder="A retro-arcade landing page for a synthwave music label…"
-          style={{
-            width: "100%", padding: "12px 14px", fontSize: 13, lineHeight: 1.5,
-            background: "#16161a", color: "#b0b0b8", border: "1px solid #2e2e35",
-            borderRadius: 5, outline: "none", resize: "vertical",
-            fontFamily: "'DM Sans', sans-serif", marginBottom: 10,
+
+        {/* File pills */}
+        {files.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+            {files.map((f, i) => (
+              <span key={i} style={{
+                display: "flex", alignItems: "center", gap: 4,
+                padding: "3px 8px", borderRadius: 4, fontSize: 9,
+                background: "#16161a", border: "1px solid #2e2e35", color: "#8a8a94",
+                fontFamily: "'Geist Mono', monospace",
+              }}>
+                <Paperclip size={9} /> {f.name}
+                <button onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: "#6b6b76", cursor: "pointer", padding: 0 }}>
+                  <X size={8} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div
+          onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.borderColor = "#FF6B35"; }}
+          onDragLeave={(e) => { e.currentTarget.style.borderColor = "#2e2e35"; }}
+          onDrop={async (e) => {
+            e.preventDefault();
+            e.currentTarget.style.borderColor = "#2e2e35";
+            for (const file of Array.from(e.dataTransfer.files)) await uploadFile(file);
           }}
-        />
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          style={{ border: "1px solid #2e2e35", borderRadius: 5, overflow: "hidden", transition: "border-color 0.2s", marginBottom: 10 }}
+        >
+          <textarea
+            ref={ref} value={prompt} rows={4}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSubmit(); if (e.key === "Escape" && !generating) onClose(); }}
+            placeholder="A retro-arcade landing page for a synthwave music label…"
+            style={{
+              width: "100%", padding: "12px 14px", fontSize: 13, lineHeight: 1.5,
+              background: "#16161a", color: "#b0b0b8", border: "none",
+              outline: "none", resize: "vertical",
+              fontFamily: "'DM Sans', sans-serif",
+            }}
+          />
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input type="file" ref={fileRef} style={{ display: "none" }} multiple
+            onChange={async (e) => { for (const file of Array.from(e.target.files || [])) await uploadFile(file); e.target.value = ""; }}
+          />
+          <button onClick={() => fileRef.current?.click()} style={{
+            display: "flex", alignItems: "center", gap: 4,
+            padding: "6px 10px", borderRadius: 4, fontSize: 9,
+            fontFamily: "'Geist Mono', monospace", fontWeight: 600,
+            background: "transparent", border: "1px solid #2e2e35", color: "#8a8a94", cursor: "pointer",
+          }}>
+            <Upload size={10} /> Attach files
+          </button>
+          <span style={{ flex: 1, fontFamily: "'Geist Mono', monospace", fontSize: 9, color: "#6b6b76", textAlign: "right" }}>
+            {files.length > 0 ? `${files.length} file${files.length !== 1 ? "s" : ""}` : ""}
+          </span>
           <button onClick={onClose} disabled={generating} style={{
             padding: "8px 16px", fontSize: 10, fontWeight: 500,
             background: "transparent", color: "#8a8a94", border: "1px solid #2e2e35",
