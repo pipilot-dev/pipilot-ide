@@ -1,10 +1,12 @@
 /**
- * Multi-agent state management.
- * Manages a list of agent tabs, each with its own session.
- * The actual useAgentChat hook runs inside AgentTabProvider components.
+ * Multi-agent state management — IndexedDB backed.
+ * Each agent tab has its own independent chat session.
+ * Agent tab sessions are prefixed with "multiagent-" to avoid
+ * appearing in the regular session picker dropdown.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { db } from "@/lib/db";
 
 export interface AgentTab {
   id: string;
@@ -15,86 +17,129 @@ export interface AgentTab {
   createdAt: number;
 }
 
-const STORAGE_KEY = "pipilot:agent-tabs";
-
 function generateId() {
-  return `agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  return `ma-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-function loadTabs(): AgentTab[] {
+// Store agent tabs in a dedicated IndexedDB settings key per project
+const TABS_KEY = (pid: string) => `agent-tabs:${pid}`;
+const ACTIVE_KEY = (pid: string) => `agent-active-tab:${pid}`;
+
+async function loadTabs(projectId: string): Promise<AgentTab[]> {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return JSON.parse(saved);
+    const entry = await db.settings.get(TABS_KEY(projectId));
+    if (entry?.value) return JSON.parse(entry.value);
   } catch {}
   return [];
 }
 
-function saveTabs(tabs: AgentTab[]) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(tabs)); } catch {}
+async function saveTabs(projectId: string, tabs: AgentTab[]) {
+  try {
+    await db.settings.put({ key: TABS_KEY(projectId), value: JSON.stringify(tabs) });
+  } catch {}
+}
+
+async function loadActiveTabId(projectId: string): Promise<string> {
+  try {
+    const entry = await db.settings.get(ACTIVE_KEY(projectId));
+    if (entry?.value) return entry.value;
+  } catch {}
+  return "main";
+}
+
+async function saveActiveTabId(projectId: string, tabId: string) {
+  try {
+    await db.settings.put({ key: ACTIVE_KEY(projectId), value: tabId });
+  } catch {}
 }
 
 export function useMultiAgent(projectId: string) {
-  const [tabs, setTabs] = useState<AgentTab[]>(() => {
-    const saved = loadTabs().filter((t) => t.projectId === projectId);
-    if (saved.length > 0) return saved;
-    // Default: one "Main" agent tab
-    const mainTab: AgentTab = {
-      id: "main",
-      name: "Main",
-      projectId,
-      sessionId: `agent-${projectId}`,
-      status: "idle",
-      createdAt: Date.now(),
-    };
-    return [mainTab];
-  });
+  const [tabs, setTabs] = useState<AgentTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string>("main");
+  const [loaded, setLoaded] = useState(false);
 
-  const [activeTabId, setActiveTabId] = useState<string>(() => {
-    try {
-      return localStorage.getItem(`pipilot:active-agent-tab:${projectId}`) || "main";
-    } catch { return "main"; }
-  });
+  // Load from IndexedDB on mount / project change
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const savedTabs = await loadTabs(projectId);
+      const savedActive = await loadActiveTabId(projectId);
+      if (cancelled) return;
 
-  const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+      if (savedTabs.length > 0) {
+        setTabs(savedTabs);
+        setActiveTabId(savedActive);
+      } else {
+        // Default: one "Main" agent tab using the standard session
+        const mainTab: AgentTab = {
+          id: "main",
+          name: "Main",
+          projectId,
+          sessionId: `agent-${projectId}`,
+          status: "idle",
+          createdAt: Date.now(),
+        };
+        setTabs([mainTab]);
+        setActiveTabId("main");
+        await saveTabs(projectId, [mainTab]);
+      }
+      setLoaded(true);
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0] || null;
 
   const switchTab = useCallback((tabId: string) => {
     setActiveTabId(tabId);
-    try { localStorage.setItem(`pipilot:active-agent-tab:${projectId}`, tabId); } catch {}
+    saveActiveTabId(projectId, tabId);
   }, [projectId]);
 
   const createTab = useCallback((name?: string, customProjectId?: string) => {
     const id = generateId();
     const pid = customProjectId || projectId;
+    // Prefix with "multiagent-" so these sessions don't show in the
+    // regular session picker (which filters by "agent-{projectId}")
     const tab: AgentTab = {
       id,
       name: name || `Agent ${tabs.length + 1}`,
       projectId: pid,
-      sessionId: `agent-${pid}-${id}`,
+      sessionId: `multiagent-${pid}-${id}`,
       status: "idle",
       createdAt: Date.now(),
     };
+
     setTabs((prev) => {
       const next = [...prev, tab];
-      saveTabs(next);
+      saveTabs(projectId, next);
       return next;
     });
     setActiveTabId(id);
-    try { localStorage.setItem(`pipilot:active-agent-tab:${projectId}`, id); } catch {}
+    saveActiveTabId(projectId, id);
+
+    // Create the chat session in IndexedDB so it exists before messages are added
+    db.chatSessions.put({
+      id: tab.sessionId,
+      name: tab.name,
+      projectId: pid,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }).catch(() => {});
+
     return tab;
   }, [projectId, tabs.length]);
 
   const closeTab = useCallback((tabId: string) => {
     setTabs((prev) => {
-      // Can't close the last tab
       if (prev.length <= 1) return prev;
       const next = prev.filter((t) => t.id !== tabId);
-      saveTabs(next);
-      // If closing the active tab, switch to the previous one
+      saveTabs(projectId, next);
+
       if (activeTabId === tabId) {
         const idx = prev.findIndex((t) => t.id === tabId);
         const newActive = next[Math.min(idx, next.length - 1)]?.id || next[0]?.id;
         setActiveTabId(newActive);
-        try { localStorage.setItem(`pipilot:active-agent-tab:${projectId}`, newActive); } catch {}
+        saveActiveTabId(projectId, newActive);
       }
       return next;
     });
@@ -103,17 +148,13 @@ export function useMultiAgent(projectId: string) {
   const renameTab = useCallback((tabId: string, name: string) => {
     setTabs((prev) => {
       const next = prev.map((t) => t.id === tabId ? { ...t, name } : t);
-      saveTabs(next);
+      saveTabs(projectId, next);
       return next;
     });
-  }, []);
+  }, [projectId]);
 
   const updateTabStatus = useCallback((tabId: string, status: AgentTab["status"]) => {
-    setTabs((prev) => {
-      const next = prev.map((t) => t.id === tabId ? { ...t, status } : t);
-      // Don't persist status to localStorage (it's transient)
-      return next;
-    });
+    setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, status } : t));
   }, []);
 
   return {
@@ -125,5 +166,6 @@ export function useMultiAgent(projectId: string) {
     closeTab,
     renameTab,
     updateTabStatus,
+    loaded,
   };
 }

@@ -57,7 +57,9 @@ export function SessionPicker({
   // Live list of sessions for this project, sorted by updatedAt desc
   const sessions = useLiveQuery(async () => {
     if (!projectId) return [];
-    const list = await db.chatSessions.where("projectId").equals(projectId).toArray();
+    const all = await db.chatSessions.where("projectId").equals(projectId).toArray();
+    // Filter out multi-agent sessions — they have their own tab bar
+    const list = all.filter((s) => !s.id.startsWith("multiagent-"));
     return list.sort((a, b) => {
       const ta = a.updatedAt instanceof Date ? a.updatedAt.getTime() : new Date(a.updatedAt).getTime();
       const tb = b.updatedAt instanceof Date ? b.updatedAt.getTime() : new Date(b.updatedAt).getTime();
