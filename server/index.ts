@@ -27,6 +27,7 @@ import {
   runPythonCheck, runGoCheck, runRustCheck, runPhpCheck, runRubyCheck,
 } from "./diagnostics";
 import { seedMissingConfigs, detectFramework } from "./seed-config";
+import { CodeSearchIndex } from "./search-index";
 import {
   initWorkspaces, resolveWorkspaceDir, linkFolder, unlinkFolder,
   listLinked, touchLinked, isLinked, getLinked,
@@ -1325,12 +1326,13 @@ function createIdeToolServer(projectId: string) {
   // Returns ranked results with context snippets.
   const searchCodebase = tool(
     "search_codebase",
-    "Smart codebase search — combines regex grep, fuzzy file name matching, and symbol/definition search in one tool call. " +
+    "Smart codebase search — combines regex grep, fuzzy file name matching, symbol/definition search, and BM25 semantic search in one tool call. " +
     "Use this instead of multiple Grep/Glob calls. Returns ranked results with context snippets. " +
-    "Modes: 'grep' for exact/regex pattern matching, 'files' for fuzzy file name search, 'symbols' for function/class/export definitions, 'all' to run all three.",
+    "Modes: 'grep' for exact/regex pattern matching, 'files' for fuzzy file name search, 'symbols' for function/class/export definitions, " +
+    "'semantic' for natural language queries (e.g. 'how does authentication work?'), 'all' to run all four.",
     {
       query: z.string().describe("Search query — a regex pattern, file name, symbol name, or natural language description"),
-      mode: z.enum(["grep", "files", "symbols", "all"]).default("all").describe("Search mode: grep (exact/regex), files (fuzzy filename), symbols (function/class/export defs), all (combined)"),
+      mode: z.enum(["grep", "files", "symbols", "semantic", "all"]).default("all").describe("Search mode: grep (exact/regex), files (fuzzy filename), symbols (function/class/export defs), semantic (BM25 natural language), all (combined)"),
       filePattern: z.string().optional().describe("Optional glob to filter files (e.g. '*.tsx', 'src/**/*.ts')"),
       maxResults: z.number().optional().default(20).describe("Max results to return (default 20)"),
       caseSensitive: z.boolean().optional().default(false).describe("Case-sensitive search (default false)"),
@@ -1444,6 +1446,31 @@ function createIdeToolServer(projectId: string) {
         } catch {}
       }
 
+      // ── Semantic: BM25 relevance search ──
+      if (args.mode === "semantic" || args.mode === "all") {
+        try {
+          let index = searchIndexes.get(projectId);
+          if (!index) {
+            index = new CodeSearchIndex(workDir);
+            searchIndexes.set(projectId, index);
+          }
+          if (!index.getStats().ready) {
+            await index.indexProject();
+          }
+          const semanticResults = index.search(args.query, args.maxResults);
+          for (const sr of semanticResults) {
+            results.push({
+              type: "semantic",
+              file: sr.file,
+              line: sr.startLine,
+              match: sr.snippet.split("\n")[0]?.trim().slice(0, 200) || "",
+              context: `Lines ${sr.startLine}-${sr.endLine}\n${sr.snippet}`,
+              score: sr.score,
+            });
+          }
+        } catch {}
+      }
+
       // Sort by score descending, dedupe by file+line
       const seen = new Set<string>();
       const deduped = results
@@ -1544,6 +1571,7 @@ function createIdeToolServer(projectId: string) {
 
 // ── Persistent V2 sessions — one per project, reused across messages ──
 const activeSessions = new Map<string, { session: any; sessionId: string }>();
+const searchIndexes = new Map<string, CodeSearchIndex>();
 
 // ── Pending user input requests (for canUseTool → AskUserQuestion flow) ──
 const pendingInputRequests = new Map<string, {
@@ -3419,6 +3447,7 @@ app.delete("/api/files/workspace", async (req, res) => {
 
       // 2. Close ALL chokidar watchers for this project
       await closeAllWatchers(projectId);
+      searchIndexes.delete(projectId);
 
       // 3. Give the OS a moment to release handles (Windows is slow)
       await new Promise((r) => setTimeout(r, 250));
@@ -3580,6 +3609,11 @@ app.get("/api/files/watch", (req, res) => {
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
   });
   registerWatcher(projectId, watcher);
+
+  // Incremental search index updates (only if index already exists for this project)
+  watcher.on("add", (fp: string) => { const idx = searchIndexes.get(projectId); if (idx?.getStats().ready) idx.indexFile(fp); });
+  watcher.on("change", (fp: string) => { const idx = searchIndexes.get(projectId); if (idx?.getStats().ready) idx.indexFile(fp); });
+  watcher.on("unlink", (fp: string) => { const idx = searchIndexes.get(projectId); if (idx?.getStats().ready) idx.removeFile(fp); });
 
   const sendUpdate = () => {
     try {
