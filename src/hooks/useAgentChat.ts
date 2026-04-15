@@ -193,13 +193,23 @@ export function useAgentChat(
 
   // Load messages from IndexedDB whenever the active session changes.
   // Each project can have multiple sessions; switching swaps the message list.
+  // CRITICAL: Clear messages immediately to prevent stale data from being
+  // saved to the new session's IDB slot before the async load completes.
+  const loadingSessionRef = useRef<string>("");
   useEffect(() => {
     if (!currentSessionId) return;
+    // Immediately clear messages so the save effect doesn't persist
+    // the previous session's messages under the new session ID.
+    setMessages([]);
+    loadingSessionRef.current = currentSessionId;
+    const sid = currentSessionId;
     db.chatMessages
       .where("sessionId")
-      .equals(currentSessionId)
+      .equals(sid)
       .sortBy("timestamp")
       .then((dbMsgs) => {
+        // Staleness guard: if session changed again before this resolved, discard
+        if (loadingSessionRef.current !== sid) return;
         const loaded: ChatMessage[] = dbMsgs.map((m) => ({
           id: m.id,
           role: m.role,
@@ -355,11 +365,15 @@ export function useAgentChat(
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => {
     if (!projectId || !currentSessionId || messages.length === 0) return;
+    // Don't save if we're in the middle of loading a different session
+    if (loadingSessionRef.current !== currentSessionId) return;
     clearTimeout(saveTimeoutRef.current);
     const hasStreaming = messages.some((m) => m.streaming);
     const delay = hasStreaming ? 500 : 1500;
     saveTimeoutRef.current = setTimeout(() => {
       const sessionId = currentSessionId;
+      // Double-check session hasn't changed during the timeout
+      if (currentSessionIdRef.current !== sessionId) return;
       // Save ALL messages including currently-streaming ones. For a
       // streaming message we snapshot its current content/parts/toolCalls
       // so that if the stream is interrupted, the partial response is

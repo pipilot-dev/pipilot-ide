@@ -223,12 +223,15 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   const renameSession: (sid: string, name: string) => Promise<void> = (agentSdk as any).renameSession || (async () => {});
   const deleteSession: (sid: string) => Promise<void> = (agentSdk as any).deleteSession || (async () => {});
 
-  // Sync agent tab sessions: when switching tabs, switch the underlying session
+  // Sync agent tab sessions: when switching tabs, switch the underlying session.
+  // Use a ref to track the last synced session and avoid redundant switches.
+  const lastSyncedSessionRef = useRef<string>("");
   useEffect(() => {
-    if (activeAgentTab && activeAgentTab.sessionId !== currentSessionId) {
+    if (activeAgentTab && activeAgentTab.sessionId !== lastSyncedSessionRef.current) {
+      lastSyncedSessionRef.current = activeAgentTab.sessionId;
       switchSession(activeAgentTab.sessionId);
     }
-  }, [activeAgentTab?.sessionId]);
+  }, [activeAgentTab?.sessionId, switchSession]);
 
   // Update tab status based on streaming state
   useEffect(() => {
