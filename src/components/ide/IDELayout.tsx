@@ -1483,15 +1483,38 @@ export function IDELayout() {
               }}
               data-testid="chat-panel-wrapper"
             >
-              {/* Agent tab bar — only shows with 2+ agents */}
-              <AgentTabBar
-                tabs={multiAgent.tabs}
-                activeTabId={multiAgent.activeTabId}
-                onSwitch={multiAgent.switchTab}
-                onCreate={() => multiAgent.createTab()}
-                onClose={multiAgent.closeTab}
-                onRename={multiAgent.renameTab}
-              />
+              {/* Agent tab bar + spawn button */}
+              {multiAgent.tabs.length > 1 ? (
+                <AgentTabBar
+                  tabs={multiAgent.tabs}
+                  activeTabId={multiAgent.activeTabId}
+                  onSwitch={multiAgent.switchTab}
+                  onCreate={() => multiAgent.createTab()}
+                  onClose={multiAgent.closeTab}
+                  onRename={multiAgent.renameTab}
+                />
+              ) : (
+                <div style={{
+                  display: "flex", alignItems: "center", justifyContent: "flex-end",
+                  padding: "0 8px", height: 24, borderBottom: "1px solid hsl(220 13% 22%)",
+                  background: "#16161a", flexShrink: 0,
+                }}>
+                  <button
+                    onClick={() => multiAgent.createTab()}
+                    title="Spawn new agent"
+                    style={{
+                      display: "flex", alignItems: "center", gap: 4,
+                      background: "none", border: "none", cursor: "pointer",
+                      color: "#6b6b76", fontSize: 9, fontFamily: "'Geist Mono', monospace",
+                      padding: "2px 6px", borderRadius: 3, transition: "color 0.12s",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = "#FF6B35"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = "#6b6b76"; }}
+                  >
+                    + New Agent
+                  </button>
+                </div>
+              )}
 
               {/* Render a ChatPanel per agent tab — only active one visible */}
               {multiAgent.tabs.map((agentTab) => (
