@@ -1148,7 +1148,7 @@ function createIdeToolServer(projectId: string) {
             return {
               content: [
                 { type: "image" as const, data: result.base64, mimeType: "image/png" },
-                { type: "text" as const, text: `Screenshot captured (${result.sizeKB}KB) via headless Chrome.\nSaved: ${result.filePath}\nURL: ${devUrl}\n\n${result.analysis}` },
+                { type: "text" as const, text: `Screenshot captured (${result.sizeKB}KB) via headless Chrome.\nSaved: ${result.filePath}\nURL: ${devUrl}\n\nIMPORTANT: Use the Read tool on "${result.filePath}" to view the screenshot image and visually inspect the UI.\n\n${result.analysis}` },
               ],
             };
           } catch {}
@@ -1174,7 +1174,7 @@ function createIdeToolServer(projectId: string) {
               const filePath = path.join(tmpDir, fileName);
               fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
               contentParts.push({ type: "image" as const, data: base64, mimeType: "image/png" });
-              contentParts.push({ type: "text" as const, text: `Screenshot saved: ${filePath}\n${captureResult.layoutReport || ""}` });
+              contentParts.push({ type: "text" as const, text: `Screenshot saved: ${filePath}\n\nIMPORTANT: Use the Read tool on "${filePath}" to view the screenshot image and visually inspect the UI.\n\n${captureResult.layoutReport || ""}` });
               return { content: contentParts };
             }
           } catch {}
