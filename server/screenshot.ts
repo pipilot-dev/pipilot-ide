@@ -15,16 +15,16 @@ import * as os from "os";
 
 const KNOWN_PATHS: Record<string, string[]> = {
   win32: [
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
-    "C:\\Program Files\\Chromium\\Application\\chrome.exe",
-    `${os.homedir()}\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe`,
-    `${os.homedir()}\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe`,
-    `${os.homedir()}\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe`,
-    `${os.homedir()}\\AppData\\Local\\Chromium\\Application\\chrome.exe`,
+    "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+    "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
+    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe",
+    "C:/Program Files/Chromium/Application/chrome.exe",
+    path.join(os.homedir(), "AppData/Local/Google/Chrome/Application/chrome.exe"),
+    path.join(os.homedir(), "AppData/Local/Microsoft/Edge/Application/msedge.exe"),
+    path.join(os.homedir(), "AppData/Local/BraveSoftware/Brave-Browser/Application/brave.exe"),
+    path.join(os.homedir(), "AppData/Local/Chromium/Application/chrome.exe"),
   ],
   darwin: [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
