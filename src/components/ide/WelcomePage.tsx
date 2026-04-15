@@ -335,13 +335,13 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
       {/* Inline Generate composer (replaces modal) */}
       {showGenerate && (
         <div style={{
-          position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
+          position: "sticky", bottom: 0, left: 0, right: 0, zIndex: 100,
           background: C.surface, borderTop: `1px solid ${C.border}`,
-          padding: "16px 24px 20px",
-          boxShadow: "0 -8px 32px rgba(0,0,0,0.4)",
+          padding: "14px 20px 16px",
+          boxShadow: "0 -4px 16px rgba(0,0,0,0.3)",
           animation: "wSlideUp 0.3s ease",
         }}>
-          <div style={{ maxWidth: 680, margin: "0 auto" }}>
+          <div style={{ maxWidth: 600, margin: "0 auto" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <Sparkles size={14} style={{ color: C.accent }} />
