@@ -1131,131 +1131,84 @@ function createIdeToolServer(projectId: string) {
     {},
     async () => {
       try {
-        const status = getDevServerStatus(projectId);
-        if (!status || !status.running || !status.url) {
-          return {
-            content: [{ type: "text" as const, text: "Dev server is not running. Start it first with manage_dev_server action:'start'." }],
-            isError: true,
-          };
+        // Request screenshot from the frontend via SSE → pending promise → POST back.
+        // The frontend renders the page in a same-origin iframe (executes JS),
+        // captures it with html2canvas, and returns a PNG + DOM layout report.
+        const requestId = `ss-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+        // Find the active SSE stream for this project to send the request
+        const sseResponse = activeSSEByProject.get(projectId);
+        if (!sseResponse) {
+          return { content: [{ type: "text" as const, text: "No active connection to the IDE frontend. Make sure the project is open in the browser." }], isError: true };
         }
 
-        const url = status.url;
+        // Send the capture request as an SSE event — the frontend listens for this
+        const captureResult = await new Promise<{ dataUrl: string; layoutReport: string } | null>((resolve) => {
+          pendingScreenshots.set(requestId, { resolve });
 
-        // Try Playwright first (executes JS, captures real screenshot + rendered DOM)
-        try {
-          const { execSync } = require("child_process");
-          // Inline Playwright script: navigate, wait for JS, screenshot, extract DOM
-          const pwScript = `
-            const { chromium } = require('playwright');
-            (async () => {
-              const browser = await chromium.launch({ headless: true });
-              const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-              await page.goto('${url}', { waitUntil: 'networkidle', timeout: 15000 });
-              await page.waitForTimeout(1000); // extra time for JS rendering
-              const screenshot = await page.screenshot({ type: 'png' });
-              const analysis = await page.evaluate(() => {
-                const data = { title: document.title, headings: [], structure: {}, text: [], colors: [], images: [], links: [] };
-                document.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(h => data.headings.push(h.tagName.toLowerCase() + ': "' + h.textContent.trim().slice(0, 60) + '"'));
-                ['header','nav','main','section','article','aside','footer','form','button','input','img','a','ul','ol','table'].forEach(tag => {
-                  const count = document.querySelectorAll(tag).length;
-                  if (count > 0) data.structure[tag] = count;
-                });
-                document.querySelectorAll('img').forEach(img => { if (img.src) data.images.push(img.src.slice(0, 80)); });
-                document.querySelectorAll('a').forEach(a => { if (a.href && a.textContent.trim()) data.links.push(a.textContent.trim().slice(0, 40) + ' -> ' + a.href.slice(0, 60)); });
-                // Extract visible text from main content
-                const main = document.querySelector('main') || document.body;
-                const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
-                let n; while ((n = walker.nextNode()) && data.text.length < 20) { const t = n.textContent.trim(); if (t.length > 3) data.text.push(t.slice(0, 80)); }
-                // Extract computed colors from key elements
-                ['body','header','nav','main','h1','button'].forEach(sel => {
-                  const el = document.querySelector(sel);
-                  if (el) { const s = getComputedStyle(el); data.colors.push(sel + ': bg=' + s.backgroundColor + ', color=' + s.color); }
-                });
-                return data;
-              });
-              console.log('__SCREENSHOT__' + screenshot.toString('base64') + '__END_SCREENSHOT__');
-              console.log('__ANALYSIS__' + JSON.stringify(analysis) + '__END_ANALYSIS__');
-              await browser.close();
-            })();
-          `;
-          const output = execSync(`node -e "${pwScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, {
-            encoding: "utf8", timeout: 25000, maxBuffer: 10 * 1024 * 1024,
-            cwd: workDir,
-          });
-
-          const screenshotMatch = output.match(/__SCREENSHOT__(.+?)__END_SCREENSHOT__/);
-          const analysisMatch = output.match(/__ANALYSIS__(.+?)__END_ANALYSIS__/);
-
-          const contentParts: any[] = [];
-
-          // Add screenshot image if captured
-          if (screenshotMatch) {
-            contentParts.push({ type: "image" as const, data: screenshotMatch[1], mimeType: "image/png" });
+          // Push screenshot request through the agent SSE stream
+          try {
+            sendSSE(sseResponse, { type: "screenshot_request", requestId });
+          } catch {
+            pendingScreenshots.delete(requestId);
+            resolve(null);
           }
 
-          // Add text analysis
-          if (analysisMatch) {
-            try {
-              const a = JSON.parse(analysisMatch[1]);
-              const lines: string[] = ["=== DEV SERVER UI ANALYSIS (JS-rendered) ===", `URL: ${url}`, ""];
-              if (a.title) lines.push(`Title: ${a.title}`);
-              if (a.headings?.length) lines.push(`Headings: ${a.headings.join(", ")}`);
-              if (a.structure && Object.keys(a.structure).length) lines.push(`Structure: ${Object.entries(a.structure).map(([t, c]) => `${t}(${c})`).join(", ")}`);
-              if (a.images?.length) lines.push(`Images (${a.images.length}): ${a.images.slice(0, 5).join(", ")}`);
-              if (a.links?.length) lines.push(`Links (${a.links.length}): ${a.links.slice(0, 8).join(" | ")}`);
-              if (a.colors?.length) { lines.push(""); lines.push("Computed colors:"); a.colors.forEach((c: string) => lines.push(`  ${c}`)); }
-              if (a.text?.length) { lines.push(""); lines.push("Visible text:"); a.text.slice(0, 10).forEach((t: string) => lines.push(`  "${t}"`)); }
-              contentParts.push({ type: "text" as const, text: lines.join("\n") });
-            } catch {
-              contentParts.push({ type: "text" as const, text: "Analysis parsing failed." });
+          // Timeout after 15 seconds
+          setTimeout(() => {
+            if (pendingScreenshots.has(requestId)) {
+              pendingScreenshots.delete(requestId);
+              resolve(null);
             }
+          }, 15000);
+        });
+
+        if (!captureResult) {
+          // Fallback: try direct fetch for non-SPA apps
+          const status = getDevServerStatus(projectId);
+          if (status?.url) {
+            try {
+              const res = await fetch(status.url, { signal: AbortSignal.timeout(5000) });
+              const html = await res.text();
+              const lines: string[] = ["=== DEV SERVER UI ANALYSIS (static HTML — JS not executed) ===", `URL: ${status.url}`, ""];
+              lines.push("⚠ Frontend capture timed out. This analysis is from raw HTML only.");
+              const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
+              if (titleMatch) lines.push(`Title: ${titleMatch[1]}`);
+              const headings: string[] = [];
+              for (const m of html.matchAll(/<(h[1-6])[^>]*>([^<]+)/gi)) headings.push(`${m[1]}: "${m[2].trim().slice(0, 60)}"`);
+              if (headings.length > 0) lines.push(`Headings: ${headings.join(", ")}`);
+              lines.push(`HTML size: ${(html.length / 1024).toFixed(1)} KB`);
+              return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+            } catch {}
           }
-
-          if (contentParts.length > 0) return { content: contentParts };
-        } catch {
-          // Playwright not available — fall through to fetch-based fallback
+          return { content: [{ type: "text" as const, text: "Screenshot capture timed out — the frontend did not respond. Make sure the project is open in the browser." }], isError: true };
         }
 
-        // Fallback: raw fetch + static HTML analysis (no JS execution)
-        let html: string;
-        try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-          html = await res.text();
-        } catch (err: any) {
-          return { content: [{ type: "text" as const, text: `Could not fetch dev server at ${url}: ${err.message}` }], isError: true };
+        // Save the PNG to temp folder so the agent can reference it
+        const contentParts: any[] = [];
+        if (captureResult.dataUrl) {
+          try {
+            const base64 = captureResult.dataUrl.replace(/^data:image\/png;base64,/, "");
+            const tmpDir = path.join(os.tmpdir(), "pipilot-uploads");
+            if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+            const fileName = `screenshot-${projectId}-${Date.now()}.png`;
+            const filePath = path.join(tmpDir, fileName);
+            fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
+
+            contentParts.push({
+              type: "text" as const,
+              text: `Screenshot saved: ${filePath}\nUse Read tool to view the image.`,
+            });
+            // Also include the base64 image directly for vision models
+            contentParts.push({ type: "image" as const, data: base64, mimeType: "image/png" });
+          } catch {}
         }
 
-        const lines: string[] = ["=== DEV SERVER UI ANALYSIS (static HTML — JS not executed) ===", `URL: ${url}`, ""];
-        lines.push("⚠ This analysis is from raw HTML. If the app renders client-side (React/Vue/SPA), the actual UI may differ.");
-        lines.push("  Install Playwright (`npm i -D playwright`) for full JS-rendered screenshots.");
-        lines.push("");
-
-        const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
-        if (titleMatch) lines.push(`Title: ${titleMatch[1]}`);
-
-        const structureTags: Record<string, number> = {};
-        for (const m of html.matchAll(/<(header|nav|main|section|article|aside|footer|h[1-6]|form|button|input|img|a|ul|ol|table)\b/gi)) {
-          const tag = m[1].toLowerCase();
-          structureTags[tag] = (structureTags[tag] || 0) + 1;
+        if (captureResult.layoutReport) {
+          contentParts.push({ type: "text" as const, text: captureResult.layoutReport });
         }
-        if (Object.keys(structureTags).length > 0) lines.push(`Structure: ${Object.entries(structureTags).map(([t, c]) => `${t}(${c})`).join(", ")}`);
 
-        const headings: string[] = [];
-        for (const m of html.matchAll(/<(h[1-6])[^>]*>([^<]+)/gi)) headings.push(`${m[1]}: "${m[2].trim().slice(0, 60)}"`);
-        if (headings.length > 0) lines.push(`Headings: ${headings.join(", ")}`);
-
-        const imgs: string[] = [];
-        for (const m of html.matchAll(/<img[^>]*src=["']([^"']+)["']/gi)) imgs.push(m[1].slice(0, 80));
-        if (imgs.length > 0) lines.push(`Images (${imgs.length}): ${imgs.slice(0, 5).join(", ")}`);
-
-        const styleBlocks: string[] = [];
-        for (const m of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) {
-          for (const v of m[1].matchAll(/--([a-zA-Z0-9-]+)\s*:\s*([^;]+);/g)) styleBlocks.push(`--${v[1]}: ${v[2].trim()}`);
-        }
-        if (styleBlocks.length > 0) { lines.push(""); lines.push(`CSS variables: ${styleBlocks.slice(0, 30).join(", ")}`); }
-
-        lines.push(""); lines.push(`HTML size: ${(html.length / 1024).toFixed(1)} KB`);
-        return { content: [{ type: "text" as const, text: lines.join("\n").slice(0, 6000) }] };
+        return { content: contentParts.length > 0 ? contentParts : [{ type: "text" as const, text: "Screenshot captured but no data returned." }] };
       } catch (err: any) {
         return { content: [{ type: "text" as const, text: `Screenshot failed: ${err.message}` }], isError: true };
       }
@@ -1640,6 +1593,14 @@ const pendingInputRequests = new Map<string, {
   resolve: (answer: any) => void;
   question: any;
 }>();
+
+// ── Pending screenshot requests (screenshot_preview tool → frontend capture → result) ──
+const pendingScreenshots = new Map<string, {
+  resolve: (data: { dataUrl: string; layoutReport: string } | null) => void;
+}>();
+
+// ── Active SSE responses per project (for tools that need to push events to the frontend) ──
+const activeSSEByProject = new Map<string, express.Response>();
 
 // ── Message queue — queue messages when agent is busy ──
 const messageQueues = new Map<string, string[]>();
@@ -2245,6 +2206,7 @@ End your response with a section titled "## Plan" containing the numbered steps.
   // Also stored globally so the run_in_terminal tool can emit events
   let sseRes = res;
   (globalThis as any).__pipilotSSEResponse = res;
+  activeSSEByProject.set(projectWorkspaceId, res);
 
   // Create abort controller for this run
   const abortController = new AbortController();
@@ -3184,6 +3146,20 @@ app.post("/api/files/upload-temp", express.json({ limit: "50mb" }), (req, res) =
     res.json({ path: filePath, name: fileName });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/screenshot-result — frontend sends back captured screenshot
+// Body: { requestId, dataUrl, layoutReport }
+app.post("/api/screenshot-result", express.json({ limit: "20mb" }), (req, res) => {
+  const { requestId, dataUrl, layoutReport } = req.body;
+  const pending = pendingScreenshots.get(requestId);
+  if (pending) {
+    pendingScreenshots.delete(requestId);
+    pending.resolve({ dataUrl: dataUrl || "", layoutReport: layoutReport || "" });
+    res.json({ ok: true });
+  } else {
+    res.status(404).json({ error: "No pending screenshot request with this ID" });
   }
 });
 

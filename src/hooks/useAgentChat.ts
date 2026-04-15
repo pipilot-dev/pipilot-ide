@@ -600,6 +600,38 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
                   event.compact_metadata ? `(${event.compact_metadata.pre_tokens} tokens before)` : "");
                 break;
 
+              case "screenshot_request": {
+                // Server's screenshot_preview tool is asking the frontend to capture
+                // the preview. We render in a same-origin iframe, capture with html2canvas,
+                // and POST the result back.
+                const ssReqId = event.requestId;
+                if (ssReqId) {
+                  (async () => {
+                    try {
+                      const { capturePreviewScreenshot } = await import("@/lib/screenshot");
+                      const result = await capturePreviewScreenshot(projectId);
+                      await fetch("/api/screenshot-result", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          requestId: ssReqId,
+                          dataUrl: result.dataUrl,
+                          layoutReport: result.layoutReport,
+                        }),
+                      });
+                    } catch (err) {
+                      // Send empty result so the server doesn't hang
+                      await fetch("/api/screenshot-result", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ requestId: ssReqId, dataUrl: "", layoutReport: `Screenshot capture failed: ${err}` }),
+                      }).catch(() => {});
+                    }
+                  })();
+                }
+                break;
+              }
+
               case "content_block_start":
               case "content_block_delta":
               case "user":
