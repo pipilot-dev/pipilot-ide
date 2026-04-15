@@ -5,8 +5,6 @@ import { TitleBar } from "./TitleBar";
 import { SidebarPanel } from "./SidebarPanel";
 import { EditorArea, EditorTab } from "./EditorArea";
 import { ChatPanel } from "../chat/ChatPanel";
-import { useMultiAgent } from "@/hooks/useMultiAgent";
-import { AgentTabBar } from "../chat/AgentTabBar";
 import { CloudPanel } from "../cloud/CloudPanel";
 import { CommandPalette } from "./CommandPalette";
 import { TerminalPanel } from "./TerminalPanel";
@@ -201,7 +199,6 @@ export function IDELayout() {
   const { files, isReady, executeTool, updateFileContent, getFileContent, loadFolderChildren, activeProjectId } =
     (activeProvider === "claude-agent" || isLinkedProject) ? remoteFs : localFs;
   const checkpoints = useCheckpoints();
-  const multiAgent = useMultiAgent(activeProjectId || "default-project");
 
   // File operation callbacks — route to DB or server based on mode
   const handleCreateFile = useCallback(async (filePath: string, content: string = "") => {
@@ -1304,24 +1301,8 @@ export function IDELayout() {
       {/* Folder picker (File → Open Folder) */}
       <FolderPicker
         open={showOpenFolderPicker}
-        onClose={() => { setShowOpenFolderPicker(false); delete (window as any).__pendingAgentTabLink; }}
-        onPick={async (p) => {
-          const pendingTabId = (window as any).__pendingAgentTabLink;
-          delete (window as any).__pendingAgentTabLink;
-          if (pendingTabId) {
-            // Link folder to the specific agent tab (not the global IDE project)
-            const linked = await openFolderInProjects(p);
-            // openFolderInProjects returns void but switches project — get the new ID
-            // The linked project ID is based on the path
-            const allProjects = await db.projects.toArray();
-            const match = allProjects.find((proj: any) => proj.absolutePath === p || proj.name === p.split(/[\\/]/).pop());
-            if (match) {
-              multiAgent.linkProjectToTab(pendingTabId, match.id);
-            }
-          } else {
-            await openFolderInProjects(p);
-          }
-        }}
+        onClose={() => setShowOpenFolderPicker(false)}
+        onPick={async (p) => { await openFolderInProjects(p); }}
       />
 
       {/* Clone Repository modal (File → Clone Repository) */}
@@ -1527,67 +1508,15 @@ export function IDELayout() {
               }}
               data-testid="chat-panel-wrapper"
             >
-              {/* Agent tab bar + spawn button */}
-              {multiAgent.tabs.length > 1 ? (
-                <AgentTabBar
-                  tabs={multiAgent.tabs}
-                  activeTabId={multiAgent.activeTabId}
-                  onSwitch={multiAgent.switchTab}
-                  onCreate={() => multiAgent.createTab()}
-                  onClose={multiAgent.closeTab}
-                  onRename={multiAgent.renameTab}
-                />
-              ) : (
-                <div style={{
-                  display: "flex", alignItems: "center", justifyContent: "flex-end",
-                  padding: "0 8px", height: 24, borderBottom: "1px solid hsl(220 13% 22%)",
-                  background: "#16161a", flexShrink: 0,
-                }}>
-                  <button
-                    onClick={() => multiAgent.createTab()}
-                    title="Spawn new agent"
-                    style={{
-                      display: "flex", alignItems: "center", gap: 4,
-                      background: "none", border: "none", cursor: "pointer",
-                      color: "#6b6b76", fontSize: 9, fontFamily: "'Geist Mono', monospace",
-                      padding: "2px 6px", borderRadius: 3, transition: "color 0.12s",
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = "#FF6B35"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = "#6b6b76"; }}
-                  >
-                    + New Agent
-                  </button>
-                </div>
-              )}
-
-              {/* Render a ChatPanel per agent tab — only active one visible */}
-              {multiAgent.tabs.map((agentTab) => (
-                <div
-                  key={agentTab.id}
-                  style={{
-                    flex: 1, minHeight: 0,
-                    display: agentTab.id === multiAgent.activeTabId ? "flex" : "none",
-                    flexDirection: "column",
-                  }}
-                >
-                  <ChatPanel
-                    toolExecutor={toolExecutorWithCheckpoints}
-                    workspaceContext={workspaceContext}
-                    checkpointManager={checkpointManagerForChat}
-                    projectId={agentTab.id === "main" ? activeProjectId : (agentTab.projectId || undefined)}
-                    fileTree={agentTab.id === "main" ? files : undefined}
-                    onOpenFolder={agentTab.id !== "main" ? () => {
-                      // For spawned agents: open folder picker that links to THIS agent tab
-                      setShowOpenFolderPicker(true);
-                      // Store which agent tab wants the folder
-                      (window as any).__pendingAgentTabLink = agentTab.id;
-                    } : undefined}
-                    onGenerate={agentTab.id !== "main" ? () => setShowGenerateModal(true) : undefined}
-                    openTabIds={tabs.filter((t) => !t.isPreview && !t.isCommit && !t.isDiff && !t.isSettings && !t.isWalkthrough).map((t) => t.node.id)}
-                    activeTabId={activeTabId}
-                  />
-                </div>
-              ))}
+              <ChatPanel
+                toolExecutor={toolExecutorWithCheckpoints}
+                workspaceContext={workspaceContext}
+                checkpointManager={checkpointManagerForChat}
+                projectId={activeProjectId}
+                fileTree={files}
+                openTabIds={tabs.filter((t) => !t.isPreview && !t.isCommit && !t.isDiff && !t.isSettings && !t.isWalkthrough).map((t) => t.node.id)}
+                activeTabId={activeTabId}
+              />
             </div>
           </>
         )}
