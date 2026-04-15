@@ -95,7 +95,10 @@ export function useAgentChat(
   toolExecutor?: ToolExecutor,
   workspaceContext?: WorkspaceContext,
   checkpointManager?: CheckpointManager,
-  projectId?: string
+  projectId?: string,
+  /** When provided by multi-agent system, overrides the session ID
+   *  and disables the auto-session-from-localStorage logic. */
+  forceSessionId?: string,
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -162,11 +165,18 @@ export function useAgentChat(
   const sessionPrefKey = (pid: string) => `pipilot:active-session:${pid}`;
   useEffect(() => {
     if (!projectId) { setCurrentSessionId(""); return; }
-    let nextId = `agent-${projectId}`;
-    try {
-      const stored = localStorage.getItem(sessionPrefKey(projectId));
-      if (stored) nextId = stored;
-    } catch {}
+    // When multi-agent provides a forced session ID, use it directly
+    // and skip the localStorage lookup (which would cause cross-tab conflicts).
+    let nextId: string;
+    if (forceSessionId) {
+      nextId = forceSessionId;
+    } else {
+      nextId = `agent-${projectId}`;
+      try {
+        const stored = localStorage.getItem(sessionPrefKey(projectId));
+        if (stored) nextId = stored;
+      } catch {}
+    }
     setCurrentSessionId(nextId);
     // Ensure a chatSessions row exists for this id, then signal readiness
     (async () => {
@@ -189,7 +199,7 @@ export function useAgentChat(
         detail: { projectId, sessionId: nextId },
       }));
     })();
-  }, [projectId]);
+  }, [projectId, forceSessionId]);
 
   // Load messages from IndexedDB whenever the active session changes.
   // Each project can have multiple sessions; switching swaps the message list.

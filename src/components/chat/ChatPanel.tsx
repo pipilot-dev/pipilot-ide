@@ -203,9 +203,9 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     closeTab: closeAgentTab, renameTab: renameAgentTab,
     updateTabStatus } = multiAgent;
 
-  // Single useAgentChat instance — we switch sessions when agent tabs change.
-  // This avoids the hooks-in-a-loop problem.
-  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, activeAgentTab?.projectId || projectId);
+  // Single useAgentChat instance — forceSessionId drives the session directly
+  // from the active agent tab, bypassing localStorage-based session management.
+  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, activeAgentTab?.projectId || projectId, activeAgentTab?.sessionId);
 
   const { messages, isStreaming, mode, setMode, sendMessage, stopStreaming, clearMessages, deleteMessage, revertToMessage, redoToMessage } = agentSdk;
   const agentTodos = (agentSdk as any).todos || [];
@@ -223,15 +223,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   const renameSession: (sid: string, name: string) => Promise<void> = (agentSdk as any).renameSession || (async () => {});
   const deleteSession: (sid: string) => Promise<void> = (agentSdk as any).deleteSession || (async () => {});
 
-  // Sync agent tab sessions: when switching tabs, switch the underlying session.
-  // Use a ref to track the last synced session and avoid redundant switches.
-  const lastSyncedSessionRef = useRef<string>("");
-  useEffect(() => {
-    if (activeAgentTab && activeAgentTab.sessionId !== lastSyncedSessionRef.current) {
-      lastSyncedSessionRef.current = activeAgentTab.sessionId;
-      switchSession(activeAgentTab.sessionId);
-    }
-  }, [activeAgentTab?.sessionId, switchSession]);
+  // No manual session sync needed — forceSessionId drives session directly
 
   // Update tab status based on streaming state
   useEffect(() => {
