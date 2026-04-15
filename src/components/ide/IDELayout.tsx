@@ -60,7 +60,6 @@ function findFileById(nodes: FileNode[], id: string): FileNode | null {
 export function IDELayout() {
   const [activeView, setActiveView] = useState<ActivityBarView | null>("explorer");
   const [chatOpen, setChatOpen] = useState(true);
-  const multiAgent = useMultiAgent(activeProjectId || "default-project");
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const tabsRestoredRef = useRef(false);
@@ -201,6 +200,7 @@ export function IDELayout() {
   const { files, isReady, executeTool, updateFileContent, getFileContent, loadFolderChildren, activeProjectId } =
     (activeProvider === "claude-agent" || isLinkedProject) ? remoteFs : localFs;
   const checkpoints = useCheckpoints();
+  const multiAgent = useMultiAgent(activeProjectId || "default-project");
 
   // File operation callbacks — route to DB or server based on mode
   const handleCreateFile = useCallback(async (filePath: string, content: string = "") => {
