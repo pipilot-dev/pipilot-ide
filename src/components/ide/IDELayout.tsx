@@ -6,7 +6,6 @@ import { SidebarPanel } from "./SidebarPanel";
 import { EditorArea, EditorTab } from "./EditorArea";
 import { ChatPanel } from "../chat/ChatPanel";
 import { CloudPanel } from "../cloud/CloudPanel";
-import { ActivityBoard } from "./ActivityBoard";
 import { CommandPalette } from "./CommandPalette";
 import { TerminalPanel } from "./TerminalPanel";
 import SettingsPanel from "@/components/ide/SettingsPanel";
@@ -16,7 +15,6 @@ import { useCheckpoints } from "@/hooks/useCheckpoints";
 import { useSidebarResizable, useResizable } from "@/hooks/useResizable";
 import { WorkspaceContext, CheckpointManager } from "@/hooks/useChat";
 import { db } from "@/lib/db";
-import { useLiveQuery } from "dexie-react-hooks";
 import {
   GitBranch,
   AlertCircle,
@@ -202,17 +200,6 @@ export function IDELayout() {
     (activeProvider === "claude-agent" || isLinkedProject) ? remoteFs : localFs;
   const checkpoints = useCheckpoints();
 
-  // Activity board: read messages from IDB for the current session
-  const chatMessagesForActivity = useLiveQuery(async () => {
-    if (!activeProjectId) return [];
-    const sessionId = `agent-${activeProjectId}`;
-    const msgs = await db.chatMessages.where("sessionId").equals(sessionId).sortBy("timestamp");
-    return msgs.map((m: any) => ({
-      id: m.id, role: m.role, content: m.content, timestamp: m.timestamp,
-      toolCalls: m.toolCalls ? JSON.parse(m.toolCalls) : undefined,
-      parts: m.parts ? JSON.parse(m.parts) : undefined,
-    }));
-  }, [activeProjectId]) ?? [];
 
   // File operation callbacks — route to DB or server based on mode
   const handleCreateFile = useCallback(async (filePath: string, content: string = "") => {
@@ -1370,15 +1357,8 @@ export function IDELayout() {
           </div>
         )}
 
-        {/* Activity Board — full width, replaces sidebar + editor */}
-        {activeView === "activity" && (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
-            <ActivityBoard messages={chatMessagesForActivity} />
-          </div>
-        )}
-
-        {/* Sidebar (hidden when cloud/activity panel is active) */}
-        {activeView && activeView !== "cloud" && activeView !== "activity" && (
+        {/* Sidebar (hidden when cloud panel is active) */}
+        {activeView && activeView !== "cloud" && (
           <>
             <div
               className="overflow-hidden border-r"
@@ -1420,7 +1400,7 @@ export function IDELayout() {
         )}
 
         {/* Editor + Terminal area (hidden when cloud panel is active) */}
-        <div className="flex-1 flex flex-col overflow-hidden" style={{ display: (activeView === "cloud" || activeView === "activity") ? "none" : undefined }}>
+        <div className="flex-1 flex flex-col overflow-hidden" style={{ display: activeView === "cloud" ? "none" : undefined }}>
           <EditorArea
             tabs={tabs}
             activeTabId={activeTabId}
