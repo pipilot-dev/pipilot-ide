@@ -28,6 +28,7 @@ import {
 } from "./diagnostics";
 import { seedMissingConfigs, detectFramework } from "./seed-config";
 import { CodeSearchIndex } from "./search-index";
+import { screenshot as chromeScreenshot, findChrome } from "./screenshot";
 import {
   initWorkspaces, resolveWorkspaceDir, linkFolder, unlinkFolder,
   listLinked, touchLinked, isLinked, getLinked,
@@ -1131,84 +1132,100 @@ function createIdeToolServer(projectId: string) {
     {},
     async () => {
       try {
-        // Request screenshot from the frontend via SSE → pending promise → POST back.
-        // The frontend renders the page in a same-origin iframe (executes JS),
-        // captures it with html2canvas, and returns a PNG + DOM layout report.
-        const requestId = `ss-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const status = getDevServerStatus(projectId);
+        const devUrl = status?.url;
 
-        // Find the active SSE stream for this project to send the request
-        const sseResponse = activeSSEByProject.get(projectId);
-        if (!sseResponse) {
-          return { content: [{ type: "text" as const, text: "No active connection to the IDE frontend. Make sure the project is open in the browser." }], isError: true };
-        }
-
-        // Send the capture request as an SSE event — the frontend listens for this
-        const captureResult = await new Promise<{ dataUrl: string; layoutReport: string } | null>((resolve) => {
-          pendingScreenshots.set(requestId, { resolve });
-
-          // Push screenshot request through the agent SSE stream
+        // ── Strategy 1: Headless Chrome (best — runs JS, real rendering) ──
+        if (devUrl && findChrome()) {
           try {
-            sendSSE(sseResponse, { type: "screenshot_request", requestId });
-          } catch {
-            pendingScreenshots.delete(requestId);
-            resolve(null);
-          }
-
-          // Timeout after 15 seconds
-          setTimeout(() => {
-            if (pendingScreenshots.has(requestId)) {
-              pendingScreenshots.delete(requestId);
-              resolve(null);
-            }
-          }, 15000);
-        });
-
-        if (!captureResult) {
-          // Fallback: try direct fetch for non-SPA apps
-          const status = getDevServerStatus(projectId);
-          if (status?.url) {
-            try {
-              const res = await fetch(status.url, { signal: AbortSignal.timeout(5000) });
-              const html = await res.text();
-              const lines: string[] = ["=== DEV SERVER UI ANALYSIS (static HTML — JS not executed) ===", `URL: ${status.url}`, ""];
-              lines.push("⚠ Frontend capture timed out. This analysis is from raw HTML only.");
-              const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
-              if (titleMatch) lines.push(`Title: ${titleMatch[1]}`);
-              const headings: string[] = [];
-              for (const m of html.matchAll(/<(h[1-6])[^>]*>([^<]+)/gi)) headings.push(`${m[1]}: "${m[2].trim().slice(0, 60)}"`);
-              if (headings.length > 0) lines.push(`Headings: ${headings.join(", ")}`);
-              lines.push(`HTML size: ${(html.length / 1024).toFixed(1)} KB`);
-              return { content: [{ type: "text" as const, text: lines.join("\n") }] };
-            } catch {}
-          }
-          return { content: [{ type: "text" as const, text: "Screenshot capture timed out — the frontend did not respond. Make sure the project is open in the browser." }], isError: true };
-        }
-
-        // Save the PNG to temp folder so the agent can reference it
-        const contentParts: any[] = [];
-        if (captureResult.dataUrl) {
-          try {
-            const base64 = captureResult.dataUrl.replace(/^data:image\/png;base64,/, "");
             const tmpDir = path.join(os.tmpdir(), "pipilot-uploads");
             if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
             const fileName = `screenshot-${projectId}-${Date.now()}.png`;
             const filePath = path.join(tmpDir, fileName);
-            fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
 
-            contentParts.push({
-              type: "text" as const,
-              text: `Screenshot saved: ${filePath}\nUse Read tool to view the image.`,
-            });
-            // Also include the base64 image directly for vision models
-            contentParts.push({ type: "image" as const, data: base64, mimeType: "image/png" });
+            chromeScreenshot(devUrl, filePath, { width: 1440, height: 900 });
+
+            if (fs.existsSync(filePath)) {
+              const base64 = fs.readFileSync(filePath).toString("base64");
+              const sizeKB = Math.round(fs.statSync(filePath).size / 1024);
+
+              // Also fetch HTML for text analysis (complements the image)
+              let textAnalysis = "";
+              try {
+                const res = await fetch(devUrl, { signal: AbortSignal.timeout(3000) });
+                const html = await res.text();
+                const lines: string[] = [];
+                const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
+                if (titleMatch) lines.push(`Title: ${titleMatch[1]}`);
+                const headings: string[] = [];
+                for (const m of html.matchAll(/<(h[1-6])[^>]*>([^<]+)/gi)) headings.push(`${m[1]}: "${m[2].trim().slice(0, 60)}"`);
+                if (headings.length > 0) lines.push(`Headings: ${headings.join(", ")}`);
+                const structureTags: Record<string, number> = {};
+                for (const m of html.matchAll(/<(header|nav|main|section|footer|form|button|img|a)\b/gi)) {
+                  const tag = m[1].toLowerCase();
+                  structureTags[tag] = (structureTags[tag] || 0) + 1;
+                }
+                if (Object.keys(structureTags).length) lines.push(`Structure: ${Object.entries(structureTags).map(([t, c]) => `${t}(${c})`).join(", ")}`);
+                lines.push(`HTML size: ${(html.length / 1024).toFixed(1)} KB`);
+                textAnalysis = lines.join("\n");
+              } catch {}
+
+              return {
+                content: [
+                  { type: "image" as const, data: base64, mimeType: "image/png" },
+                  { type: "text" as const, text: `Screenshot captured (${sizeKB}KB) via headless Chrome.\nSaved: ${filePath}\nURL: ${devUrl}\n${textAnalysis}` },
+                ],
+              };
+            }
           } catch {}
         }
 
-        if (captureResult.layoutReport) {
-          contentParts.push({ type: "text" as const, text: captureResult.layoutReport });
+        // ── Strategy 2: Frontend capture via SSE (html2canvas — same-origin iframe) ──
+        const sseResponse = activeSSEByProject.get(projectId);
+        if (sseResponse) {
+          try {
+            const requestId = `ss-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            const captureResult = await new Promise<{ dataUrl: string; layoutReport: string } | null>((resolve) => {
+              pendingScreenshots.set(requestId, { resolve });
+              try { sendSSE(sseResponse, { type: "screenshot_request", requestId }); } catch { pendingScreenshots.delete(requestId); resolve(null); }
+              setTimeout(() => { if (pendingScreenshots.has(requestId)) { pendingScreenshots.delete(requestId); resolve(null); } }, 15000);
+            });
+
+            if (captureResult?.dataUrl) {
+              const contentParts: any[] = [];
+              const base64 = captureResult.dataUrl.replace(/^data:image\/png;base64,/, "");
+              const tmpDir = path.join(os.tmpdir(), "pipilot-uploads");
+              if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+              const fileName = `screenshot-${projectId}-${Date.now()}.png`;
+              const filePath = path.join(tmpDir, fileName);
+              fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
+              contentParts.push({ type: "image" as const, data: base64, mimeType: "image/png" });
+              contentParts.push({ type: "text" as const, text: `Screenshot saved: ${filePath}\n${captureResult.layoutReport || ""}` });
+              return { content: contentParts };
+            }
+          } catch {}
         }
 
-        return { content: contentParts.length > 0 ? contentParts : [{ type: "text" as const, text: "Screenshot captured but no data returned." }] };
+        // ── Strategy 3: Raw HTML fetch (last resort — no JS execution) ──
+        if (devUrl) {
+          try {
+            const res = await fetch(devUrl, { signal: AbortSignal.timeout(5000) });
+            const html = await res.text();
+            const lines: string[] = ["=== DEV SERVER UI ANALYSIS (static HTML — JS not executed) ===", `URL: ${devUrl}`, ""];
+            lines.push("⚠ Chrome not found and frontend capture unavailable. This is raw HTML only.");
+            const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
+            if (titleMatch) lines.push(`Title: ${titleMatch[1]}`);
+            const headings: string[] = [];
+            for (const m of html.matchAll(/<(h[1-6])[^>]*>([^<]+)/gi)) headings.push(`${m[1]}: "${m[2].trim().slice(0, 60)}"`);
+            if (headings.length > 0) lines.push(`Headings: ${headings.join(", ")}`);
+            lines.push(`HTML size: ${(html.length / 1024).toFixed(1)} KB`);
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          } catch (err: any) {
+            return { content: [{ type: "text" as const, text: `Could not fetch dev server: ${err.message}` }], isError: true };
+          }
+        }
+
+        return { content: [{ type: "text" as const, text: "Dev server is not running. Start it first with manage_dev_server action:'start'." }], isError: true };
       } catch (err: any) {
         return { content: [{ type: "text" as const, text: `Screenshot failed: ${err.message}` }], isError: true };
       }
