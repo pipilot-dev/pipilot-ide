@@ -902,7 +902,12 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
     return id;
   }, []);
 
+  const forceSessionIdRef = useRef(forceSessionId);
+  forceSessionIdRef.current = forceSessionId;
+
   const switchSession = useCallback((sessionId: string) => {
+    // When multi-agent controls the session, ignore manual switches
+    if (forceSessionIdRef.current) return;
     const pid = projectIdRef.current;
     if (!pid || !sessionId) return;
     setCurrentSessionId(sessionId);

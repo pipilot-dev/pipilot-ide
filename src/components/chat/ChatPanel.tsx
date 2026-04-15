@@ -205,7 +205,9 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
 
   // Single useAgentChat instance — forceSessionId drives the session directly
   // from the active agent tab, bypassing localStorage-based session management.
-  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, activeAgentTab?.projectId || projectId, activeAgentTab?.sessionId);
+  // Only force session ID when multiple agent tabs exist — single tab uses normal session management
+  const forceSession = agentTabs.length > 1 ? activeAgentTab?.sessionId : undefined;
+  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, activeAgentTab?.projectId || projectId, forceSession);
 
   const { messages, isStreaming, mode, setMode, sendMessage, stopStreaming, clearMessages, deleteMessage, revertToMessage, redoToMessage } = agentSdk;
   const agentTodos = (agentSdk as any).todos || [];
@@ -891,8 +893,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         </div>
 
         <div className="flex items-center gap-1.5">
-          {/* Session Picker — multi-chat sessions per project */}
-          {projectId && currentSessionId && (
+          {/* Session Picker — hidden when multi-agent tabs are active (they replace it) */}
+          {projectId && currentSessionId && agentTabs.length < 2 && (
             <SessionPicker
               projectId={projectId}
               currentSessionId={currentSessionId}
