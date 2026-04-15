@@ -5,6 +5,8 @@ import { TitleBar } from "./TitleBar";
 import { SidebarPanel } from "./SidebarPanel";
 import { EditorArea, EditorTab } from "./EditorArea";
 import { ChatPanel } from "../chat/ChatPanel";
+import { useMultiAgent } from "@/hooks/useMultiAgent";
+import { AgentTabBar } from "../chat/AgentTabBar";
 import { CloudPanel } from "../cloud/CloudPanel";
 import { CommandPalette } from "./CommandPalette";
 import { TerminalPanel } from "./TerminalPanel";
@@ -58,6 +60,7 @@ function findFileById(nodes: FileNode[], id: string): FileNode | null {
 export function IDELayout() {
   const [activeView, setActiveView] = useState<ActivityBarView | null>("explorer");
   const [chatOpen, setChatOpen] = useState(true);
+  const multiAgent = useMultiAgent(activeProjectId || "default-project");
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const tabsRestoredRef = useRef(false);
@@ -1463,7 +1466,7 @@ export function IDELayout() {
           )}
         </div>
 
-        {/* Chat panel */}
+        {/* Chat panel — multi-agent: each tab gets its own ChatPanel instance */}
         {chatOpen && (
           <>
             <div
@@ -1472,7 +1475,7 @@ export function IDELayout() {
               data-testid="chat-resize-handle"
             />
             <div
-              className="overflow-hidden"
+              className="overflow-hidden flex flex-col"
               style={{
                 width: chatPanel.size,
                 minWidth: chatPanel.size,
@@ -1480,15 +1483,37 @@ export function IDELayout() {
               }}
               data-testid="chat-panel-wrapper"
             >
-              <ChatPanel
-                toolExecutor={toolExecutorWithCheckpoints}
-                workspaceContext={workspaceContext}
-                checkpointManager={checkpointManagerForChat}
-                projectId={activeProjectId}
-                fileTree={files}
-                openTabIds={tabs.filter((t) => !t.isPreview && !t.isCommit && !t.isDiff && !t.isSettings && !t.isWalkthrough).map((t) => t.node.id)}
-                activeTabId={activeTabId}
+              {/* Agent tab bar — only shows with 2+ agents */}
+              <AgentTabBar
+                tabs={multiAgent.tabs}
+                activeTabId={multiAgent.activeTabId}
+                onSwitch={multiAgent.switchTab}
+                onCreate={() => multiAgent.createTab()}
+                onClose={multiAgent.closeTab}
+                onRename={multiAgent.renameTab}
               />
+
+              {/* Render a ChatPanel per agent tab — only active one visible */}
+              {multiAgent.tabs.map((agentTab) => (
+                <div
+                  key={agentTab.id}
+                  style={{
+                    flex: 1, minHeight: 0,
+                    display: agentTab.id === multiAgent.activeTabId ? "flex" : "none",
+                    flexDirection: "column",
+                  }}
+                >
+                  <ChatPanel
+                    toolExecutor={toolExecutorWithCheckpoints}
+                    workspaceContext={workspaceContext}
+                    checkpointManager={checkpointManagerForChat}
+                    projectId={agentTab.projectId}
+                    fileTree={files}
+                    openTabIds={tabs.filter((t) => !t.isPreview && !t.isCommit && !t.isDiff && !t.isSettings && !t.isWalkthrough).map((t) => t.node.id)}
+                    activeTabId={activeTabId}
+                  />
+                </div>
+              ))}
             </div>
           </>
         )}
