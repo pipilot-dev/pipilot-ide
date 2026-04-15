@@ -233,11 +233,22 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   }, [isStreaming, activeAgentTab?.id]);
 
   // When creating a new agent tab, also create a new chat session
-  const handleCreateAgentTab = useCallback((name?: string) => {
-    const tab = createAgentTab(name);
-    // The session will be auto-created by useAgentChat when switchSession fires
+  const handleCreateAgentTab = useCallback((name?: string, customProjectId?: string) => {
+    const tab = createAgentTab(name, customProjectId);
     createSession(name || tab.name);
   }, [createAgentTab, createSession]);
+
+  // Spawn agent on a different project — shows a simple prompt for now
+  const handleCreateCrossProjectAgent = useCallback(() => {
+    // Use the project list from workspace
+    window.dispatchEvent(new CustomEvent("pipilot:pick-project-for-agent", {
+      detail: {
+        callback: (pid: string, pname: string) => {
+          handleCreateAgentTab(pname, pid);
+        },
+      },
+    }));
+  }, [handleCreateAgentTab]);
 
   // Handler when user picks "Tell PiPilot something else" and submits a new message
   const handleSendNewAfterInterrupt = useCallback((messageId: string, newMessage: string) => {
