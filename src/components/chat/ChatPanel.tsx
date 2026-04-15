@@ -170,6 +170,10 @@ interface ChatPanelProps {
   checkpointManager?: CheckpointManager;
   projectId?: string;
   fileTree?: FileNode[];
+  /** Called when user wants to link a folder to this agent (multi-agent) */
+  onOpenFolder?: () => void;
+  /** Called when user wants to generate a project for this agent */
+  onGenerate?: () => void;
   /** IDs of files currently open as editor tabs (for context pills) */
   openTabIds?: string[];
   /** The currently active/focused tab ID */
@@ -190,7 +194,7 @@ const atFootKbd: React.CSSProperties = {
   color: C.textMid,
 };
 
-export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, projectId, fileTree, openTabIds, activeTabId }: ChatPanelProps) {
+export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, projectId, fileTree, onOpenFolder, onGenerate, openTabIds, activeTabId }: ChatPanelProps) {
   useEffect(() => { injectFonts(); }, []);
 
   const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, projectId);
@@ -971,12 +975,12 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                 Open a folder or generate a new project to start building with the AI agent.
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"))} style={{
+                <button onClick={() => (onOpenFolder || (() => window.dispatchEvent(new CustomEvent("pipilot:open-folder-picker"))))()} style={{
                   padding: "9px 16px", borderRadius: 6, fontSize: 11, fontFamily: FONTS.mono, fontWeight: 600,
                   background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text, cursor: "pointer",
                   display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
                 }}>Open Folder</button>
-                <button onClick={() => window.dispatchEvent(new CustomEvent("pipilot:show-generate-modal"))} style={{
+                <button onClick={() => (onGenerate || (() => window.dispatchEvent(new CustomEvent("pipilot:show-generate-modal"))))()} style={{
                   padding: "9px 16px", borderRadius: 6, fontSize: 11, fontFamily: FONTS.mono, fontWeight: 600,
                   background: C.accent, border: "none", color: "#fff", cursor: "pointer",
                   display: "flex", alignItems: "center", justifyContent: "center", gap: 6,

@@ -170,6 +170,7 @@ export function IDELayout() {
   }, [problemsResize.size]);
   // TitleBar modals
   const [showOpenFolderPicker, setShowOpenFolderPicker] = useState(false);
+  const [showGenerateModal, setShowGenerateModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
   // Single provider — PiPilot Agent. Kept as a const for the existing
   // branching that routes file ops to remoteFs vs localFs.
@@ -968,17 +969,19 @@ export function IDELayout() {
     window.addEventListener("pipilot:open-chat", openChat);
     const openSettings = () => setActiveView("settings");
     const openFolderPicker = () => setShowOpenFolderPicker(true);
-    const openGenerateModal = () => window.dispatchEvent(new CustomEvent("pipilot:show-generate-modal"));
+    const openGenerateModal = () => setShowGenerateModal(true);
     window.addEventListener("pipilot:open-terminal", openTerminal);
     window.addEventListener("pipilot:open-settings", openSettings);
     window.addEventListener("pipilot:open-folder-picker", openFolderPicker);
     window.addEventListener("pipilot:open-generate-modal", openGenerateModal);
+    window.addEventListener("pipilot:show-generate-modal", openGenerateModal);
     return () => {
       window.removeEventListener("pipilot:open-chat", openChat);
       window.removeEventListener("pipilot:open-terminal", openTerminal);
       window.removeEventListener("pipilot:open-settings", openSettings);
       window.removeEventListener("pipilot:open-folder-picker", openFolderPicker);
       window.removeEventListener("pipilot:open-generate-modal", openGenerateModal);
+      window.removeEventListener("pipilot:show-generate-modal", openGenerateModal);
     };
   }, []);
 
@@ -1301,8 +1304,24 @@ export function IDELayout() {
       {/* Folder picker (File → Open Folder) */}
       <FolderPicker
         open={showOpenFolderPicker}
-        onClose={() => setShowOpenFolderPicker(false)}
-        onPick={async (p) => { await openFolderInProjects(p); }}
+        onClose={() => { setShowOpenFolderPicker(false); delete (window as any).__pendingAgentTabLink; }}
+        onPick={async (p) => {
+          const pendingTabId = (window as any).__pendingAgentTabLink;
+          delete (window as any).__pendingAgentTabLink;
+          if (pendingTabId) {
+            // Link folder to the specific agent tab (not the global IDE project)
+            const linked = await openFolderInProjects(p);
+            // openFolderInProjects returns void but switches project — get the new ID
+            // The linked project ID is based on the path
+            const allProjects = await db.projects.toArray();
+            const match = allProjects.find((proj: any) => proj.absolutePath === p || proj.name === p.split(/[\\/]/).pop());
+            if (match) {
+              multiAgent.linkProjectToTab(pendingTabId, match.id);
+            }
+          } else {
+            await openFolderInProjects(p);
+          }
+        }}
       />
 
       {/* Clone Repository modal (File → Clone Repository) */}
@@ -1311,6 +1330,31 @@ export function IDELayout() {
         onClose={() => setShowCloneModal(false)}
         onCloned={async (path) => { await openFolderInProjects(path); }}
       />
+
+      {/* Generate with AI modal (always mounted) */}
+      {showGenerateModal && (
+        <GenerateModal
+          onClose={() => setShowGenerateModal(false)}
+          onGenerate={async (prompt) => {
+            setShowGenerateModal(false);
+            try {
+              const { generateProjectFolderName } = await import("@/lib/a0llm");
+              const name = await generateProjectFolderName(prompt);
+              await createProject(name, "static", "blank");
+              window.dispatchEvent(new CustomEvent("pipilot:open-chat"));
+              await new Promise<void>((resolve) => {
+                const onReady = () => { window.removeEventListener("pipilot:chat-session-ready", onReady); resolve(); };
+                window.addEventListener("pipilot:chat-session-ready", onReady);
+                setTimeout(() => { window.removeEventListener("pipilot:chat-session-ready", onReady); resolve(); }, 3000);
+              });
+              await new Promise((r) => setTimeout(r, 200));
+              window.dispatchEvent(new CustomEvent("pipilot:focus-chat-input", { detail: { prefill: prompt, submit: true } }));
+            } catch (err: any) {
+              console.error("Generate failed:", err);
+            }
+          }}
+        />
+      )}
 
       {/* Main area */}
       <div className="flex flex-1 overflow-hidden">
@@ -1532,6 +1576,13 @@ export function IDELayout() {
                     checkpointManager={checkpointManagerForChat}
                     projectId={agentTab.id === "main" ? activeProjectId : (agentTab.projectId || undefined)}
                     fileTree={agentTab.id === "main" ? files : undefined}
+                    onOpenFolder={agentTab.id !== "main" ? () => {
+                      // For spawned agents: open folder picker that links to THIS agent tab
+                      setShowOpenFolderPicker(true);
+                      // Store which agent tab wants the folder
+                      (window as any).__pendingAgentTabLink = agentTab.id;
+                    } : undefined}
+                    onGenerate={agentTab.id !== "main" ? () => setShowGenerateModal(true) : undefined}
                     openTabIds={tabs.filter((t) => !t.isPreview && !t.isCommit && !t.isDiff && !t.isSettings && !t.isWalkthrough).map((t) => t.node.id)}
                     activeTabId={activeTabId}
                   />
@@ -1801,6 +1852,68 @@ export function IDELayout() {
           <HelpCircle size={13} />
           <span>Help</span>
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Generate with AI modal (always mountable from IDELayout) ──
+function GenerateModal({ onClose, onGenerate }: { onClose: () => void; onGenerate: (prompt: string) => void }) {
+  const [prompt, setPrompt] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+
+  const handleSubmit = () => {
+    if (!prompt.trim() || generating) return;
+    setGenerating(true);
+    onGenerate(prompt.trim());
+  };
+
+  return (
+    <div onClick={(e) => { if (e.target === e.currentTarget && !generating) onClose(); }} style={{
+      position: "fixed", inset: 0, zIndex: 9999,
+      background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontFamily: "'DM Sans', sans-serif",
+    }}>
+      <div style={{
+        width: 520, maxWidth: "92vw", background: "#1c1c21",
+        border: "1px solid #2e2e35", borderRadius: 10, padding: 28,
+        boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+      }}>
+        <h3 style={{ fontSize: 16, fontWeight: 600, color: "#b0b0b8", margin: "0 0 4px" }}>Generate with AI</h3>
+        <p style={{ fontSize: 12, color: "#6b6b76", margin: "0 0 18px", lineHeight: 1.5 }}>
+          Describe what you want and PiPilot will scaffold it
+        </p>
+        <textarea
+          ref={ref} value={prompt} rows={4}
+          onChange={(e) => setPrompt(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSubmit(); if (e.key === "Escape" && !generating) onClose(); }}
+          placeholder="A retro-arcade landing page for a synthwave music label…"
+          style={{
+            width: "100%", padding: "12px 14px", fontSize: 13, lineHeight: 1.5,
+            background: "#16161a", color: "#b0b0b8", border: "1px solid #2e2e35",
+            borderRadius: 5, outline: "none", resize: "vertical",
+            fontFamily: "'DM Sans', sans-serif", marginBottom: 10,
+          }}
+        />
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onClose} disabled={generating} style={{
+            padding: "8px 16px", fontSize: 10, fontWeight: 500,
+            background: "transparent", color: "#8a8a94", border: "1px solid #2e2e35",
+            borderRadius: 4, cursor: generating ? "not-allowed" : "pointer",
+            fontFamily: "'Geist Mono', monospace", letterSpacing: "0.08em", textTransform: "uppercase",
+          }}>Cancel</button>
+          <button onClick={handleSubmit} disabled={!prompt.trim() || generating} style={{
+            padding: "8px 16px", fontSize: 10, fontWeight: 600,
+            background: !prompt.trim() || generating ? "#232329" : "#FF6B35",
+            color: !prompt.trim() || generating ? "#42424a" : "#16161a",
+            border: "none", borderRadius: 4,
+            cursor: !prompt.trim() || generating ? "not-allowed" : "pointer",
+            fontFamily: "'Geist Mono', monospace", letterSpacing: "0.08em", textTransform: "uppercase",
+          }}>{generating ? "Starting…" : "Generate →"}</button>
+        </div>
       </div>
     </div>
   );
