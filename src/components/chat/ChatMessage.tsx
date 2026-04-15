@@ -481,31 +481,34 @@ function SubAgentCard({ toolCall, childToolCalls = [] }: { toolCall: ToolCallInf
         <div style={{
           padding: "8px 12px 12px", borderTop: `1px solid ${C.border}`,
         }}>
-          {/* Prompt */}
+          {/* Prompt — markdown rendered */}
           {prompt && (
             <div style={{ marginBottom: 8 }}>
               <div style={{ fontFamily: FONTS.mono, fontSize: 8, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>Task</div>
-              <div style={{
+              <div className="chat-message" style={{
                 padding: "6px 8px", borderRadius: 4, background: C.bg,
                 fontSize: 11, color: C.textMid, lineHeight: 1.5,
-                maxHeight: 100, overflowY: "auto",
+                maxHeight: 150, overflowY: "auto",
               }}>
-                {prompt.length > 300 ? prompt.slice(0, 300) + "…" : prompt}
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                  {prompt.length > 500 ? prompt.slice(0, 500) + "\n\n…" : prompt}
+                </ReactMarkdown>
               </div>
             </div>
           )}
 
-          {/* Result */}
+          {/* Result — markdown rendered */}
           {resultFull && (
             <div>
               <div style={{ fontFamily: FONTS.mono, fontSize: 8, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>Result</div>
-              <div style={{
+              <div className="chat-message" style={{
                 padding: "6px 8px", borderRadius: 4, background: C.bg,
                 fontSize: 11, color: C.textMid, lineHeight: 1.5,
-                maxHeight: 200, overflowY: "auto", whiteSpace: "pre-wrap",
-                fontFamily: FONTS.mono,
+                maxHeight: 250, overflowY: "auto",
               }}>
-                {resultFull}
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                  {resultFull}
+                </ReactMarkdown>
               </div>
             </div>
           )}
