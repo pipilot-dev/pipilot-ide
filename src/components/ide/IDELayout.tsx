@@ -1530,8 +1530,8 @@ export function IDELayout() {
                     toolExecutor={toolExecutorWithCheckpoints}
                     workspaceContext={workspaceContext}
                     checkpointManager={checkpointManagerForChat}
-                    projectId={agentTab.projectId}
-                    fileTree={files}
+                    projectId={agentTab.id === "main" ? activeProjectId : (agentTab.projectId || undefined)}
+                    fileTree={agentTab.id === "main" ? files : undefined}
                     openTabIds={tabs.filter((t) => !t.isPreview && !t.isCommit && !t.isDiff && !t.isSettings && !t.isWalkthrough).map((t) => t.node.id)}
                     activeTabId={activeTabId}
                   />

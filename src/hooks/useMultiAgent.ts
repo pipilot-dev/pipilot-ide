@@ -97,14 +97,13 @@ export function useMultiAgent(projectId: string) {
 
   const createTab = useCallback((name?: string, customProjectId?: string) => {
     const id = generateId();
-    const pid = customProjectId || projectId;
-    // Prefix with "multiagent-" so these sessions don't show in the
-    // regular session picker (which filters by "agent-{projectId}")
+    // New agents start with no project — user picks one via Open Folder or Generate
+    const pid = customProjectId || "";
     const tab: AgentTab = {
       id,
       name: name || `Agent ${tabs.length + 1}`,
       projectId: pid,
-      sessionId: `multiagent-${pid}-${id}`,
+      sessionId: `multiagent-${id}`,
       status: "idle",
       createdAt: Date.now(),
     };
@@ -153,6 +152,14 @@ export function useMultiAgent(projectId: string) {
     });
   }, [projectId]);
 
+  const linkProjectToTab = useCallback((tabId: string, newProjectId: string) => {
+    setTabs((prev) => {
+      const next = prev.map((t) => t.id === tabId ? { ...t, projectId: newProjectId } : t);
+      saveTabs(projectId, next);
+      return next;
+    });
+  }, [projectId]);
+
   const updateTabStatus = useCallback((tabId: string, status: AgentTab["status"]) => {
     setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, status } : t));
   }, []);
@@ -165,6 +172,7 @@ export function useMultiAgent(projectId: string) {
     createTab,
     closeTab,
     renameTab,
+    linkProjectToTab,
     updateTabStatus,
     loaded,
   };
