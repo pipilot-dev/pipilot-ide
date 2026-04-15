@@ -75,6 +75,14 @@ const PIPILOT_EDITORIAL_THEME: any = {
     { token: "namespace",          foreground: "6a9ec0" },
     { token: "key",                foreground: "6a9ec0" },
     { token: "punctuation",        foreground: "5f5f6a" },
+    // JSON-specific tokens (Monaco uses distinct token names for JSON)
+    { token: "string.key.json",    foreground: "6a9ec0" },
+    { token: "string.value.json",  foreground: "7ea868" },
+    { token: "number.json",        foreground: "b08a60" },
+    { token: "keyword.json",       foreground: "b08a60" },   // true, false, null
+    { token: "delimiter.bracket.json", foreground: "6b6b76" },
+    { token: "delimiter.colon.json",   foreground: "5f5f6a" },
+    { token: "delimiter.comma.json",   foreground: "5f5f6a" },
   ],
   colors: {
     "editor.background":             "#16161a",
