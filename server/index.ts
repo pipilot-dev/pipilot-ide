@@ -184,6 +184,9 @@ function createIdeToolServer(projectId: string) {
           case "restart": {
             if (args.action === "restart") {
               stopDevServer(projectId);
+              // On Windows, taskkill is async — wait for the old process to fully die
+              // before starting a new one, otherwise port conflicts or stale PIDs occur
+              await new Promise((r) => setTimeout(r, process.platform === "win32" ? 1500 : 500));
             }
             const result = await startDevServer(projectId, workDir);
             if (!result) {
@@ -291,26 +294,29 @@ function createIdeToolServer(projectId: string) {
           return { content: [{ type: "text" as const, text: "Dev server is not running. Start it first with manage_dev_server." }] };
         }
 
-        // Collect logs via a short-lived subscriber
-        const logLines: string[] = [];
-        const unsub = subscribeToLogs(projectId, (line) => {
-          logLines.push(line);
-        });
-        // Give a tiny window for buffered logs
-        await new Promise((r) => setTimeout(r, 100));
-        unsub();
+        // Read from the internal log buffer (stored in RunningApp.logs)
+        const bufferedLogs = status.logs || [];
+        if (bufferedLogs.length === 0) {
+          // Fallback: try live subscriber for a short window
+          const liveLines: string[] = [];
+          const unsub = subscribeToLogs(projectId, (entry) => {
+            liveLines.push(`[${entry.source}] ${entry.text}`);
+          });
+          await new Promise((r) => setTimeout(r, 300));
+          unsub();
 
-        // If no lines collected from the live subscriber, try reading from
-        // the server's internal buffer if available
-        if (logLines.length === 0) {
-          return { content: [{ type: "text" as const, text: "Dev server is running but no recent log output was captured." }] };
+          if (liveLines.length === 0) {
+            return { content: [{ type: "text" as const, text: `Dev server is running (port ${status.port}, PID ${status.pid}) but no log output has been captured yet. Try again in a few seconds.` }] };
+          }
+          const tail = liveLines.slice(-args.lines);
+          return { content: [{ type: "text" as const, text: `Dev server logs (${tail.length} lines, live):\n\n${tail.join("\n")}` }] };
         }
 
-        const tail = logLines.slice(-args.lines);
+        const tail = bufferedLogs.slice(-args.lines);
         return {
           content: [{
             type: "text" as const,
-            text: `Dev server logs (last ${tail.length} line${tail.length === 1 ? "" : "s"}):\n\n${tail.join("\n")}`,
+            text: `Dev server logs (last ${tail.length} of ${bufferedLogs.length} lines):\n\n${tail.join("\n")}`,
           }],
         };
       } catch (err: any) {
@@ -1133,77 +1139,125 @@ function createIdeToolServer(projectId: string) {
           };
         }
 
-        // Fetch the HTML from the dev server
         const url = status.url;
+
+        // Try Playwright first (executes JS, captures real screenshot + rendered DOM)
+        try {
+          const { execSync } = require("child_process");
+          // Inline Playwright script: navigate, wait for JS, screenshot, extract DOM
+          const pwScript = `
+            const { chromium } = require('playwright');
+            (async () => {
+              const browser = await chromium.launch({ headless: true });
+              const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+              await page.goto('${url}', { waitUntil: 'networkidle', timeout: 15000 });
+              await page.waitForTimeout(1000); // extra time for JS rendering
+              const screenshot = await page.screenshot({ type: 'png' });
+              const analysis = await page.evaluate(() => {
+                const data = { title: document.title, headings: [], structure: {}, text: [], colors: [], images: [], links: [] };
+                document.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(h => data.headings.push(h.tagName.toLowerCase() + ': "' + h.textContent.trim().slice(0, 60) + '"'));
+                ['header','nav','main','section','article','aside','footer','form','button','input','img','a','ul','ol','table'].forEach(tag => {
+                  const count = document.querySelectorAll(tag).length;
+                  if (count > 0) data.structure[tag] = count;
+                });
+                document.querySelectorAll('img').forEach(img => { if (img.src) data.images.push(img.src.slice(0, 80)); });
+                document.querySelectorAll('a').forEach(a => { if (a.href && a.textContent.trim()) data.links.push(a.textContent.trim().slice(0, 40) + ' -> ' + a.href.slice(0, 60)); });
+                // Extract visible text from main content
+                const main = document.querySelector('main') || document.body;
+                const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+                let n; while ((n = walker.nextNode()) && data.text.length < 20) { const t = n.textContent.trim(); if (t.length > 3) data.text.push(t.slice(0, 80)); }
+                // Extract computed colors from key elements
+                ['body','header','nav','main','h1','button'].forEach(sel => {
+                  const el = document.querySelector(sel);
+                  if (el) { const s = getComputedStyle(el); data.colors.push(sel + ': bg=' + s.backgroundColor + ', color=' + s.color); }
+                });
+                return data;
+              });
+              console.log('__SCREENSHOT__' + screenshot.toString('base64') + '__END_SCREENSHOT__');
+              console.log('__ANALYSIS__' + JSON.stringify(analysis) + '__END_ANALYSIS__');
+              await browser.close();
+            })();
+          `;
+          const output = execSync(`node -e "${pwScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, {
+            encoding: "utf8", timeout: 25000, maxBuffer: 10 * 1024 * 1024,
+            cwd: workDir,
+          });
+
+          const screenshotMatch = output.match(/__SCREENSHOT__(.+?)__END_SCREENSHOT__/);
+          const analysisMatch = output.match(/__ANALYSIS__(.+?)__END_ANALYSIS__/);
+
+          const contentParts: any[] = [];
+
+          // Add screenshot image if captured
+          if (screenshotMatch) {
+            contentParts.push({ type: "image" as const, data: screenshotMatch[1], mimeType: "image/png" });
+          }
+
+          // Add text analysis
+          if (analysisMatch) {
+            try {
+              const a = JSON.parse(analysisMatch[1]);
+              const lines: string[] = ["=== DEV SERVER UI ANALYSIS (JS-rendered) ===", `URL: ${url}`, ""];
+              if (a.title) lines.push(`Title: ${a.title}`);
+              if (a.headings?.length) lines.push(`Headings: ${a.headings.join(", ")}`);
+              if (a.structure && Object.keys(a.structure).length) lines.push(`Structure: ${Object.entries(a.structure).map(([t, c]) => `${t}(${c})`).join(", ")}`);
+              if (a.images?.length) lines.push(`Images (${a.images.length}): ${a.images.slice(0, 5).join(", ")}`);
+              if (a.links?.length) lines.push(`Links (${a.links.length}): ${a.links.slice(0, 8).join(" | ")}`);
+              if (a.colors?.length) { lines.push(""); lines.push("Computed colors:"); a.colors.forEach((c: string) => lines.push(`  ${c}`)); }
+              if (a.text?.length) { lines.push(""); lines.push("Visible text:"); a.text.slice(0, 10).forEach((t: string) => lines.push(`  "${t}"`)); }
+              contentParts.push({ type: "text" as const, text: lines.join("\n") });
+            } catch {
+              contentParts.push({ type: "text" as const, text: "Analysis parsing failed." });
+            }
+          }
+
+          if (contentParts.length > 0) return { content: contentParts };
+        } catch {
+          // Playwright not available — fall through to fetch-based fallback
+        }
+
+        // Fallback: raw fetch + static HTML analysis (no JS execution)
         let html: string;
         try {
           const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
           html = await res.text();
         } catch (err: any) {
-          return {
-            content: [{ type: "text" as const, text: `Could not fetch dev server at ${url}: ${err.message}` }],
-            isError: true,
-          };
+          return { content: [{ type: "text" as const, text: `Could not fetch dev server at ${url}: ${err.message}` }], isError: true };
         }
 
-        // Generate a text-based layout analysis from the HTML
-        const analysisLines: string[] = ["=== DEV SERVER UI ANALYSIS ===", `URL: ${url}`, ""];
+        const lines: string[] = ["=== DEV SERVER UI ANALYSIS (static HTML — JS not executed) ===", `URL: ${url}`, ""];
+        lines.push("⚠ This analysis is from raw HTML. If the app renders client-side (React/Vue/SPA), the actual UI may differ.");
+        lines.push("  Install Playwright (`npm i -D playwright`) for full JS-rendered screenshots.");
+        lines.push("");
 
-        // Page title
         const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
-        if (titleMatch) analysisLines.push(`Title: ${titleMatch[1]}`);
+        if (titleMatch) lines.push(`Title: ${titleMatch[1]}`);
 
-        // Meta viewport
-        const viewportMatch = html.match(/meta[^>]*name=["']viewport["'][^>]*content=["']([^"']+)/i);
-        if (viewportMatch) analysisLines.push(`Viewport: ${viewportMatch[1]}`);
-
-        // Extract structure tags
         const structureTags: Record<string, number> = {};
-        const tagMatches = html.matchAll(/<(header|nav|main|section|article|aside|footer|h[1-6]|form|button|input|img|a|ul|ol|table)\b/gi);
-        for (const m of tagMatches) {
+        for (const m of html.matchAll(/<(header|nav|main|section|article|aside|footer|h[1-6]|form|button|input|img|a|ul|ol|table)\b/gi)) {
           const tag = m[1].toLowerCase();
           structureTags[tag] = (structureTags[tag] || 0) + 1;
         }
-        if (Object.keys(structureTags).length > 0) {
-          analysisLines.push(`Structure: ${Object.entries(structureTags).map(([t, c]) => `${t}(${c})`).join(", ")}`);
-        }
+        if (Object.keys(structureTags).length > 0) lines.push(`Structure: ${Object.entries(structureTags).map(([t, c]) => `${t}(${c})`).join(", ")}`);
 
-        // Headings with text
         const headings: string[] = [];
-        const hMatches = html.matchAll(/<(h[1-6])[^>]*>([^<]+)/gi);
-        for (const m of hMatches) headings.push(`${m[1]}: "${m[2].trim().slice(0, 60)}"`);
-        if (headings.length > 0) analysisLines.push(`Headings: ${headings.join(", ")}`);
+        for (const m of html.matchAll(/<(h[1-6])[^>]*>([^<]+)/gi)) headings.push(`${m[1]}: "${m[2].trim().slice(0, 60)}"`);
+        if (headings.length > 0) lines.push(`Headings: ${headings.join(", ")}`);
 
-        // Images
         const imgs: string[] = [];
-        const imgMatches = html.matchAll(/<img[^>]*src=["']([^"']+)["']/gi);
-        for (const m of imgMatches) imgs.push(m[1].slice(0, 80));
-        if (imgs.length > 0) analysisLines.push(`Images (${imgs.length}): ${imgs.slice(0, 5).join(", ")}`);
+        for (const m of html.matchAll(/<img[^>]*src=["']([^"']+)["']/gi)) imgs.push(m[1].slice(0, 80));
+        if (imgs.length > 0) lines.push(`Images (${imgs.length}): ${imgs.slice(0, 5).join(", ")}`);
 
-        // Inline styles (color/bg snippets)
         const styleBlocks: string[] = [];
-        const styleMatches = html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi);
-        for (const m of styleMatches) {
-          const vars = m[1].matchAll(/--([a-zA-Z0-9-]+)\s*:\s*([^;]+);/g);
-          for (const v of vars) styleBlocks.push(`--${v[1]}: ${v[2].trim()}`);
+        for (const m of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) {
+          for (const v of m[1].matchAll(/--([a-zA-Z0-9-]+)\s*:\s*([^;]+);/g)) styleBlocks.push(`--${v[1]}: ${v[2].trim()}`);
         }
-        if (styleBlocks.length > 0) {
-          analysisLines.push("");
-          analysisLines.push(`CSS variables: ${styleBlocks.slice(0, 30).join(", ")}`);
-        }
+        if (styleBlocks.length > 0) { lines.push(""); lines.push(`CSS variables: ${styleBlocks.slice(0, 30).join(", ")}`); }
 
-        // Full rendered HTML size
-        analysisLines.push("");
-        analysisLines.push(`HTML size: ${(html.length / 1024).toFixed(1)} KB`);
-        analysisLines.push(`(Full source available at ${url})`);
-
-        const report = analysisLines.join("\n");
-        return { content: [{ type: "text" as const, text: report.slice(0, 6000) }] };
+        lines.push(""); lines.push(`HTML size: ${(html.length / 1024).toFixed(1)} KB`);
+        return { content: [{ type: "text" as const, text: lines.join("\n").slice(0, 6000) }] };
       } catch (err: any) {
-        return {
-          content: [{ type: "text" as const, text: `Screenshot failed: ${err.message}` }],
-          isError: true,
-        };
+        return { content: [{ type: "text" as const, text: `Screenshot failed: ${err.message}` }], isError: true };
       }
     },
     { annotations: { readOnlyHint: true } }
