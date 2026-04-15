@@ -360,6 +360,165 @@ function TerminalCommandCard({ toolCall }: { toolCall: ToolCallInfo }) {
   );
 }
 
+// ── Sub-Agent Card — delegated background tasks ──
+function SubAgentCard({ toolCall }: { toolCall: ToolCallInfo }) {
+  const [expanded, setExpanded] = useState(false);
+  const [startTime] = useState(() => Date.now());
+  const [elapsed, setElapsed] = useState(0);
+  let args: any = {};
+  try { args = JSON.parse(toolCall.arguments); } catch {}
+
+  const description = args.description || args.prompt?.slice(0, 60) || "Sub-agent task";
+  const prompt = args.prompt || "";
+  const isRunning = toolCall.status === "running" || toolCall.status === "pending";
+  const isDone = toolCall.status === "done";
+  const isError = toolCall.status === "error";
+
+  // Timer for running tasks
+  useEffect(() => {
+    if (!isRunning) return;
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - startTime) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [isRunning, startTime]);
+
+  // Parse result for summary
+  let resultSummary = "";
+  let resultFull = "";
+  if (toolCall.result) {
+    resultFull = toolCall.result;
+    // Try to extract a clean summary (first 200 chars, first paragraph, etc.)
+    const lines = toolCall.result.split("\n").filter((l: string) => l.trim());
+    resultSummary = lines[0]?.slice(0, 150) || "";
+    if (lines.length > 1 && resultSummary.length < 50) {
+      resultSummary = lines.slice(0, 2).join(" ").slice(0, 150);
+    }
+  }
+
+  const formatTime = (s: number) => {
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    return `${m}m ${s % 60}s`;
+  };
+
+  return (
+    <div style={{
+      margin: "6px 0", borderRadius: 8, overflow: "hidden",
+      background: C.surface, border: `1px solid ${isRunning ? `${C.info}40` : isDone ? `${C.ok}25` : isError ? `${C.error}25` : C.border}`,
+      transition: "border-color 0.3s",
+    }}>
+      {/* Header */}
+      <button onClick={() => setExpanded(!expanded)} style={{
+        width: "100%", display: "flex", alignItems: "center", gap: 8,
+        padding: "10px 12px", background: "transparent", border: "none",
+        cursor: "pointer", textAlign: "left",
+      }}>
+        {/* Status indicator */}
+        <div style={{
+          width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: isRunning ? `${C.info}15` : isDone ? `${C.ok}12` : isError ? `${C.error}12` : `${C.textFaint}10`,
+        }}>
+          {isRunning ? (
+            <Loader2 size={14} className="animate-spin" style={{ color: C.info }} />
+          ) : isDone ? (
+            <CheckCircle2 size={14} style={{ color: C.ok }} />
+          ) : isError ? (
+            <XCircle size={14} style={{ color: C.error }} />
+          ) : (
+            <Clock size={14} style={{ color: C.textDim }} />
+          )}
+        </div>
+
+        {/* Description */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontFamily: FONTS.mono, fontSize: 9, fontWeight: 600,
+            color: isRunning ? C.info : isDone ? C.ok : isError ? C.error : C.textDim,
+            textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2,
+          }}>
+            {isRunning ? "⚡ Agent working" : isDone ? "✓ Agent completed" : isError ? "✗ Agent failed" : "◌ Agent queued"}
+          </div>
+          <div style={{ fontSize: 12, color: C.text, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {description}
+          </div>
+        </div>
+
+        {/* Timer */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <span style={{ fontFamily: FONTS.mono, fontSize: 9, color: C.textDim }}>
+            {isRunning ? formatTime(elapsed) : isDone && toolCall.result ? formatTime(Math.floor((toolCall.result.length / 100))) : ""}
+          </span>
+          <ChevronDown size={11} style={{
+            color: C.textDim, transition: "transform 0.2s",
+            transform: expanded ? "rotate(180deg)" : "none",
+          }} />
+        </div>
+      </button>
+
+      {/* Progress bar for running */}
+      {isRunning && (
+        <div style={{ height: 2, background: C.border, overflow: "hidden" }}>
+          <div style={{
+            height: "100%", background: `linear-gradient(90deg, ${C.info}, ${C.accent})`,
+            animation: "subagent-progress 2s ease-in-out infinite",
+          }} />
+          <style>{`@keyframes subagent-progress { 0% { width: 0%; margin-left: 0; } 50% { width: 60%; margin-left: 20%; } 100% { width: 0%; margin-left: 100%; } }`}</style>
+        </div>
+      )}
+
+      {/* Summary (always visible when done) */}
+      {isDone && resultSummary && !expanded && (
+        <div style={{
+          padding: "0 12px 10px 48px", fontSize: 11, color: C.textMid,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {resultSummary}{resultFull.length > 150 ? "…" : ""}
+        </div>
+      )}
+
+      {/* Expanded details */}
+      {expanded && (
+        <div style={{
+          padding: "8px 12px 12px", borderTop: `1px solid ${C.border}`,
+        }}>
+          {/* Prompt */}
+          {prompt && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontFamily: FONTS.mono, fontSize: 8, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>Task</div>
+              <div style={{
+                padding: "6px 8px", borderRadius: 4, background: C.bg,
+                fontSize: 11, color: C.textMid, lineHeight: 1.5,
+                maxHeight: 100, overflowY: "auto",
+              }}>
+                {prompt.length > 300 ? prompt.slice(0, 300) + "…" : prompt}
+              </div>
+            </div>
+          )}
+
+          {/* Result */}
+          {resultFull && (
+            <div>
+              <div style={{ fontFamily: FONTS.mono, fontSize: 8, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>Result</div>
+              <div style={{
+                padding: "6px 8px", borderRadius: 4, background: C.bg,
+                fontSize: 11, color: C.textMid, lineHeight: 1.5,
+                maxHeight: 200, overflowY: "auto", whiteSpace: "pre-wrap",
+                fontFamily: FONTS.mono,
+              }}>
+                {resultFull}
+              </div>
+            </div>
+          )}
+
+          {isError && !resultFull && (
+            <div style={{ fontSize: 11, color: C.error }}>Task failed — no output returned</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -1320,6 +1479,9 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                         if (tc.name === "run_in_terminal" || tc.name.includes("run_in_terminal")) {
                           return <TerminalCommandCard key={`${msg.id}-term-${pi}`} toolCall={tc} />;
                         }
+                        if (tc.name === "Agent" || tc.name === "agent" || tc.name === "SubAgent") {
+                          return <SubAgentCard key={`${msg.id}-agent-${pi}`} toolCall={tc} />;
+                        }
                         return <ToolCallCard key={`${msg.id}-pt-${pi}`} toolCall={tc} />;
                       }
                       if (part.type === "text" && part.content) {
@@ -1362,6 +1524,9 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                           }
                           if (tc.name === "run_in_terminal" || tc.name.includes("run_in_terminal")) {
                             return <TerminalCommandCard key={`${msg.id}-fb-term-${idx}`} toolCall={tc} />;
+                          }
+                          if (tc.name === "Agent" || tc.name === "agent" || tc.name === "SubAgent") {
+                            return <SubAgentCard key={`${msg.id}-fb-agent-${idx}`} toolCall={tc} />;
                           }
                           return <ToolCallCard key={`${msg.id}-fb-${tc.id}-${idx}`} toolCall={tc} />;
                         })}
