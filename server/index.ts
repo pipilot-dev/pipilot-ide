@@ -2310,11 +2310,26 @@ Create these wiki files in .pipilot/wikis/:
 - Relationships (what imports this file)
 
 ## Mermaid Diagrams
-Use Mermaid syntax for:
-- Component dependency graphs: \`\`\`mermaid\\ngraph TD\\n  A[Component] --> B[Dependency]\\n\`\`\`
-- Data flow diagrams
-- Architecture overviews
-- File relationship maps
+IMPORTANT: Before creating Mermaid diagrams, use the Context7 MCP tool to look up the latest Mermaid syntax for the diagram type you need (resolve-library-id: "mermaid-js/mermaid", then get-library-docs). This prevents broken syntax.
+
+Rules for valid Mermaid:
+- Use \`graph TD\` (not \`flowchart TD\` for simple graphs)
+- Node IDs must be alphanumeric (no spaces, no special chars)
+- Use square brackets for labels: \`A[My Label]\`
+- Use --> for arrows, --- for lines
+- Wrap labels with special chars in quotes: \`A["Label (with parens)"]\`
+- Each statement on its own line
+- No trailing semicolons
+
+Example:
+\`\`\`mermaid
+graph TD
+  A[Client] --> B[Server]
+  B --> C[Database]
+  B --> D[Cache]
+\`\`\`
+
+Use for: component dependency graphs, data flow, architecture overviews, file relationships
 
 ## Workflow
 1. Read the project structure (use Glob and Read)
@@ -2331,7 +2346,8 @@ Use Mermaid syntax for:
 - Skip node_modules, .git, dist, build folders
 - For large projects, focus on the most important 20-30 files
 - Use clean, readable Markdown formatting`,
-            tools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+            tools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "mcp__context7__*"],
+            mcpServers: ["context7"],
             model: "sonnet" as const,
           },
 

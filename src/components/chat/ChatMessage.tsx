@@ -361,7 +361,7 @@ function TerminalCommandCard({ toolCall }: { toolCall: ToolCallInfo }) {
 }
 
 // ── Sub-Agent Card — delegated background tasks ──
-function SubAgentCard({ toolCall }: { toolCall: ToolCallInfo }) {
+function SubAgentCard({ toolCall, childToolCalls = [] }: { toolCall: ToolCallInfo; childToolCalls?: ToolCallInfo[] }) {
   const [expanded, setExpanded] = useState(false);
   const [startTime] = useState(() => Date.now());
   const [elapsed, setElapsed] = useState(0);
@@ -513,6 +513,43 @@ function SubAgentCard({ toolCall }: { toolCall: ToolCallInfo }) {
           {isError && !resultFull && (
             <div style={{ fontSize: 11, color: C.error }}>Task failed — no output returned</div>
           )}
+
+          {/* Nested tool calls from the sub-agent */}
+          {childToolCalls.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontFamily: FONTS.mono, fontSize: 8, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
+                Agent actions ({childToolCalls.length})
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {childToolCalls.map((ct, i) => {
+                  let args: any = {};
+                  try { args = JSON.parse(ct.arguments); } catch {}
+                  const summary = args.file_path || args.path || args.command?.slice(0, 50) || args.pattern || ct.name;
+                  return (
+                    <div key={i} style={{
+                      display: "flex", alignItems: "center", gap: 6,
+                      padding: "3px 6px", borderRadius: 3,
+                      background: C.bg, fontSize: 10, fontFamily: FONTS.mono,
+                    }}>
+                      <span style={{
+                        width: 5, height: 5, borderRadius: 5, flexShrink: 0,
+                        background: ct.status === "done" ? C.ok : ct.status === "error" ? C.error : ct.status === "running" ? C.info : C.textFaint,
+                      }} />
+                      <span style={{ color: C.textDim, fontSize: 8, width: 36, flexShrink: 0 }}>{ct.name.replace("mcp__", "").slice(0, 6)}</span>
+                      <span style={{ color: C.textMid, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Collapsed child count badge */}
+      {!expanded && childToolCalls.length > 0 && (
+        <div style={{ padding: "0 12px 8px 48px", fontSize: 9, color: C.textDim, fontFamily: FONTS.mono }}>
+          {childToolCalls.filter(c => c.status === "done").length}/{childToolCalls.length} actions completed
         </div>
       )}
     </div>
@@ -1467,34 +1504,68 @@ export function AssistantTurnGroup({ messages, onDelete, onContinueInterrupted, 
                 {/* Render parts in order (interleaved text + tools) if available */}
                 {msg.parts && msg.parts.length > 0 ? (
                   <div>
-                    {msg.parts.map((part, pi) => {
-                      if (part.type === "tool" && part.toolCallId) {
-                        const tc = msg.toolCalls?.find(t => t.id === part.toolCallId);
-                        if (!tc) return null;
-                        // Sequential thinking → collapsible reasoning card
-                        if (tc.name.includes("sequentialthinking") || tc.name.includes("sequential_thinking") || tc.name.includes("Sequentialthinking")) {
-                          return <ThinkingCard key={`${msg.id}-think-${pi}`} toolCall={tc} />;
+                    {(() => {
+                      // Pre-process parts to group sub-agent tool calls inside their
+                      // parent Agent card. Tool calls between an Agent(running) and
+                      // Agent(done) are children of that sub-agent.
+                      const elements: React.ReactNode[] = [];
+                      let activeAgentTc: ToolCallInfo | null = null;
+                      let agentChildTools: ToolCallInfo[] = [];
+
+                      const flushAgent = () => {
+                        if (activeAgentTc) {
+                          elements.push(
+                            <SubAgentCard key={`${msg.id}-agent-${activeAgentTc.id}`} toolCall={activeAgentTc} childToolCalls={agentChildTools} />
+                          );
+                          activeAgentTc = null;
+                          agentChildTools = [];
                         }
-                        // Run in terminal → command card with buttons
-                        if (tc.name === "run_in_terminal" || tc.name.includes("run_in_terminal")) {
-                          return <TerminalCommandCard key={`${msg.id}-term-${pi}`} toolCall={tc} />;
+                      };
+
+                      for (let pi = 0; pi < msg.parts.length; pi++) {
+                        const part = msg.parts[pi];
+                        if (part.type === "tool" && part.toolCallId) {
+                          const tc = msg.toolCalls?.find(t => t.id === part.toolCallId);
+                          if (!tc) continue;
+
+                          const isAgent = tc.name === "Agent" || tc.name === "agent" || tc.name === "SubAgent" || tc.name === "Task";
+                          if (isAgent) {
+                            flushAgent(); // flush previous if any
+                            activeAgentTc = tc;
+                            agentChildTools = [];
+                            // If already done, flush immediately (no children to collect)
+                            if (tc.status === "done" || tc.status === "error") flushAgent();
+                            continue;
+                          }
+
+                          // If inside an active agent, collect as child
+                          if (activeAgentTc && (activeAgentTc.status === "running" || activeAgentTc.status === "pending")) {
+                            agentChildTools.push(tc);
+                            continue;
+                          }
+
+                          // Regular tool calls
+                          if (tc.name.includes("sequentialthinking") || tc.name.includes("sequential_thinking") || tc.name.includes("Sequentialthinking")) {
+                            elements.push(<ThinkingCard key={`${msg.id}-think-${pi}`} toolCall={tc} />);
+                          } else if (tc.name === "run_in_terminal" || tc.name.includes("run_in_terminal")) {
+                            elements.push(<TerminalCommandCard key={`${msg.id}-term-${pi}`} toolCall={tc} />);
+                          } else {
+                            elements.push(<ToolCallCard key={`${msg.id}-pt-${pi}`} toolCall={tc} />);
+                          }
+                        } else if (part.type === "text" && part.content) {
+                          flushAgent(); // text after agent means agent is done
+                          elements.push(
+                            <div key={`${msg.id}-txt-${pi}`} className="chat-message">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                                {part.content}
+                              </ReactMarkdown>
+                            </div>
+                          );
                         }
-                        if (tc.name === "Agent" || tc.name === "agent" || tc.name === "SubAgent") {
-                          return <SubAgentCard key={`${msg.id}-agent-${pi}`} toolCall={tc} />;
-                        }
-                        return <ToolCallCard key={`${msg.id}-pt-${pi}`} toolCall={tc} />;
                       }
-                      if (part.type === "text" && part.content) {
-                        return (
-                          <div key={`${msg.id}-txt-${pi}`} className="chat-message">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                              {part.content}
-                            </ReactMarkdown>
-                          </div>
-                        );
-                      }
-                      return null;
-                    })}
+                      flushAgent(); // flush any trailing agent
+                      return elements;
+                    })()}
                     {msg.streaming && (
                       <div className="flex items-center gap-2 py-1">
                         <div style={{
