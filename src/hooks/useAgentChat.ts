@@ -96,9 +96,6 @@ export function useAgentChat(
   workspaceContext?: WorkspaceContext,
   checkpointManager?: CheckpointManager,
   projectId?: string,
-  /** When provided by multi-agent system, overrides the session ID
-   *  and disables the auto-session-from-localStorage logic. */
-  forceSessionId?: string,
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -165,18 +162,11 @@ export function useAgentChat(
   const sessionPrefKey = (pid: string) => `pipilot:active-session:${pid}`;
   useEffect(() => {
     if (!projectId) { setCurrentSessionId(""); return; }
-    // When multi-agent provides a forced session ID, use it directly
-    // and skip the localStorage lookup (which would cause cross-tab conflicts).
-    let nextId: string;
-    if (forceSessionId) {
-      nextId = forceSessionId;
-    } else {
-      nextId = `agent-${projectId}`;
-      try {
-        const stored = localStorage.getItem(sessionPrefKey(projectId));
-        if (stored) nextId = stored;
-      } catch {}
-    }
+    let nextId = `agent-${projectId}`;
+    try {
+      const stored = localStorage.getItem(sessionPrefKey(projectId));
+      if (stored) nextId = stored;
+    } catch {}
     setCurrentSessionId(nextId);
     // Ensure a chatSessions row exists for this id, then signal readiness
     (async () => {
@@ -199,7 +189,7 @@ export function useAgentChat(
         detail: { projectId, sessionId: nextId },
       }));
     })();
-  }, [projectId, forceSessionId]);
+  }, [projectId]);
 
   // Load messages from IndexedDB when session changes.
   // Uses a version counter so rapid switches discard stale loads.
@@ -902,12 +892,7 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
     return id;
   }, []);
 
-  const forceSessionIdRef = useRef(forceSessionId);
-  forceSessionIdRef.current = forceSessionId;
-
   const switchSession = useCallback((sessionId: string) => {
-    // When multi-agent controls the session, ignore manual switches
-    if (forceSessionIdRef.current) return;
     const pid = projectIdRef.current;
     if (!pid || !sessionId) return;
     setCurrentSessionId(sessionId);

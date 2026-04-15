@@ -3,7 +3,6 @@ import {
   Send,
   Square,
   Trash2,
-  UserPlus,
   Bot,
   Zap,
   ChevronDown,
@@ -27,8 +26,6 @@ import {
 } from "lucide-react";
 import { useChat, ChatMode, ToolExecutor, WorkspaceContext, CheckpointManager } from "@/hooks/useChat";
 import { useAgentChat } from "@/hooks/useAgentChat";
-import { useMultiAgent } from "@/hooks/useMultiAgent";
-import { AgentTabBar } from "./AgentTabBar";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
 import { TodoPanel } from "./TodoPanel";
 import { SessionPicker } from "./SessionPicker";
@@ -196,18 +193,7 @@ const atFootKbd: React.CSSProperties = {
 export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, projectId, fileTree, openTabIds, activeTabId }: ChatPanelProps) {
   useEffect(() => { injectFonts(); }, []);
 
-  // ── Multi-agent tab management ──
-  const multiAgent = useMultiAgent(projectId || "default-project");
-  const { tabs: agentTabs, activeTab: activeAgentTab, activeTabId: activeAgentTabId,
-    switchTab: switchAgentTab, createTab: createAgentTab,
-    closeTab: closeAgentTab, renameTab: renameAgentTab,
-    updateTabStatus } = multiAgent;
-
-  // Single useAgentChat instance — forceSessionId drives the session directly
-  // from the active agent tab, bypassing localStorage-based session management.
-  // Only force session ID when multiple agent tabs exist — single tab uses normal session management
-  const forceSession = agentTabs.length > 1 ? activeAgentTab?.sessionId : undefined;
-  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, activeAgentTab?.projectId || projectId, forceSession);
+  const agentSdk = useAgentChat(toolExecutor, workspaceContext, checkpointManager, projectId);
 
   const { messages, isStreaming, mode, setMode, sendMessage, stopStreaming, clearMessages, deleteMessage, revertToMessage, redoToMessage } = agentSdk;
   const agentTodos = (agentSdk as any).todos || [];
@@ -225,32 +211,6 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   const renameSession: (sid: string, name: string) => Promise<void> = (agentSdk as any).renameSession || (async () => {});
   const deleteSession: (sid: string) => Promise<void> = (agentSdk as any).deleteSession || (async () => {});
 
-  // No manual session sync needed — forceSessionId drives session directly
-
-  // Update tab status based on streaming state
-  useEffect(() => {
-    if (activeAgentTab) {
-      updateTabStatus(activeAgentTab.id, isStreaming ? "streaming" : "idle");
-    }
-  }, [isStreaming, activeAgentTab?.id]);
-
-  // When creating a new agent tab, also create a new chat session
-  const handleCreateAgentTab = useCallback((name?: string, customProjectId?: string) => {
-    const tab = createAgentTab(name, customProjectId);
-    createSession(name || tab.name);
-  }, [createAgentTab, createSession]);
-
-  // Spawn agent on a different project — shows a simple prompt for now
-  const handleCreateCrossProjectAgent = useCallback(() => {
-    // Use the project list from workspace
-    window.dispatchEvent(new CustomEvent("pipilot:pick-project-for-agent", {
-      detail: {
-        callback: (pid: string, pname: string) => {
-          handleCreateAgentTab(pname, pid);
-        },
-      },
-    }));
-  }, [handleCreateAgentTab]);
 
   // Handler when user picks "Tell PiPilot something else" and submits a new message
   const handleSendNewAfterInterrupt = useCallback((messageId: string, newMessage: string) => {
@@ -893,8 +853,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         </div>
 
         <div className="flex items-center gap-1.5">
-          {/* Session Picker — hidden when multi-agent tabs are active (they replace it) */}
-          {projectId && currentSessionId && agentTabs.length < 2 && (
+          {/* Session Picker — multi-chat sessions per project */}
+          {projectId && currentSessionId && (
             <SessionPicker
               projectId={projectId}
               currentSessionId={currentSessionId}
@@ -988,32 +948,8 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
             </button>
           )}
 
-          {/* Spawn new agent button — always visible */}
-          <button
-            onClick={() => handleCreateAgentTab()}
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              color: C.textDim, padding: 4, display: "flex", alignItems: "center",
-              borderRadius: 3, transition: "color 0.12s",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = C.textDim; }}
-            title="Spawn new agent"
-          >
-            <UserPlus size={14} />
-          </button>
         </div>
       </div>
-
-      {/* ── Agent tab bar (visible when 2+ agents spawned) ── */}
-      <AgentTabBar
-        tabs={agentTabs}
-        activeTabId={activeAgentTabId}
-        onSwitch={switchAgentTab}
-        onCreate={handleCreateAgentTab}
-        onClose={closeAgentTab}
-        onRename={renameAgentTab}
-      />
 
       {/* ── Messages ── */}
       <div
