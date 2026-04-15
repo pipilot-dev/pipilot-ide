@@ -1339,109 +1339,117 @@ function createIdeToolServer(projectId: string) {
     },
     async (args) => {
       const results: { type: string; file: string; line?: number; match: string; context?: string; score: number }[] = [];
-      const ignore = ["node_modules", ".git", ".next", ".cache", "dist", "build", ".pipilot", "coverage", "__pycache__"];
-      const ignoreArgs = ignore.map((d) => `--glob=!${d}`).join(" ");
-      const caseFlag = args.caseSensitive ? "" : "-i";
-      const globFlag = args.filePattern ? `--glob=${args.filePattern}` : "";
+      const SKIP = new Set(["node_modules", ".git", ".next", ".cache", "dist", "build", ".pipilot", "coverage", "__pycache__", ".vite", ".turbo", ".claude"]);
+      const MAX_SIZE = 500 * 1024;
 
-      // Helper: run ripgrep (rg) with args
-      const rg = (rgArgs: string): Promise<string> => {
-        return new Promise((resolve) => {
-          const { execSync } = require("child_process");
-          try {
-            const out = execSync(`rg ${rgArgs}`, { cwd: workDir, encoding: "utf8", maxBuffer: 5 * 1024 * 1024, timeout: 10000 });
-            resolve(out);
-          } catch { resolve(""); }
-        });
+      // Pure Node.js file walker (no ripgrep dependency)
+      const listFiles = (dir: string, base = ""): string[] => {
+        const out: string[] = [];
+        try {
+          for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (e.isDirectory()) {
+              if (SKIP.has(e.name) || e.name.startsWith(".")) continue;
+              out.push(...listFiles(path.join(dir, e.name), base ? `${base}/${e.name}` : e.name));
+            } else if (e.isFile()) {
+              const rel = base ? `${base}/${e.name}` : e.name;
+              // Apply file pattern filter if specified
+              if (args.filePattern) {
+                const pat = args.filePattern.replace(/\./g, "\\.").replace(/\*/g, ".*");
+                if (!new RegExp(pat, "i").test(rel)) continue;
+              }
+              out.push(rel);
+            }
+          }
+        } catch {}
+        return out;
       };
 
-      // ── Grep: exact/regex pattern matching ──
+      // ── Grep: exact/regex pattern matching (pure Node.js) ──
       if (args.mode === "grep" || args.mode === "all") {
         try {
-          const out = rg(`${caseFlag} -n --no-heading --max-count=100 ${ignoreArgs} ${globFlag} -- "${args.query.replace(/"/g, '\\"')}" .`);
-          const lines = out.split("\n").filter(Boolean).slice(0, args.maxResults);
-          for (const line of lines) {
-            const m = line.match(/^(.+?):(\d+):(.*)$/);
-            if (m) {
-              results.push({
-                type: "grep",
-                file: m[1].replace(/\\/g, "/"),
-                line: parseInt(m[2]),
-                match: m[3].trim().slice(0, 200),
-                score: 10,
-              });
-            }
+          const flags = args.caseSensitive ? "g" : "gi";
+          let re: RegExp;
+          try { re = new RegExp(args.query, flags); } catch { re = new RegExp(args.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags); }
+          const files = listFiles(workDir);
+          let found = 0;
+          for (const rel of files) {
+            if (found >= args.maxResults) break;
+            const abs = path.join(workDir, rel);
+            try {
+              const stat = fs.statSync(abs);
+              if (stat.size > MAX_SIZE) continue;
+              const content = fs.readFileSync(abs, "utf8");
+              const lines = content.split("\n");
+              for (let i = 0; i < lines.length && found < args.maxResults; i++) {
+                if (re.test(lines[i])) {
+                  results.push({ type: "grep", file: rel, line: i + 1, match: lines[i].trim().slice(0, 200), score: 10 });
+                  found++;
+                }
+                re.lastIndex = 0; // reset for global regex
+              }
+            } catch {}
           }
         } catch {}
       }
 
-      // ── Files: fuzzy file name search ──
+      // ── Files: fuzzy file name search (pure Node.js) ──
       if (args.mode === "files" || args.mode === "all") {
         try {
-          const out = rg(`--files ${ignoreArgs} ${globFlag} .`);
-          const allFiles = out.split("\n").filter(Boolean);
+          const allFiles = listFiles(workDir);
           const q = args.query.toLowerCase();
           const scored = allFiles.map((f) => {
             const name = path.basename(f).toLowerCase();
-            const rel = f.replace(/\\/g, "/").toLowerCase();
+            const rel = f.toLowerCase();
             let score = 0;
             if (name === q) score = 100;
             else if (name.startsWith(q)) score = 80;
             else if (name.includes(q)) score = 60;
             else if (rel.includes(q)) score = 40;
             else {
-              // Fuzzy: check if all chars appear in order
               let qi = 0;
               for (const c of rel) { if (c === q[qi]) qi++; if (qi >= q.length) break; }
               if (qi >= q.length) score = 20;
             }
-            return { file: f.replace(/\\/g, "/"), score };
+            return { file: f, score };
           }).filter((f) => f.score > 0).sort((a, b) => b.score - a.score).slice(0, args.maxResults);
-
           for (const f of scored) {
             results.push({ type: "file", file: f.file, match: path.basename(f.file), score: f.score });
           }
         } catch {}
       }
 
-      // ── Symbols: function/class/export/interface definitions ──
+      // ── Symbols: function/class/export/interface definitions (pure Node.js) ──
       if (args.mode === "symbols" || args.mode === "all") {
-        // Search for common definition patterns matching the query
-        const sym = args.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const patterns = [
-          `(function|const|let|var|class|interface|type|enum)\\s+${sym}`,
-          `export\\s+(default\\s+)?(function|const|class|interface|type)\\s+${sym}`,
-          `def\\s+${sym}`,           // Python
-          `func\\s+${sym}`,          // Go
-          `fn\\s+${sym}`,            // Rust
-          `public\\s+(static\\s+)?\\w+\\s+${sym}`, // Java/C#
-        ];
-        const combinedPattern = patterns.join("|");
         try {
-          const out = rg(`${caseFlag} -n --no-heading --max-count=50 ${ignoreArgs} ${globFlag} -- "${combinedPattern}" .`);
-          const lines = out.split("\n").filter(Boolean).slice(0, args.maxResults);
-          for (const line of lines) {
-            const m = line.match(/^(.+?):(\d+):(.*)$/);
-            if (m) {
-              // Read surrounding context (2 lines before/after)
-              let context = "";
-              try {
-                const filePath = path.join(workDir, m[1]);
-                const content = fs.readFileSync(filePath, "utf8").split("\n");
-                const ln = parseInt(m[2]) - 1;
-                const start = Math.max(0, ln - 2);
-                const end = Math.min(content.length, ln + 3);
-                context = content.slice(start, end).map((l, i) => `${start + i + 1}: ${l}`).join("\n");
-              } catch {}
-              results.push({
-                type: "symbol",
-                file: m[1].replace(/\\/g, "/"),
-                line: parseInt(m[2]),
-                match: m[3].trim().slice(0, 200),
-                context,
-                score: 50, // symbols rank high
-              });
-            }
+          const sym = args.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const flags = args.caseSensitive ? "" : "i";
+          const symbolRe = new RegExp(
+            `(function|const|let|var|class|interface|type|enum|export|def|func|fn|pub fn|async function)\\s+(\\w+\\s+)*${sym}`, flags
+          );
+          const files = listFiles(workDir);
+          let found = 0;
+          for (const rel of files) {
+            if (found >= args.maxResults) break;
+            const abs = path.join(workDir, rel);
+            try {
+              const stat = fs.statSync(abs);
+              if (stat.size > MAX_SIZE) continue;
+              const content = fs.readFileSync(abs, "utf8");
+              const lines = content.split("\n");
+              for (let i = 0; i < lines.length && found < args.maxResults; i++) {
+                if (symbolRe.test(lines[i])) {
+                  // Context: 2 lines before/after
+                  const start = Math.max(0, i - 2);
+                  const end = Math.min(lines.length, i + 3);
+                  const context = lines.slice(start, end).map((l, j) => `${start + j + 1}: ${l}`).join("\n");
+                  results.push({
+                    type: "symbol", file: rel, line: i + 1,
+                    match: lines[i].trim().slice(0, 200), context, score: 50,
+                  });
+                  found++;
+                }
+              }
+            } catch {}
           }
         } catch {}
       }
