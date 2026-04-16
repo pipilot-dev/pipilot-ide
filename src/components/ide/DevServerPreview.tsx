@@ -763,24 +763,26 @@ export function DevServerPreview() {
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
           {/* Preview iframe area */}
           <div style={{
-            flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-            minHeight: 0, overflow: "hidden",
+            flex: 1, display: "flex", alignItems: responsiveMode === "mobile" ? "flex-start" : "center", justifyContent: "center",
+            minHeight: 0, overflow: responsiveMode === "mobile" ? "auto" : "hidden",
             background: showResponsiveFrame ? C.surfaceAlt : "transparent",
+            padding: responsiveMode === "mobile" ? "12px 0" : 0,
           }}>
             {isRunning ? (
               <div style={{
                 width: typeof iframeWidth === "number" ? iframeWidth + (responsiveMode === "mobile" ? 24 : 0) : "100%",
-                height: responsiveMode === "mobile" ? "calc(100% - 8px)" : "100%",
+                height: responsiveMode === "mobile" ? 812 : "100%",
+                minHeight: responsiveMode === "mobile" ? 812 : undefined,
+                flexShrink: responsiveMode === "mobile" ? 0 : undefined,
                 position: "relative",
                 transition: "all 0.3s ease",
                 ...(responsiveMode === "mobile" ? {
-                  // Phone frame
+                  // Phone frame — fixed 812px height, scrollable container
                   border: `3px solid #2a2a30`,
                   borderRadius: 36,
                   overflow: "hidden",
                   boxShadow: "0 8px 40px rgba(0,0,0,0.5), inset 0 0 0 1px #3a3a42",
                   background: "#000",
-                  margin: "8px 0",
                 } : showResponsiveFrame ? {
                   border: `1px solid ${C.border}`,
                   borderRadius: 4,
