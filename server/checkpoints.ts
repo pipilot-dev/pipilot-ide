@@ -179,9 +179,21 @@ export async function restoreCheckpoint(opts: {
   if (!entry?.sha) return { success: false, restored: 0, deleted: 0, message: "Checkpoint not found" };
 
   try {
+    // Verify the commit exists
     await git(opts.workDir, `cat-file -t ${entry.sha}`);
-    await git(opts.workDir, `checkout ${entry.sha} -- .`);
+
+    // Full restore: reset index + working tree to match the checkpoint commit.
+    // 1. Reset the index to the checkpoint state (stages removals of files
+    //    that didn't exist at that point and restores old file contents)
+    await git(opts.workDir, `read-tree ${entry.sha}`);
+    // 2. Update the working tree to match the new index state
+    await git(opts.workDir, `checkout-index -a -f`);
+    // 3. Remove any files in the working tree that aren't in the checkpoint
+    //    (files added in later commits that are now unstaged by read-tree)
     await git(opts.workDir, "clean -fd");
+    // 4. Point HEAD at the checkpoint commit so subsequent checkpoints chain correctly
+    await git(opts.workDir, `reset --soft ${entry.sha}`);
+
     const fileCount = await countFilesAtCommit(opts.workDir, entry.sha);
     return { success: true, restored: fileCount, deleted: 0 };
   } catch (err: any) {

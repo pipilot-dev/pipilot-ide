@@ -41,9 +41,11 @@ export function useCheckpoints() {
       return;
     }
     getProjectType(activeProjectId).then((type) => {
-      // Linked = always server. The chat panel hooks pass the right
-      // checkpoint manager based on this.
-      setUseServer(type === "linked");
+      // Use server-side git checkpoints for ALL project types that have
+      // disk-backed workspaces: linked folders, cloud (E2B), and static
+      // projects running via the agent server. Only pure IndexedDB
+      // (nodebox) projects should use local checkpoints.
+      setUseServer(type === "linked" || type === "cloud" || type === "static");
     });
   }, [activeProjectId]);
 
