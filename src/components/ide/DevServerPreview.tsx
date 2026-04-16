@@ -790,42 +790,73 @@ export function DevServerPreview() {
                   boxShadow: "0 4px 24px rgba(0,0,0,0.3)",
                 } : {}),
               }}>
-                {/* Phone notch + status bar (mobile mode only) */}
+                {/* ── Phone side buttons ── */}
+                {responsiveMode === "mobile" && (
+                  <>
+                    {/* Power button (right side) */}
+                    <div style={{
+                      position: "absolute", right: -6, top: 120, width: 3, height: 40,
+                      background: "#3a3a42", borderRadius: "0 2px 2px 0", zIndex: 4,
+                    }} />
+                    {/* Volume up (left side) */}
+                    <div style={{
+                      position: "absolute", left: -6, top: 110, width: 3, height: 28,
+                      background: "#3a3a42", borderRadius: "2px 0 0 2px", zIndex: 4,
+                    }} />
+                    {/* Volume down (left side) */}
+                    <div style={{
+                      position: "absolute", left: -6, top: 150, width: 3, height: 28,
+                      background: "#3a3a42", borderRadius: "2px 0 0 2px", zIndex: 4,
+                    }} />
+                  </>
+                )}
+
+                {/* ── Android phone chrome (mobile mode only) ── */}
                 {responsiveMode === "mobile" && (
                   <div style={{
                     position: "relative", zIndex: 3,
-                    height: 44, background: "#000",
-                    display: "flex", alignItems: "flex-end", justifyContent: "center",
-                    paddingBottom: 4,
+                    height: 36, background: "#000",
+                    display: "flex", alignItems: "center",
+                    padding: "0 14px",
                   }}>
-                    {/* Dynamic Island / Notch */}
+                    {/* Punch-hole camera (top-left, Samsung style) */}
                     <div style={{
                       position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
-                      width: 100, height: 24, borderRadius: 14,
-                      background: "#1a1a1e",
-                    }} />
-                    {/* Status bar items */}
-                    <div style={{
-                      position: "absolute", top: 10, left: 20,
-                      fontSize: 10, fontWeight: 600, color: "#fff",
-                      fontFamily: FONTS.sans,
+                      width: 10, height: 10, borderRadius: "50%",
+                      background: "#1a1a20",
+                      border: "1px solid #333",
+                      boxShadow: "0 0 3px rgba(0,0,0,0.8), inset 0 0 2px rgba(50,50,60,0.5)",
                     }}>
-                      {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {/* Lens glare */}
+                      <div style={{ position: "absolute", top: 2, left: 2, width: 3, height: 3, borderRadius: "50%", background: "rgba(100,120,180,0.3)" }} />
                     </div>
-                    <div style={{
-                      position: "absolute", top: 10, right: 16,
-                      display: "flex", alignItems: "center", gap: 4,
-                    }}>
-                      {/* Signal bars */}
-                      <svg width="14" height="10" viewBox="0 0 14 10"><rect x="0" y="7" width="2" height="3" rx="0.5" fill="#fff"/><rect x="3" y="5" width="2" height="5" rx="0.5" fill="#fff"/><rect x="6" y="3" width="2" height="7" rx="0.5" fill="#fff"/><rect x="9" y="0" width="2" height="10" rx="0.5" fill="#fff"/></svg>
+
+                    {/* Left: Clock */}
+                    <span style={{ fontSize: 10, fontWeight: 600, color: "#fff", fontFamily: FONTS.sans, letterSpacing: "0.02em" }}>
+                      {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+
+                    <div style={{ flex: 1 }} />
+
+                    {/* Right: Status icons */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      {/* Notification dot */}
+                      <div style={{ width: 4, height: 4, borderRadius: 2, background: "#60a5fa" }} />
+                      {/* Mobile data */}
+                      <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 9V5M3.5 9V3M6 9V1M8.5 9V4" stroke="#fff" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                      {/* Signal */}
+                      <svg width="12" height="10" viewBox="0 0 12 10"><rect x="0" y="7" width="2" height="3" rx="0.5" fill="#fff"/><rect x="3" y="5" width="2" height="5" rx="0.5" fill="#fff"/><rect x="6" y="3" width="2" height="7" rx="0.5" fill="#fff"/><rect x="9" y="0" width="2" height="10" rx="0.5" fill="#fff" opacity="0.3"/></svg>
                       {/* WiFi */}
-                      <svg width="12" height="10" viewBox="0 0 12 10"><path d="M6 9a1 1 0 100-2 1 1 0 000 2z" fill="#fff"/><path d="M3.5 6.5a3.5 3.5 0 015 0" stroke="#fff" strokeWidth="1.2" fill="none" strokeLinecap="round"/><path d="M1.5 4.5a6 6 0 019 0" stroke="#fff" strokeWidth="1.2" fill="none" strokeLinecap="round"/></svg>
-                      {/* Battery */}
-                      <div style={{ display: "flex", alignItems: "center" }}>
-                        <div style={{ width: 18, height: 8, borderRadius: 2, border: "1px solid #fff", padding: 1, position: "relative" }}>
-                          <div style={{ width: "70%", height: "100%", borderRadius: 1, background: "#34d399" }} />
+                      <svg width="11" height="9" viewBox="0 0 11 9"><path d="M5.5 8a0.8 0.8 0 100-1.6 0.8 0.8 0 000 1.6z" fill="#fff"/><path d="M3.2 5.8a3.2 3.2 0 014.6 0" stroke="#fff" strokeWidth="1.1" fill="none" strokeLinecap="round"/><path d="M1.2 3.8a5.8 5.8 0 018.6 0" stroke="#fff" strokeWidth="1.1" fill="none" strokeLinecap="round"/></svg>
+                      {/* Battery with percentage */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                        <span style={{ fontSize: 8, color: "rgba(255,255,255,0.6)", fontFamily: FONTS.mono }}>85</span>
+                        <div style={{ display: "flex", alignItems: "center" }}>
+                          <div style={{ width: 16, height: 8, borderRadius: 1.5, border: "1px solid rgba(255,255,255,0.7)", padding: 1 }}>
+                            <div style={{ width: "85%", height: "100%", borderRadius: 0.5, background: "#34d399" }} />
+                          </div>
+                          <div style={{ width: 1.5, height: 3.5, background: "rgba(255,255,255,0.7)", borderRadius: "0 1px 1px 0", marginLeft: 0.5 }} />
                         </div>
-                        <div style={{ width: 1.5, height: 4, background: "#fff", borderRadius: "0 1px 1px 0", marginLeft: 0.5 }} />
                       </div>
                     </div>
                   </div>
@@ -878,18 +909,20 @@ export function DevServerPreview() {
                   </div>
                 )}
 
-                {/* Home indicator bar (mobile mode only) */}
+                {/* ── Android gesture navigation bar ── */}
                 {responsiveMode === "mobile" && (
                   <div style={{
                     position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 3,
-                    height: 28, background: "linear-gradient(transparent, rgba(0,0,0,0.6))",
-                    display: "flex", alignItems: "flex-end", justifyContent: "center",
-                    paddingBottom: 6,
+                    height: 32, background: "#000",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    gap: 40,
                   }}>
-                    <div style={{
-                      width: 100, height: 4, borderRadius: 2,
-                      background: "rgba(255,255,255,0.5)",
-                    }} />
+                    {/* Back gesture hint (left) */}
+                    <div style={{ width: 28, height: 3, borderRadius: 1.5, background: "rgba(255,255,255,0.15)" }} />
+                    {/* Home pill (center) */}
+                    <div style={{ width: 72, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.55)" }} />
+                    {/* Recent apps hint (right) */}
+                    <div style={{ width: 28, height: 3, borderRadius: 1.5, background: "rgba(255,255,255,0.15)" }} />
                   </div>
                 )}
               </div>
