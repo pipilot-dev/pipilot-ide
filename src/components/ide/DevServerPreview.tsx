@@ -58,6 +58,9 @@ export function DevServerPreview() {
   const [selectMode, setSelectMode] = useState(false);
   const [capturing, setCapturing] = useState(false);
 
+  // Android overlay states
+  const [phoneOverlay, setPhoneOverlay] = useState<"none" | "notifications" | "quicksettings" | "recents">("none");
+
   const pushHistory = useCallback((url: string) => {
     setHistory(prev => {
       const trimmed = prev.slice(0, historyIdx + 1);
@@ -831,15 +834,21 @@ export function DevServerPreview() {
                       <div style={{ position: "absolute", top: 2, left: 2, width: 3, height: 3, borderRadius: "50%", background: "rgba(100,120,180,0.3)" }} />
                     </div>
 
-                    {/* Left: Clock */}
-                    <span style={{ fontSize: 10, fontWeight: 600, color: "#fff", fontFamily: FONTS.sans, letterSpacing: "0.02em" }}>
+                    {/* Left: Clock — tap for notification shade */}
+                    <span
+                      onClick={(e) => { e.stopPropagation(); setPhoneOverlay(phoneOverlay === "notifications" ? "none" : "notifications"); }}
+                      style={{ fontSize: 10, fontWeight: 600, color: "#fff", fontFamily: FONTS.sans, letterSpacing: "0.02em", cursor: "pointer", padding: "2px 4px", borderRadius: 3, userSelect: "none" }}
+                    >
                       {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </span>
 
                     <div style={{ flex: 1 }} />
 
-                    {/* Right: Status icons */}
-                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    {/* Right: Status icons — tap for quick settings */}
+                    <div
+                      onClick={(e) => { e.stopPropagation(); setPhoneOverlay(phoneOverlay === "quicksettings" ? "none" : "quicksettings"); }}
+                      style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", padding: "2px 4px", borderRadius: 3, userSelect: "none" }}
+                    >
                       {/* Notification dot */}
                       <div style={{ width: 4, height: 4, borderRadius: 2, background: "#60a5fa" }} />
                       {/* Mobile data */}
@@ -909,6 +918,121 @@ export function DevServerPreview() {
                   </div>
                 )}
 
+                {/* ── Android overlays (notification shade / quick settings / recents) ── */}
+                {responsiveMode === "mobile" && phoneOverlay !== "none" && (
+                  <div
+                    onClick={() => setPhoneOverlay("none")}
+                    style={{
+                      position: "absolute", inset: 0, zIndex: 10,
+                      background: "rgba(0,0,0,0.5)", backdropFilter: "blur(8px)",
+                      display: "flex", flexDirection: "column",
+                      animation: "phoneSlideDown 0.25s ease",
+                    }}
+                  >
+                    <style>{`@keyframes phoneSlideDown { from { opacity:0; transform:translateY(-20px); } to { opacity:1; transform:translateY(0); } }`}</style>
+
+                    {phoneOverlay === "notifications" && (
+                      <div onClick={(e) => e.stopPropagation()} style={{ padding: "48px 16px 16px", flex: 1, overflowY: "auto" }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#fff", fontFamily: FONTS.sans, marginBottom: 12 }}>Notifications</div>
+                        {[
+                          { app: "PiPilot", msg: "Build succeeded — app running on :8081", time: "now", color: "#FF6B35" },
+                          { app: "Expo", msg: "Metro bundler ready", time: "2m", color: "#4630EB" },
+                          { app: "System", msg: "USB debugging connected", time: "5m", color: "#666" },
+                        ].map((n, i) => (
+                          <div key={i} style={{
+                            padding: "10px 12px", borderRadius: 10, marginBottom: 6,
+                            background: "rgba(255,255,255,0.08)", backdropFilter: "blur(4px)",
+                          }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                              <div style={{ width: 6, height: 6, borderRadius: 3, background: n.color }} />
+                              <span style={{ fontSize: 9, fontWeight: 600, color: "rgba(255,255,255,0.6)", fontFamily: FONTS.sans }}>{n.app}</span>
+                              <span style={{ fontSize: 8, color: "rgba(255,255,255,0.3)", fontFamily: FONTS.mono, marginLeft: "auto" }}>{n.time}</span>
+                            </div>
+                            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.85)", fontFamily: FONTS.sans, lineHeight: 1.4 }}>{n.msg}</div>
+                          </div>
+                        ))}
+                        <div style={{ textAlign: "center", marginTop: 12, fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: FONTS.mono }}>
+                          No more notifications
+                        </div>
+                      </div>
+                    )}
+
+                    {phoneOverlay === "quicksettings" && (
+                      <div onClick={(e) => e.stopPropagation()} style={{ padding: "48px 16px 16px" }}>
+                        {/* Brightness slider */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                          <div style={{ flex: 1, height: 3, borderRadius: 1.5, background: "rgba(255,255,255,0.15)" }}>
+                            <div style={{ width: "70%", height: "100%", borderRadius: 1.5, background: "#60a5fa" }} />
+                          </div>
+                        </div>
+                        {/* Quick toggle grid */}
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                          {[
+                            { icon: "W", label: "Wi-Fi", active: true },
+                            { icon: "B", label: "Bluetooth", active: true },
+                            { icon: "D", label: "Dark mode", active: true },
+                            { icon: "F", label: "Flashlight", active: false },
+                            { icon: "R", label: "Rotation", active: false },
+                            { icon: "A", label: "Airplane", active: false },
+                            { icon: "L", label: "Location", active: true },
+                            { icon: "S", label: "Silent", active: false },
+                          ].map((t, i) => (
+                            <div key={i} style={{
+                              display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+                              padding: "8px 4px", borderRadius: 12,
+                              background: t.active ? "rgba(96,165,250,0.25)" : "rgba(255,255,255,0.06)",
+                              cursor: "pointer",
+                            }}>
+                              <div style={{
+                                width: 28, height: 28, borderRadius: 14,
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                                background: t.active ? "#60a5fa" : "rgba(255,255,255,0.12)",
+                                fontSize: 11, fontWeight: 700, color: t.active ? "#000" : "rgba(255,255,255,0.5)",
+                                fontFamily: FONTS.mono,
+                              }}>
+                                {t.icon}
+                              </div>
+                              <span style={{ fontSize: 7, color: "rgba(255,255,255,0.5)", fontFamily: FONTS.sans, textAlign: "center" }}>{t.label}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {phoneOverlay === "recents" && (
+                      <div onClick={(e) => e.stopPropagation()} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "48px 20px", overflowX: "auto" }}>
+                        {/* App cards in recents */}
+                        {[
+                          { name: "PiPilot App", color: "#FF6B35" },
+                          { name: "Chrome", color: "#4285f4" },
+                          { name: "Settings", color: "#607d8b" },
+                        ].map((app, i) => (
+                          <div key={i} style={{
+                            width: 160, minWidth: 160, height: 280, borderRadius: 12,
+                            background: `linear-gradient(135deg, ${app.color}20, ${app.color}08)`,
+                            border: "1px solid rgba(255,255,255,0.1)",
+                            display: "flex", flexDirection: "column",
+                            overflow: "hidden",
+                          }}>
+                            <div style={{
+                              padding: "8px 10px", display: "flex", alignItems: "center", gap: 6,
+                              background: "rgba(0,0,0,0.3)",
+                            }}>
+                              <div style={{ width: 14, height: 14, borderRadius: 4, background: app.color }} />
+                              <span style={{ fontSize: 8, fontWeight: 600, color: "#fff", fontFamily: FONTS.sans }}>{app.name}</span>
+                            </div>
+                            <div style={{ flex: 1, background: `${app.color}08` }} />
+                          </div>
+                        ))}
+                        <div style={{ position: "absolute", bottom: 48, left: 0, right: 0, textAlign: "center" }}>
+                          <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: FONTS.mono }}>Swipe to dismiss</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* ── Android gesture navigation bar ── */}
                 {responsiveMode === "mobile" && (
                   <div style={{
@@ -917,12 +1041,12 @@ export function DevServerPreview() {
                     display: "flex", alignItems: "center", justifyContent: "center",
                     gap: 40,
                   }}>
-                    {/* Back gesture hint (left) */}
-                    <div style={{ width: 28, height: 3, borderRadius: 1.5, background: "rgba(255,255,255,0.15)" }} />
-                    {/* Home pill (center) */}
-                    <div style={{ width: 72, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.55)" }} />
-                    {/* Recent apps hint (right) */}
-                    <div style={{ width: 28, height: 3, borderRadius: 1.5, background: "rgba(255,255,255,0.15)" }} />
+                    {/* Back gesture hint (left) — tap dismisses overlays */}
+                    <div onClick={(e) => { e.stopPropagation(); setPhoneOverlay("none"); }} style={{ width: 28, height: 3, borderRadius: 1.5, background: "rgba(255,255,255,0.15)", cursor: "pointer" }} />
+                    {/* Home pill (center) — tap goes home / dismisses */}
+                    <div onClick={(e) => { e.stopPropagation(); setPhoneOverlay("none"); }} style={{ width: 72, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.55)", cursor: "pointer" }} />
+                    {/* Recent apps (right) — tap opens app switcher */}
+                    <div onClick={(e) => { e.stopPropagation(); setPhoneOverlay(phoneOverlay === "recents" ? "none" : "recents"); }} style={{ width: 28, height: 3, borderRadius: 1.5, background: "rgba(255,255,255,0.15)", cursor: "pointer" }} />
                   </div>
                 )}
               </div>
