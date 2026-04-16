@@ -462,19 +462,42 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         content: folderContent,
       }]);
     } else {
-      // Attach file with smart truncation
+      // Detect binary/non-text files — don't inline content, just reference the path
       const raw = file.content ?? "";
-      const { text, truncated, lineCount } = smartTruncate(raw, MAX_ATTACH_LINES, MAX_ATTACH_CHARS);
-      setAttachments((prev) => [...prev, {
-        id: fileId,
-        name: file.name,
-        type: "file",
-        language: file.language,
-        lineCount,
-        charCount: raw.length,
-        truncated,
-        content: text,
-      }]);
+      const isBinary = !raw || /[\x00-\x08\x0E-\x1F]/.test(raw.slice(0, 1024));
+      const binaryExts = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
+        ".pdf", ".zip", ".tar", ".gz", ".woff", ".woff2", ".ttf", ".otf", ".eot",
+        ".mp3", ".mp4", ".wav", ".ogg", ".webm", ".mov", ".avi",
+        ".exe", ".dll", ".so", ".dylib", ".bin", ".dat", ".db", ".sqlite"]);
+      const ext = "." + (file.name.split(".").pop() || "").toLowerCase();
+      const treatAsReference = isBinary || binaryExts.has(ext);
+
+      if (treatAsReference) {
+        // Reference-only: tell agent to Read the file at runtime
+        setAttachments((prev) => [...prev, {
+          id: fileId,
+          name: file.name,
+          type: "file",
+          language: file.language,
+          lineCount: 0,
+          charCount: 0,
+          truncated: false,
+          content: `[File reference: ${fileId}]\nThis is a binary or non-text file. Use the Read tool on this file path to view its contents.`,
+        }]);
+      } else {
+        // Text file: inline with smart truncation
+        const { text, truncated, lineCount } = smartTruncate(raw, MAX_ATTACH_LINES, MAX_ATTACH_CHARS);
+        setAttachments((prev) => [...prev, {
+          id: fileId,
+          name: file.name,
+          type: "file",
+          language: file.language,
+          lineCount,
+          charCount: raw.length,
+          truncated,
+          content: text,
+        }]);
+      }
     }
   }, [flatFiles, attachments]);
 
