@@ -511,6 +511,20 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
     return () => window.removeEventListener("pipilot:attach-file", handler);
   }, [attachFile]);
 
+  // Skip-tool handler — ToolCallCard dispatches this when user clicks Skip
+  useEffect(() => {
+    const handler = () => {
+      if (!projectId) return;
+      fetch("/api/agent/skip-tool", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId }),
+      }).catch(() => {});
+    };
+    window.addEventListener("pipilot:skip-tool", handler);
+    return () => window.removeEventListener("pipilot:skip-tool", handler);
+  }, [projectId]);
+
   // Remove an attachment
   const removeAttachment = useCallback((fileId: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== fileId));

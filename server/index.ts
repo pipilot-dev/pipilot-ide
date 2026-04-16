@@ -1595,7 +1595,7 @@ function createIdeToolServer(projectId: string) {
     },
     async (args) => {
       try {
-        const res = await fetch(`http://localhost:${PORT}/api/cloud/github/git-push`, {
+        const res = await skippableFetch(projectId, `http://localhost:${PORT}/api/cloud/github/git-push`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ projectId, ...args }),
@@ -1620,7 +1620,7 @@ function createIdeToolServer(projectId: string) {
     },
     async (args) => {
       try {
-        const res = await fetch(`http://localhost:${PORT}/api/cloud/vercel/deploy`, {
+        const res = await skippableFetch(projectId, `http://localhost:${PORT}/api/cloud/vercel/deploy`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ projectId, ...args }),
@@ -1644,7 +1644,7 @@ function createIdeToolServer(projectId: string) {
     },
     async (args) => {
       try {
-        const res = await fetch(`http://localhost:${PORT}/api/cloud/netlify/deploy`, {
+        const res = await skippableFetch(projectId, `http://localhost:${PORT}/api/cloud/netlify/deploy`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ projectId, ...args }),
@@ -1668,7 +1668,7 @@ function createIdeToolServer(projectId: string) {
     },
     async (args) => {
       try {
-        const res = await fetch(`http://localhost:${PORT}/api/cloud/cloudflare/deploy`, {
+        const res = await skippableFetch(projectId, `http://localhost:${PORT}/api/cloud/cloudflare/deploy`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ projectId, ...args }),
@@ -1692,7 +1692,7 @@ function createIdeToolServer(projectId: string) {
     },
     async (args) => {
       try {
-        const res = await fetch(`http://localhost:${PORT}/api/cloud/npm/publish`, {
+        const res = await skippableFetch(projectId, `http://localhost:${PORT}/api/cloud/npm/publish`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ projectId, ...args }),
@@ -1717,7 +1717,7 @@ function createIdeToolServer(projectId: string) {
     },
     async (args) => {
       try {
-        const res = await fetch(`http://localhost:${PORT}/api/cloud/cloudflare/workers/deploy`, {
+        const res = await skippableFetch(projectId, `http://localhost:${PORT}/api/cloud/cloudflare/workers/deploy`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ projectId, ...args }),
@@ -1916,6 +1916,48 @@ app.get("/api/agent/replay", (req, res) => {
 // ── Active abort controllers per project ──
 const activeAbortControllers = new Map<string, AbortController>();
 
+// ── Per-project tool skip — lets users abort a long-running tool without
+// killing the entire query. The next MCP tool checkpoint sees the flag
+// and returns "User skipped this tool" to the agent.
+const toolSkipFlags = new Map<string, boolean>();
+
+/** Check if the user has requested to skip the current tool. Clears the flag. */
+function checkToolSkip(projectId: string): boolean {
+  if (toolSkipFlags.get(projectId)) {
+    toolSkipFlags.delete(projectId);
+    return true;
+  }
+  return false;
+}
+
+/** Throws if tool was skipped — use at async checkpoints in MCP tools. */
+function throwIfSkipped(projectId: string) {
+  if (checkToolSkip(projectId)) {
+    throw new Error("__TOOL_SKIPPED__ User cancelled this tool. Continue with what you have — do NOT retry this tool unless the user asks.");
+  }
+}
+
+/** Wrap a fetch call with skip checking — polls the skip flag while waiting. */
+async function skippableFetch(projectId: string, url: string, opts?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const check = setInterval(() => {
+    if (toolSkipFlags.get(projectId)) {
+      toolSkipFlags.delete(projectId);
+      controller.abort();
+    }
+  }, 500);
+  try {
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } catch (err: any) {
+    if (controller.signal.aborted) {
+      throw new Error("__TOOL_SKIPPED__ User cancelled this tool. Continue with what you have — do NOT retry this tool unless the user asks.");
+    }
+    throw err;
+  } finally {
+    clearInterval(check);
+  }
+}
+
 // POST /api/agent/queue — DISABLED. The server-side queue caused duplicate
 // messages to pile up; queueing is now handled entirely on the client via
 // localStorage in useAgentChat. We accept the request and discard it for
@@ -1946,6 +1988,15 @@ app.post("/api/agent/stop", (req, res) => {
   } else {
     res.json({ success: false, message: "No active agent for this project" });
   }
+});
+
+// POST /api/agent/skip-tool — skip the currently running tool without killing the query
+app.post("/api/agent/skip-tool", (req, res) => {
+  const { projectId } = req.body;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+  toolSkipFlags.set(projectId, true);
+  console.log(`[agent] Tool skip requested for ${projectId}`);
+  res.json({ success: true });
 });
 
 // POST /api/agent — Run Claude Agent SDK

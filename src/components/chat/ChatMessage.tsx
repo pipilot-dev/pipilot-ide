@@ -561,6 +561,28 @@ function SubAgentCard({ toolCall, childToolCalls = [] }: { toolCall: ToolCallInf
 
 function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [skipping, setSkipping] = useState(false);
+  const startTimeRef = useRef(Date.now());
+
+  // Track how long this tool has been running
+  useEffect(() => {
+    if (toolCall.status !== "running") { setElapsed(0); return; }
+    startTimeRef.current = Date.now();
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [toolCall.status]);
+
+  const showSkip = toolCall.status === "running" && elapsed >= 45 && !skipping;
+
+  const handleSkip = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSkipping(true);
+    try {
+      // Dispatch event — the ChatPanel (which has projectId) will call the API
+      window.dispatchEvent(new CustomEvent("pipilot:skip-tool"));
+    } catch {}
+  };
 
   let parsedArgs: Record<string, unknown> = {};
   try { parsedArgs = JSON.parse(toolCall.arguments); } catch { /* */ }
@@ -743,8 +765,30 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCallInfo }) {
         ) : null}
 
 
+        {/* Skip button — appears after 45s of running */}
+        {showSkip && (
+          <span
+            onClick={handleSkip}
+            style={{
+              marginLeft: "auto", flexShrink: 0, padding: "1px 6px",
+              fontSize: 8, fontFamily: FONTS.mono, fontWeight: 700,
+              color: C.warn, background: `${C.warn}15`, border: `1px solid ${C.warn}30`,
+              borderRadius: 3, cursor: "pointer", letterSpacing: "0.06em",
+              textTransform: "uppercase", transition: "background 0.15s",
+            }}
+            title="Skip this tool — agent continues without the result"
+          >
+            Skip
+          </span>
+        )}
+        {skipping && toolCall.status === "running" && (
+          <span style={{ marginLeft: "auto", flexShrink: 0, fontSize: 8, fontFamily: FONTS.mono, color: C.warn }}>
+            skipping...
+          </span>
+        )}
+
         {/* Expand arrow */}
-        <span className="ml-auto flex-shrink-0" style={{ color: C.textFaint }}>
+        <span className={`${!showSkip && !skipping ? "ml-auto" : "ml-1"} flex-shrink-0`} style={{ color: C.textFaint }}>
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         </span>
       </button>

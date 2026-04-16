@@ -856,6 +856,18 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
     setIsStreaming(false);
+    // Mark any running tool calls as "error" (cancelled) so the UI
+    // shows an X icon instead of an infinite spinner
+    setMessages((prev) => prev.map((m) => {
+      if (!m.toolCalls) return m;
+      const updated = m.toolCalls.map((tc) =>
+        tc.status === "running" || tc.status === "pending"
+          ? { ...tc, status: "error" as const, result: "Cancelled by user" }
+          : tc
+      );
+      const changed = updated.some((tc, i) => tc !== m.toolCalls![i]);
+      return changed ? { ...m, toolCalls: updated } : m;
+    }));
   }, []);
 
   // ── Queue actions ──
