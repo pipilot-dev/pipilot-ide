@@ -848,6 +848,84 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
     } catch (e: any) { res.status(502).json({ error: e.message }); }
   });
 
+  // POST /api/cloud/cloudflare/deploy — deploy project to Cloudflare Pages (direct upload)
+  router.post("/cloudflare/deploy", async (req, res) => {
+    const token = getToken(req.body.projectId, "cloudflare");
+    if (!token) return res.status(401).json({ error: "Cloudflare not connected. Add your API token in the Cloud panel first." });
+    const { projectId, projectName, branch } = req.body;
+    if (!projectName) return res.status(400).json({ error: "projectName required" });
+
+    try {
+      // 1. Get account ID
+      const acctRes = await fetch("https://api.cloudflare.com/client/v4/accounts", { headers: { Authorization: `Bearer ${token}` } });
+      const acctData = await acctRes.json() as any;
+      const accountId = acctData.result?.[0]?.id;
+      if (!accountId) return res.status(400).json({ error: "No Cloudflare account found. Check your API token permissions." });
+
+      // 2. Check if project exists, create if not
+      const projRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects/${projectName}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (projRes.status === 404) {
+        // Create the project
+        const createRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ name: projectName, production_branch: branch || "main" }),
+        });
+        const createData = await createRes.json() as any;
+        if (!createData.success) return res.status(400).json({ error: createData.errors?.[0]?.message || "Failed to create Pages project" });
+      }
+
+      // 3. Read project files and upload as direct upload deployment
+      const workDir = getWorkDir(projectId);
+      const FormData = (await import("form-data")).default;
+      const formData = new FormData();
+
+      // Walk the workspace and add files to the form
+      const addFiles = (dir: string, prefix: string) => {
+        const { readdirSync, readFileSync, statSync } = require("fs");
+        const { join } = require("path");
+        const skip = new Set(["node_modules", ".git", ".next", ".cache", "dist", "build", ".pipilot", ".vite", "coverage"]);
+        try {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            if (skip.has(entry.name) || entry.name.startsWith(".")) continue;
+            const full = join(dir, entry.name);
+            const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) {
+              addFiles(full, rel);
+            } else {
+              const stat = statSync(full);
+              if (stat.size > 25 * 1024 * 1024) continue; // skip files > 25MB
+              formData.append(rel, readFileSync(full), { filename: rel });
+            }
+          }
+        } catch {}
+      };
+      addFiles(workDir, "");
+
+      // 4. Create deployment via direct upload
+      const deployRes = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects/${projectName}/deployments`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...formData.getHeaders(),
+          },
+          body: formData as any,
+        }
+      );
+      const deployData = await deployRes.json() as any;
+      if (!deployData.success) {
+        return res.status(400).json({ error: deployData.errors?.[0]?.message || "Deployment failed" });
+      }
+
+      const url = deployData.result?.url || `https://${projectName}.pages.dev`;
+      res.json({ success: true, url, deploymentUrl: url, id: deployData.result?.id });
+    } catch (e: any) {
+      res.status(502).json({ error: e.message });
+    }
+  });
+
   // Global error handler — catches any unhandled errors in route handlers
   // so they return 500 instead of crashing the server process.
   router.use((err: any, _req: any, res: any, _next: any) => {

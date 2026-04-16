@@ -9,10 +9,11 @@ import {
   Bug,
   BookOpen,
   Cloud,
+  Rocket,
 } from "lucide-react";
 import { COLORS as C } from "@/lib/design-tokens";
 
-export type ActivityBarView = "explorer" | "search" | "source-control" | "extensions" | "debug" | "wiki" | "cloud";
+export type ActivityBarView = "explorer" | "search" | "source-control" | "extensions" | "debug" | "wiki" | "deploy" | "cloud";
 
 interface ActivityBarProps {
   activeView: ActivityBarView | null;
@@ -30,6 +31,7 @@ const ACTIVITIES: { id: ActivityBarView; icon: React.ReactNode; label: string }[
   { id: "debug", icon: <Bug size={18} strokeWidth={1.6} />, label: "Run and Debug" },
   { id: "extensions", icon: <Package size={18} strokeWidth={1.6} />, label: "Extensions" },
   { id: "wiki", icon: <BookOpen size={18} strokeWidth={1.6} />, label: "Wiki" },
+  { id: "deploy", icon: <Rocket size={18} strokeWidth={1.6} />, label: "Deploy" },
   { id: "cloud", icon: <Cloud size={18} strokeWidth={1.6} />, label: "Cloud" },
 ];
 

@@ -6,6 +6,7 @@ import { SidebarPanel } from "./SidebarPanel";
 import { EditorArea, EditorTab } from "./EditorArea";
 import { ChatPanel } from "../chat/ChatPanel";
 import { CloudPanel } from "../cloud/CloudPanel";
+import { DeploymentPanel } from "../deployment/DeploymentPanel";
 import { CommandPalette } from "./CommandPalette";
 import { TerminalPanel } from "./TerminalPanel";
 import SettingsPanel from "@/components/ide/SettingsPanel";
@@ -1360,8 +1361,15 @@ export function IDELayout() {
           </div>
         )}
 
+        {/* Deploy panel — full width, replaces sidebar + editor */}
+        {activeView === "deploy" && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+            <DeploymentPanel />
+          </div>
+        )}
+
         {/* Sidebar (hidden when cloud panel is active) */}
-        {activeView && activeView !== "cloud" && (
+        {activeView && activeView !== "cloud" && activeView !== "deploy" && (
           <>
             <div
               className="overflow-hidden border-r"
@@ -1403,7 +1411,7 @@ export function IDELayout() {
         )}
 
         {/* Editor + Terminal area (hidden when cloud panel is active) */}
-        <div className="flex-1 flex flex-col overflow-hidden" style={{ display: activeView === "cloud" ? "none" : undefined }}>
+        <div className="flex-1 flex flex-col overflow-hidden" style={{ display: (activeView === "cloud" || activeView === "deploy") ? "none" : undefined }}>
           <EditorArea
             tabs={tabs}
             activeTabId={activeTabId}

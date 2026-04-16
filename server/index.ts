@@ -4806,6 +4806,38 @@ app.post("/api/project/search", async (req, res) => {
   res.json({ results, truncated: results.length >= limit });
 });
 
+// ── Deployment History (persisted per-project) ─────────────────────
+
+function deployHistoryPath(projectId: string): string {
+  const dir = path.join(getWorkDir(projectId), ".pipilot");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, "deployments.json");
+}
+
+app.get("/api/deployments/list", (req, res) => {
+  const projectId = req.query.projectId as string;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+  try {
+    const p = deployHistoryPath(projectId);
+    const deployments = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : [];
+    res.json({ deployments });
+  } catch { res.json({ deployments: [] }); }
+});
+
+app.post("/api/deployments/record", express.json(), (req, res) => {
+  const { projectId, ...record } = req.body;
+  if (!projectId) return res.status(400).json({ error: "projectId required" });
+  try {
+    const p = deployHistoryPath(projectId);
+    const existing = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : [];
+    existing.unshift(record);
+    // Keep last 50
+    while (existing.length > 50) existing.pop();
+    fs.writeFileSync(p, JSON.stringify(existing, null, 2));
+    res.json({ success: true });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
 // ── Workspace Checkpoints (revert support for disk-backed projects) ─
 
 // GET /api/checkpoints/git-available — check if git is installed for checkpoints
