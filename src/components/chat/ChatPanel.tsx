@@ -2092,11 +2092,12 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                     style={{
                       display: "flex", alignItems: "center", justifyContent: "center",
                       width: 28, height: 28,
-                      background: canSend ? C.accent : "transparent",
-                      color: canSend ? "#fff" : C.textFaint,
-                      border: canSend ? "none" : `1px solid ${C.border}`,
+                      background: C.accent,
+                      color: "#fff",
+                      border: "none",
                       borderRadius: 6,
                       cursor: canSend ? "pointer" : "not-allowed",
+                      opacity: canSend ? 1 : 0.35,
                       transition: "all 0.15s",
                       flexShrink: 0,
                     }}
