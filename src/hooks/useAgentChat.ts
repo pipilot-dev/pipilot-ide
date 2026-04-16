@@ -551,9 +551,10 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
       const decoder = new TextDecoder();
       let buffer = "";
 
+      let streamEnded = false;
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done || streamEnded) break;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
@@ -564,6 +565,12 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
 
           try {
             const event = JSON.parse(line.slice(6));
+
+            // Server signals stream is complete — break out of reader loop
+            if (event.type === "done" || event.type === "complete") {
+              streamEnded = true;
+              break;
+            }
 
             switch (event.type) {
               case "text":
@@ -834,14 +841,12 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
         m.id === assistantId ? { ...m, streaming: false } : m
       ));
 
-      // Create checkpoint after (respects setting)
+      // Create checkpoint after (fire-and-forget — don't block streaming state)
       if (checkpointManagerRef.current && checkpointsOn) {
-        try {
-          await checkpointManagerRef.current.createCheckpoint(
-            `After: ${userContent.slice(0, 50)}`,
-            userMsg.id
-          );
-        } catch {}
+        checkpointManagerRef.current.createCheckpoint(
+          `After: ${userContent.slice(0, 50)}`,
+          userMsg.id
+        ).catch(() => {});
       }
     } catch (err: any) {
       if (err.name !== "AbortError") {
