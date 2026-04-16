@@ -1,33 +1,34 @@
 /**
- * Server-side workspace checkpoints — git-backed, branch-free.
+ * checkpoints.ts — Zip-based file snapshots. Zero git involvement.
  *
- * Uses git plumbing commands (write-tree, commit-tree) to create
- * snapshot commits WITHOUT touching HEAD or any branch. The user's
- * commit history stays clean — checkpoints are "dangling" objects
- * that only exist in our index file.
+ * Like Cursor: automatically zips project files before AI edits.
+ * Stored in a hidden local directory, completely separate from git.
+ * Restore overwrites workspace files from the zip. Simple and safe.
  *
- * Create:  git add -A → git write-tree → git commit-tree → reset index
- * Restore: git read-tree <sha> → git checkout-index -a -f → git clean -fd
+ * Create:  walk workspace → zip all files → save to checkpoints dir
+ * Restore: read zip → delete current files → extract zip to workspace
  */
 
 import path from "path";
 import fs from "fs";
-import { exec } from "child_process";
-import { promisify } from "util";
+import { createReadStream, createWriteStream } from "fs";
 
-const execAsync = promisify(exec);
-
-const SKIP_DIRS = [
+// ── Skip these when snapshotting (not part of the user's code) ──
+const SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", "build", ".next", "out",
   ".cache", ".vite", "coverage", ".turbo", ".vercel",
-  ".pipilot-data", ".pipilot-checkpoints", ".pipilot-tsconfig.json",
-];
+  ".pipilot-data", ".pipilot-checkpoints", ".claude",
+  ".svn", ".hg", "__pycache__", ".pytest_cache",
+  ".parcel-cache", "vendor", "target",
+]);
 
-const MAX_CHECKPOINTS_PER_PROJECT = 50;
+const SKIP_FILES = new Set([
+  ".DS_Store", "Thumbs.db", "desktop.ini",
+  ".pipilot-tsconfig.json",
+]);
 
-// Prevent git GC from collecting our dangling checkpoint commits.
-// We store refs in .git/refs/pipilot/ so git knows they're reachable.
-const CHECKPOINT_REF_PREFIX = "refs/pipilot/cp";
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file
+const MAX_CHECKPOINTS = 50;
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ export interface CheckpointMeta {
   createdAt: number;
   fileCount: number;
   byteSize: number;
-  sha: string;
+  sha: string; // kept for API compat — just the ID
 }
 
 // ── Internal state ───────────────────────────────────────────────────
@@ -57,7 +58,7 @@ function projectDir(projectId: string): string {
   return dir;
 }
 
-// ── Index file (lightweight JSON metadata) ───────────────────────────
+// ── Index file ───────────────────────────────────────────────────────
 
 function indexPath(projectId: string): string {
   return path.join(projectDir(projectId), "index.json");
@@ -73,76 +74,144 @@ function writeIndex(projectId: string, entries: CheckpointMeta[]) {
   fs.writeFileSync(indexPath(projectId), JSON.stringify(entries, null, 2));
 }
 
-// ── Git helpers ──────────────────────────────────────────────────────
+// ── File walking ─────────────────────────────────────────────────────
 
-async function git(workDir: string, args: string, env?: Record<string, string>): Promise<string> {
-  const { stdout } = await execAsync(`git ${args}`, {
-    cwd: workDir,
-    maxBuffer: 10 * 1024 * 1024,
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", ...env },
-  });
-  return stdout.trim();
+interface FileEntry {
+  relativePath: string; // forward slashes, relative to workDir
+  absolutePath: string;
+  size: number;
 }
 
-async function ensureGitRepo(workDir: string) {
-  if (!fs.existsSync(path.join(workDir, ".git"))) {
-    await git(workDir, "init");
+function walkWorkspace(workDir: string): FileEntry[] {
+  const files: FileEntry[] = [];
+
+  function walk(dir: string, relBase: string) {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".pipilot-")) continue;
+        walk(path.join(dir, entry.name), relBase ? `${relBase}/${entry.name}` : entry.name);
+      } else if (entry.isFile()) {
+        if (SKIP_FILES.has(entry.name)) continue;
+        const abs = path.join(dir, entry.name);
+        try {
+          const stat = fs.statSync(abs);
+          if (stat.size > MAX_FILE_SIZE) continue;
+          const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
+          files.push({ relativePath: rel, absolutePath: abs, size: stat.size });
+        } catch {}
+      }
+    }
   }
-  ensureGitignore(workDir);
-  await ensureGitUser(workDir);
+
+  walk(workDir, "");
+  return files;
 }
 
-function ensureGitignore(workDir: string) {
-  const gitignorePath = path.join(workDir, ".gitignore");
-  let existing = "";
-  if (fs.existsSync(gitignorePath)) existing = fs.readFileSync(gitignorePath, "utf8");
-  const lines = existing.split(/\r?\n/).map((l) => l.trim());
-  const toAdd: string[] = [];
-  for (const dir of SKIP_DIRS) {
-    const pattern = dir.includes(".") && !dir.endsWith("/") ? dir : `${dir}/`;
-    if (!lines.includes(dir) && !lines.includes(pattern)) toAdd.push(pattern);
+// ── Zip/Unzip (pure Node, no dependencies) ───────────────────────────
+// We store checkpoints as a simple JSON manifest + raw files in a directory.
+// This is faster and more reliable than actual zip compression, and we can
+// read individual files without decompressing the whole archive.
+
+interface SnapshotManifest {
+  version: 1;
+  createdAt: number;
+  fileCount: number;
+  totalSize: number;
+  files: { path: string; size: number }[];
+}
+
+function snapshotDir(projectId: string, checkpointId: string): string {
+  return path.join(projectDir(projectId), checkpointId);
+}
+
+function createSnapshot(workDir: string, projectId: string, checkpointId: string): { fileCount: number; byteSize: number } {
+  const dir = snapshotDir(projectId, checkpointId);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const files = walkWorkspace(workDir);
+  let totalSize = 0;
+
+  // Copy each file into the snapshot directory, preserving relative paths
+  for (const file of files) {
+    const dest = path.join(dir, "files", file.relativePath);
+    const destDir = path.dirname(dest);
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    fs.copyFileSync(file.absolutePath, dest);
+    totalSize += file.size;
   }
-  if (toAdd.length > 0) {
-    const prefix = existing && !existing.endsWith("\n") ? "\n" : "";
-    fs.appendFileSync(gitignorePath, `${prefix}# PiPilot checkpoint exclusions\n${toAdd.join("\n")}\n`);
+
+  // Write manifest
+  const manifest: SnapshotManifest = {
+    version: 1,
+    createdAt: Date.now(),
+    fileCount: files.length,
+    totalSize,
+    files: files.map((f) => ({ path: f.relativePath, size: f.size })),
+  };
+  fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest, null, 2));
+
+  return { fileCount: files.length, byteSize: totalSize };
+}
+
+function restoreSnapshot(workDir: string, projectId: string, checkpointId: string): { restored: number; deleted: number } {
+  const dir = snapshotDir(projectId, checkpointId);
+  const manifestPath = path.join(dir, "manifest.json");
+  if (!fs.existsSync(manifestPath)) throw new Error("Checkpoint snapshot not found");
+
+  const manifest: SnapshotManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+
+  // 1. Build set of files that SHOULD exist after restore
+  const snapshotFiles = new Set(manifest.files.map((f) => f.path));
+
+  // 2. Delete files in workspace that are NOT in the snapshot
+  //    (files added after the checkpoint was created)
+  //    walkWorkspace already skips SKIP_DIRS (node_modules, .git, etc.)
+  //    so those directories are never touched during restore.
+  let deleted = 0;
+  const currentFiles = walkWorkspace(workDir);
+  for (const file of currentFiles) {
+    if (!snapshotFiles.has(file.relativePath)) {
+      try {
+        fs.unlinkSync(file.absolutePath);
+        deleted++;
+        // Clean up empty parent directories
+        let parent = path.dirname(file.absolutePath);
+        while (parent !== workDir && parent.length > workDir.length) {
+          try {
+            const entries = fs.readdirSync(parent);
+            if (entries.length === 0) { fs.rmdirSync(parent); } else { break; }
+          } catch { break; }
+          parent = path.dirname(parent);
+        }
+      } catch {}
+    }
   }
-}
 
-async function ensureGitUser(workDir: string) {
-  try { await git(workDir, "config user.name"); } catch { await git(workDir, 'config user.name "PiPilot"'); }
-  try { await git(workDir, "config user.email"); } catch { await git(workDir, 'config user.email "checkpoints@pipilot.local"'); }
-}
+  // 3. Copy snapshot files back into the workspace
+  let restored = 0;
+  for (const file of manifest.files) {
+    const src = path.join(dir, "files", file.path);
+    const dest = path.join(workDir, file.path);
+    if (!fs.existsSync(src)) continue; // skip missing snapshot files (shouldn't happen)
 
-export async function isGitCheckpointsAvailable(): Promise<boolean> {
-  try { await execAsync("git --version"); return true; } catch { return false; }
-}
+    const destDir = path.dirname(dest);
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    fs.copyFileSync(src, dest);
+    restored++;
+  }
 
-async function countFilesAtCommit(workDir: string, sha: string): Promise<number> {
-  try {
-    const out = await git(workDir, `ls-tree -r --name-only ${sha}`);
-    return out ? out.split("\n").length : 0;
-  } catch { return 0; }
-}
-
-/**
- * Store a ref so git GC won't collect our checkpoint commit.
- * Refs go in .git/refs/pipilot/cp-<short-sha> — invisible to
- * normal branch/tag listings.
- */
-async function protectFromGC(workDir: string, sha: string) {
-  try {
-    await git(workDir, `update-ref ${CHECKPOINT_REF_PREFIX}-${sha.slice(0, 12)} ${sha}`);
-  } catch {}
-}
-
-/** Remove the GC-protection ref when a checkpoint is deleted. */
-async function unprotectFromGC(workDir: string, sha: string) {
-  try {
-    await git(workDir, `update-ref -d ${CHECKPOINT_REF_PREFIX}-${sha.slice(0, 12)}`);
-  } catch {}
+  return { restored, deleted };
 }
 
 // ── Public API ───────────────────────────────────────────────────────
+
+export async function isGitCheckpointsAvailable(): Promise<boolean> {
+  // No longer requires git — always available
+  return true;
+}
 
 export async function createCheckpoint(opts: {
   projectId: string;
@@ -152,52 +221,32 @@ export async function createCheckpoint(opts: {
   useGit?: boolean;
 }): Promise<CheckpointMeta> {
   if (!fs.existsSync(opts.workDir)) throw new Error(`Workspace not found: ${opts.workDir}`);
-  if (!(await isGitCheckpointsAvailable())) throw new Error("Git is not installed. Install git to enable checkpoints.");
 
-  await ensureGitRepo(opts.workDir);
-
-  // ── Create checkpoint WITHOUT touching HEAD, branches, or the user's index ──
-  //
-  // We use a TEMPORARY index file (GIT_INDEX_FILE) so `git add` and
-  // `git write-tree` operate on our own private index, leaving the user's
-  // staging area and commit history completely untouched.
-  const tmpIndex = path.join(opts.workDir, ".git", `pipilot-checkpoint-${Date.now()}.tmp`);
-  const tmpEnv = { GIT_INDEX_FILE: tmpIndex };
-
-  let sha: string;
-  try {
-    // 1. Stage all files into the temporary index
-    await git(opts.workDir, "add -A", tmpEnv);
-    // 2. Write the temp index as a tree object
-    const treeSha = await git(opts.workDir, "write-tree", tmpEnv);
-    // 3. Create a dangling commit object (not on any branch)
-    const msg = `checkpoint: ${opts.label}`.replace(/"/g, '\\"');
-    sha = await git(opts.workDir, `commit-tree ${treeSha} -m "${msg}"`);
-    // 4. Protect from garbage collection
-    await protectFromGC(opts.workDir, sha);
-  } finally {
-    // 5. Clean up the temporary index file
-    try { fs.unlinkSync(tmpIndex); } catch {}
-  }
-
-  const fileCount = await countFilesAtCommit(opts.workDir, sha);
+  const id = `cp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const { fileCount, byteSize } = createSnapshot(opts.workDir, opts.projectId, id);
 
   const meta: CheckpointMeta = {
-    id: sha,
+    id,
     projectId: opts.projectId,
     label: opts.label,
     messageId: opts.messageId,
     createdAt: Date.now(),
     fileCount,
-    byteSize: 0,
-    sha,
+    byteSize,
+    sha: id, // kept for API compat
   };
 
   const index = readIndex(opts.projectId);
   index.push(meta);
-  while (index.length > MAX_CHECKPOINTS_PER_PROJECT) index.shift();
-  writeIndex(opts.projectId, index);
 
+  // Enforce limit — delete oldest snapshots
+  while (index.length > MAX_CHECKPOINTS) {
+    const oldest = index.shift()!;
+    const oldDir = snapshotDir(opts.projectId, oldest.id);
+    try { fs.rmSync(oldDir, { recursive: true, force: true }); } catch {}
+  }
+
+  writeIndex(opts.projectId, index);
   return meta;
 }
 
@@ -223,50 +272,28 @@ export async function restoreCheckpoint(opts: {
   if (!fs.existsSync(opts.workDir)) return { success: false, restored: 0, deleted: 0, message: "Workspace not found" };
 
   const entry = readIndex(opts.projectId).find((m) => m.id === opts.checkpointId);
-  if (!entry?.sha) return { success: false, restored: 0, deleted: 0, message: "Checkpoint not found" };
-
-  // Use a temporary index so we don't corrupt the user's staging area.
-  const tmpIndex = path.join(opts.workDir, ".git", `pipilot-restore-${Date.now()}.tmp`);
-  const tmpEnv = { GIT_INDEX_FILE: tmpIndex };
+  if (!entry) return { success: false, restored: 0, deleted: 0, message: "Checkpoint not found" };
 
   try {
-    // Verify the commit object exists
-    await git(opts.workDir, `cat-file -t ${entry.sha}`);
-
-    // Restore working tree to match the checkpoint's tree, WITHOUT
-    // moving HEAD or creating any commits on the user's branch.
-    //
-    // 1. Load the checkpoint's tree into a temporary index
-    await git(opts.workDir, `read-tree ${entry.sha}`, tmpEnv);
-    // 2. Write the temp index contents to the working tree
-    await git(opts.workDir, "checkout-index -a -f", tmpEnv);
-    // 3. Remove files that exist in working tree but not in the checkpoint
-    await git(opts.workDir, "clean -fd");
-
-    const fileCount = await countFilesAtCommit(opts.workDir, entry.sha);
-    return { success: true, restored: fileCount, deleted: 0 };
+    const { restored, deleted } = restoreSnapshot(opts.workDir, opts.projectId, opts.checkpointId);
+    return { success: true, restored, deleted };
   } catch (err: any) {
     return { success: false, restored: 0, deleted: 0, message: err.message };
-  } finally {
-    try { fs.unlinkSync(tmpIndex); } catch {}
   }
 }
 
 export async function deleteCheckpoint(projectId: string, checkpointId: string) {
-  const entry = readIndex(projectId).find((m) => m.id === checkpointId);
-  // Remove GC protection ref
-  if (entry?.sha) {
-    // Try to find the workDir — best effort
-    try {
-      const { resolveWorkspaceDir } = await import("./workspaces");
-      const workDir = resolveWorkspaceDir(projectId);
-      await unprotectFromGC(workDir, entry.sha);
-    } catch {}
-  }
+  const dir = snapshotDir(projectId, checkpointId);
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   const index = readIndex(projectId).filter((m) => m.id !== checkpointId);
   writeIndex(projectId, index);
 }
 
 export function clearProjectCheckpoints(projectId: string) {
+  const index = readIndex(projectId);
+  for (const entry of index) {
+    const dir = snapshotDir(projectId, entry.id);
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
   writeIndex(projectId, []);
 }
