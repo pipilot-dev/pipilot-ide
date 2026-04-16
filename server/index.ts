@@ -1577,6 +1577,160 @@ function createIdeToolServer(projectId: string) {
     },
   );
 
+  // ── multi_edit — atomic batch edits on a single file ──
+  // Applies multiple find-and-replace operations in one call.
+  // All edits succeed or none do (atomic rollback on failure).
+  // Edits are sorted top-to-bottom by position in the file to avoid offset drift.
+  const multiEdit = tool(
+    "multi_edit",
+    "Apply multiple edits to a single file atomically. All edits succeed or none do (rollback on failure). " +
+    "Much faster than calling Edit multiple times. Each edit is a find-and-replace: old_string must be unique " +
+    "in the file (or use is_regex for pattern matching). Edits are applied top-to-bottom by their position in the file.\n\n" +
+    "Use cases:\n" +
+    "- Rename a variable/function across a file\n" +
+    "- Update multiple imports at once\n" +
+    "- Refactor several related code blocks together\n" +
+    "- Delete multiple sections (set new_string to empty)\n" +
+    "- Insert at multiple positions (old_string is the anchor, new_string includes it + new code)",
+    {
+      file_path: z.string().describe("Absolute path to the file to edit"),
+      edits: z.array(z.object({
+        old_string: z.string().describe("Exact text to find in the file (must be unique unless replace_all is true)"),
+        new_string: z.string().describe("Replacement text (empty string to delete the match)"),
+        replace_all: z.boolean().optional().default(false).describe("Replace ALL occurrences of old_string, not just the first"),
+        description: z.string().optional().describe("Optional human-readable description of what this edit does"),
+      })).min(1).max(50).describe("Array of edits to apply, in any order (they get sorted by position automatically)"),
+      dry_run: z.boolean().optional().default(false).describe("If true, validate all edits but don't write the file. Returns a preview of changes."),
+    },
+    async (args) => {
+      try {
+        const filePath = args.file_path;
+
+        // 1. Read the file
+        if (!fs.existsSync(filePath)) {
+          return { content: [{ type: "text" as const, text: `Error: File not found: ${filePath}` }], isError: true };
+        }
+        const original = fs.readFileSync(filePath, "utf8");
+        let content = original;
+        const applied: { index: number; description: string; old: string; new: string; position: number; count: number }[] = [];
+        const errors: string[] = [];
+
+        // 2. Validate all edits BEFORE applying any
+        for (let i = 0; i < args.edits.length; i++) {
+          const edit = args.edits[i];
+          if (!edit.old_string && !edit.replace_all) {
+            errors.push(`Edit ${i + 1}: old_string cannot be empty (use Write tool to create files from scratch)`);
+            continue;
+          }
+          if (edit.old_string === edit.new_string) {
+            errors.push(`Edit ${i + 1}: old_string and new_string are identical — nothing to change`);
+            continue;
+          }
+
+          const occurrences = content.split(edit.old_string).length - 1;
+          if (occurrences === 0) {
+            errors.push(`Edit ${i + 1}${edit.description ? ` (${edit.description})` : ""}: old_string not found in file. Make sure it matches exactly (including whitespace and indentation).`);
+          } else if (occurrences > 1 && !edit.replace_all) {
+            errors.push(`Edit ${i + 1}${edit.description ? ` (${edit.description})` : ""}: old_string found ${occurrences} times — must be unique. Add more surrounding context to make it unique, or set replace_all: true.`);
+          }
+        }
+
+        if (errors.length > 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Multi-edit validation failed (${errors.length} error${errors.length > 1 ? "s" : ""}, 0 edits applied):\n\n${errors.map((e) => `- ${e}`).join("\n")}`,
+            }],
+            isError: true,
+          };
+        }
+
+        // 3. Sort edits by position in the file (top-to-bottom).
+        //    Apply from BOTTOM to TOP so earlier edits don't shift positions of later ones.
+        const editPositions = args.edits.map((edit, i) => ({
+          ...edit,
+          index: i,
+          position: content.indexOf(edit.old_string),
+        }));
+        editPositions.sort((a, b) => b.position - a.position); // bottom-first
+
+        // 4. Apply edits (bottom-to-top to preserve positions)
+        for (const edit of editPositions) {
+          const before = content;
+          if (edit.replace_all) {
+            // Replace all occurrences
+            const count = content.split(edit.old_string).length - 1;
+            content = content.split(edit.old_string).join(edit.new_string);
+            applied.push({
+              index: edit.index, description: edit.description || "",
+              old: edit.old_string.slice(0, 60), new: edit.new_string.slice(0, 60),
+              position: edit.position, count,
+            });
+          } else {
+            // Replace first (and only) occurrence
+            const pos = content.indexOf(edit.old_string);
+            if (pos === -1) {
+              // This shouldn't happen (validated above) but safety check
+              // ROLLBACK: restore original
+              return {
+                content: [{
+                  type: "text" as const,
+                  text: `Edit ${edit.index + 1} failed during apply (old_string vanished after earlier edits). All edits rolled back — file unchanged.`,
+                }],
+                isError: true,
+              };
+            }
+            content = content.slice(0, pos) + edit.new_string + content.slice(pos + edit.old_string.length);
+            applied.push({
+              index: edit.index, description: edit.description || "",
+              old: edit.old_string.slice(0, 60), new: edit.new_string.slice(0, 60),
+              position: pos, count: 1,
+            });
+          }
+        }
+
+        // 5. Dry run — return preview without writing
+        if (args.dry_run) {
+          const lines = {
+            added: content.split("\n").length - original.split("\n").length,
+            changed: applied.length,
+          };
+          const summary = applied
+            .sort((a, b) => a.index - b.index)
+            .map((a) => `  ${a.index + 1}. ${a.description || `"${a.old}..." → "${a.new}..."`}${a.count > 1 ? ` (${a.count}x)` : ""}`)
+            .join("\n");
+          return {
+            content: [{
+              type: "text" as const,
+              text: `DRY RUN — ${applied.length} edit${applied.length > 1 ? "s" : ""} would be applied to ${filePath}:\n${summary}\n\nNet line change: ${lines.added >= 0 ? "+" : ""}${lines.added}\nSet dry_run: false to apply.`,
+            }],
+          };
+        }
+
+        // 6. Write the file
+        fs.writeFileSync(filePath, content, "utf8");
+
+        // 7. Build result summary
+        const linesBefore = original.split("\n").length;
+        const linesAfter = content.split("\n").length;
+        const lineDelta = linesAfter - linesBefore;
+        const summary = applied
+          .sort((a, b) => a.index - b.index)
+          .map((a) => `  ${a.index + 1}. ${a.description || `"${a.old}${a.old.length >= 60 ? "..." : ""}" → "${a.new}${a.new.length >= 60 ? "..." : ""}"`}${a.count > 1 ? ` (${a.count} replacements)` : ""}`)
+          .join("\n");
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Applied ${applied.length} edit${applied.length > 1 ? "s" : ""} to ${filePath}:\n${summary}\n\nLines: ${linesBefore} → ${linesAfter} (${lineDelta >= 0 ? "+" : ""}${lineDelta})`,
+          }],
+        };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `multi_edit error: ${err.message}` }], isError: true };
+      }
+    },
+  );
+
   // ── Deployment tools — deploy to GitHub, Vercel, Netlify, Cloudflare ──
   // These give the agent (and its deployment subagent) direct access to
   // deploy, list, and manage deployments without needing Bash CLI commands.
@@ -1781,6 +1935,7 @@ function createIdeToolServer(projectId: string) {
       getDiagnostics, manageDevServer, searchNpm, getDevServerLogs,
       updateProjectContext, frontendDesignGuide, analyzeUi, screenshotPreview,
       memory, runInTerminal, searchCodebase, generateImage,
+      multiEdit,
       deployToGithub, deployToVercel, deployToNetlify, deployToCloudflare,
       publishToNpm, deployToCloudflareWorkers, listDeployments, checkConnectors,
     ],
