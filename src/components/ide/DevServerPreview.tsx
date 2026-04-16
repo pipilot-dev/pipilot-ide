@@ -769,17 +769,66 @@ export function DevServerPreview() {
           }}>
             {isRunning ? (
               <div style={{
-                width: typeof iframeWidth === "number" ? iframeWidth : "100%",
-                height: "100%",
+                width: typeof iframeWidth === "number" ? iframeWidth + (responsiveMode === "mobile" ? 24 : 0) : "100%",
+                height: responsiveMode === "mobile" ? "calc(100% - 16px)" : "100%",
+                maxHeight: responsiveMode === "mobile" ? 812 + 24 : undefined,
                 position: "relative",
-                transition: "width 0.2s ease",
-                ...(showResponsiveFrame ? {
+                transition: "all 0.3s ease",
+                ...(responsiveMode === "mobile" ? {
+                  // Phone frame
+                  border: `3px solid #2a2a30`,
+                  borderRadius: 36,
+                  overflow: "hidden",
+                  boxShadow: "0 8px 40px rgba(0,0,0,0.5), inset 0 0 0 1px #3a3a42",
+                  background: "#000",
+                  margin: "8px 0",
+                } : showResponsiveFrame ? {
                   border: `1px solid ${C.border}`,
                   borderRadius: 4,
                   overflow: "hidden",
                   boxShadow: "0 4px 24px rgba(0,0,0,0.3)",
                 } : {}),
               }}>
+                {/* Phone notch + status bar (mobile mode only) */}
+                {responsiveMode === "mobile" && (
+                  <div style={{
+                    position: "relative", zIndex: 3,
+                    height: 44, background: "#000",
+                    display: "flex", alignItems: "flex-end", justifyContent: "center",
+                    paddingBottom: 4,
+                  }}>
+                    {/* Dynamic Island / Notch */}
+                    <div style={{
+                      position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
+                      width: 100, height: 24, borderRadius: 14,
+                      background: "#1a1a1e",
+                    }} />
+                    {/* Status bar items */}
+                    <div style={{
+                      position: "absolute", top: 10, left: 20,
+                      fontSize: 10, fontWeight: 600, color: "#fff",
+                      fontFamily: FONTS.sans,
+                    }}>
+                      {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                    <div style={{
+                      position: "absolute", top: 10, right: 16,
+                      display: "flex", alignItems: "center", gap: 4,
+                    }}>
+                      {/* Signal bars */}
+                      <svg width="14" height="10" viewBox="0 0 14 10"><rect x="0" y="7" width="2" height="3" rx="0.5" fill="#fff"/><rect x="3" y="5" width="2" height="5" rx="0.5" fill="#fff"/><rect x="6" y="3" width="2" height="7" rx="0.5" fill="#fff"/><rect x="9" y="0" width="2" height="10" rx="0.5" fill="#fff"/></svg>
+                      {/* WiFi */}
+                      <svg width="12" height="10" viewBox="0 0 12 10"><path d="M6 9a1 1 0 100-2 1 1 0 000 2z" fill="#fff"/><path d="M3.5 6.5a3.5 3.5 0 015 0" stroke="#fff" strokeWidth="1.2" fill="none" strokeLinecap="round"/><path d="M1.5 4.5a6 6 0 019 0" stroke="#fff" strokeWidth="1.2" fill="none" strokeLinecap="round"/></svg>
+                      {/* Battery */}
+                      <div style={{ display: "flex", alignItems: "center" }}>
+                        <div style={{ width: 18, height: 8, borderRadius: 2, border: "1px solid #fff", padding: 1, position: "relative" }}>
+                          <div style={{ width: "70%", height: "100%", borderRadius: 1, background: "#34d399" }} />
+                        </div>
+                        <div style={{ width: 1.5, height: 4, background: "#fff", borderRadius: "0 1px 1px 0", marginLeft: 0.5 }} />
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {iframeLoading && (
                   <div style={{
                     position: "absolute", inset: 0, zIndex: 2,
@@ -825,6 +874,21 @@ export function DevServerPreview() {
                       <Camera size={16} />
                       {capturing ? "Capturing DOM tree..." : "Click to capture page structure & attach to chat"}
                     </div>
+                  </div>
+                )}
+
+                {/* Home indicator bar (mobile mode only) */}
+                {responsiveMode === "mobile" && (
+                  <div style={{
+                    position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 3,
+                    height: 28, background: "linear-gradient(transparent, rgba(0,0,0,0.6))",
+                    display: "flex", alignItems: "flex-end", justifyContent: "center",
+                    paddingBottom: 6,
+                  }}>
+                    <div style={{
+                      width: 100, height: 4, borderRadius: 2,
+                      background: "rgba(255,255,255,0.5)",
+                    }} />
                   </div>
                 )}
               </div>
