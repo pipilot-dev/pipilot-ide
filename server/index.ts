@@ -2570,6 +2570,9 @@ Technology expertise: Docker, Kubernetes, GitHub Actions, Terraform, Helm, ArgoC
               "mcp__pipilot__list_deployments",
               "mcp__pipilot__check_connectors",
               "mcp__pipilot__manage_dev_server",
+              "mcp__context7__*",
+              "WebFetch",
+              "WebSearch",
             ],
             model: "sonnet" as const,
           },
@@ -4492,18 +4495,26 @@ app.post("/api/terminal/destroy", (req, res) => {
 
 // ── Git Endpoints ────────────────────────────────────────────────────
 /**
- * Load user-configured MCP servers from .pipilot/mcp.json in the workspace.
+ * Load user-configured MCP servers from both global and project scope.
+ * Global: CONFIG_DIR/mcp.json (applies to all projects)
+ * Project: .pipilot/mcp.json (applies to current project only, overrides global)
  * Format: { "mcpServers": { "name": { type, url, headers?, command?, args?, env? } } }
  */
-function loadUserMcpServers(workDir: string): Record<string, any> {
+const GLOBAL_PIPILOT_DIR = path.join(CHECKPOINT_DIR, "..", "config"); // CONFIG_DIR
+
+function loadJsonSafe(filePath: string): any {
   try {
-    const mcpPath = path.join(workDir, ".pipilot", "mcp.json");
-    if (!fs.existsSync(mcpPath)) return {};
-    const data = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-    return data.mcpServers || {};
-  } catch {
-    return {};
-  }
+    if (!fs.existsSync(filePath)) return {};
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch { return {}; }
+}
+
+function loadUserMcpServers(workDir: string): Record<string, any> {
+  // Global scope
+  const globalServers = loadJsonSafe(path.join(CONFIG_DIR, "mcp.json")).mcpServers || {};
+  // Project scope (overrides global)
+  const projectServers = loadJsonSafe(path.join(workDir, ".pipilot", "mcp.json")).mcpServers || {};
+  return { ...globalServers, ...projectServers };
 }
 
 /**
@@ -4524,39 +4535,40 @@ const CONNECTOR_ENV_MAP: Record<string, (token: string) => Record<string, string
 };
 
 function loadConnectorEnvVars(workDir: string): Record<string, string> {
-  try {
-    const p = path.join(workDir, ".pipilot", "connectors.json");
-    if (!fs.existsSync(p)) return {};
-    const data = JSON.parse(fs.readFileSync(p, "utf8"));
-    const envs: Record<string, string> = {};
-    for (const [id, cfg] of Object.entries(data.connectors || {})) {
-      const c = cfg as any;
-      if (!c.enabled || !c.token) continue;
-      const mapper = CONNECTOR_ENV_MAP[id];
-      if (mapper) {
-        Object.assign(envs, mapper(c.token));
-      } else if (c.envVar) {
-        // Custom connector with a user-defined env var name
-        envs[c.envVar] = c.token;
-      }
+  const envs: Record<string, string> = {};
+  // Merge global connectors first, then project connectors (project overrides global)
+  const globalConnectors = loadJsonSafe(path.join(CONFIG_DIR, "connectors.json")).connectors || {};
+  const projectConnectors = loadJsonSafe(path.join(workDir, ".pipilot", "connectors.json")).connectors || {};
+  const merged = { ...globalConnectors, ...projectConnectors };
+
+  for (const [id, cfg] of Object.entries(merged)) {
+    const c = cfg as any;
+    if (!c.enabled || !c.token) continue;
+    const mapper = CONNECTOR_ENV_MAP[id];
+    if (mapper) {
+      Object.assign(envs, mapper(c.token));
+    } else if (c.envVar) {
+      envs[c.envVar] = c.token;
     }
-    return envs;
-  } catch { return {}; }
+  }
+  return envs;
 }
 
-/** Build a context string listing which CLI connectors are configured. */
+/** Build a context string listing which CLI connectors are configured (global + project merged). */
 function getConnectorContext(workDir: string): string {
   try {
-    const p = path.join(workDir, ".pipilot", "connectors.json");
-    if (!fs.existsSync(p)) return "";
-    const data = JSON.parse(fs.readFileSync(p, "utf8"));
+    const globalConnectors = loadJsonSafe(path.join(CONFIG_DIR, "connectors.json")).connectors || {};
+    const projectConnectors = loadJsonSafe(path.join(workDir, ".pipilot", "connectors.json")).connectors || {};
+    const merged = { ...globalConnectors, ...projectConnectors };
+
     const lines: string[] = [];
-    for (const [id, cfg] of Object.entries(data.connectors || {})) {
+    for (const [id, cfg] of Object.entries(merged)) {
       const c = cfg as any;
       if (!c.enabled || !c.token) continue;
       const envName = CONNECTOR_ENV_MAP[id] ? Object.keys(CONNECTOR_ENV_MAP[id](c.token))[0] : c.envVar || "";
       const desc = c.description || "";
-      lines.push(`- **${id}**${desc ? ` (${desc})` : ""}: use \`${id}\` CLI commands (token in \`${envName}\`, no login needed)`);
+      const scope = projectConnectors[id] ? "project" : "global";
+      lines.push(`- **${id}**${desc ? ` (${desc})` : ""} [${scope}]: use \`${id}\` CLI commands (token in \`${envName}\`, no login needed)`);
     }
     if (lines.length === 0) return "";
     return `\n## CLI Connectors (pre-authenticated)\nThe following CLI tools are configured with tokens — use them directly via Bash:\n${lines.join("\n")}\n`;
@@ -5536,11 +5548,11 @@ app.post("/api/mcp/config", express.json(), (req, res) => {
 
 // Install an MCP server (add to project config)
 app.post("/api/mcp/install", express.json(), (req, res) => {
-  const { projectId, name, config } = req.body;
-  if (!projectId || !name || !config) return res.status(400).json({ error: "projectId, name, config required" });
-  const workDir = getWorkDir(projectId);
+  const { projectId, name, config, scope } = req.body;
+  if (!name || !config) return res.status(400).json({ error: "name, config required" });
+  const isGlobal = scope === "global";
+  const pipilotDir = isGlobal ? CONFIG_DIR : path.join(getWorkDir(projectId || ""), ".pipilot");
   try {
-    const pipilotDir = path.join(workDir, ".pipilot");
     if (!fs.existsSync(pipilotDir)) fs.mkdirSync(pipilotDir, { recursive: true });
     const mcpPath = path.join(pipilotDir, "mcp.json");
     let data: any = { mcpServers: {} };
@@ -5553,13 +5565,15 @@ app.post("/api/mcp/install", express.json(), (req, res) => {
   }
 });
 
-// Uninstall an MCP server (remove from project config)
+// Uninstall an MCP server
 app.post("/api/mcp/uninstall", express.json(), (req, res) => {
-  const { projectId, name } = req.body;
-  if (!projectId || !name) return res.status(400).json({ error: "projectId, name required" });
-  const workDir = getWorkDir(projectId);
+  const { projectId, name, scope } = req.body;
+  if (!name) return res.status(400).json({ error: "name required" });
+  const isGlobal = scope === "global";
+  const mcpPath = isGlobal
+    ? path.join(CONFIG_DIR, "mcp.json")
+    : path.join(getWorkDir(projectId || ""), ".pipilot", "mcp.json");
   try {
-    const mcpPath = path.join(workDir, ".pipilot", "mcp.json");
     if (!fs.existsSync(mcpPath)) return res.json({ success: true });
     const data = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
     delete data.mcpServers?.[name];
@@ -5740,26 +5754,37 @@ app.get("/api/connectors/list", (_req, res) => {
 
 app.get("/api/connectors/config", (req, res) => {
   const projectId = req.query.projectId as string;
-  if (!projectId) return res.status(400).json({ error: "projectId required" });
-  const workDir = getWorkDir(projectId);
   try {
-    const p = path.join(workDir, ".pipilot", "connectors.json");
-    if (!fs.existsSync(p)) return res.json({ connectors: {} });
-    const data = JSON.parse(fs.readFileSync(p, "utf8"));
-    // Strip actual token values for security — only return enabled state + metadata
-    const safe: Record<string, { enabled: boolean; hasToken: boolean; envVar?: string; label?: string; description?: string; custom?: boolean }> = {};
     const builtinIds = new Set(CLI_CONNECTORS.map((c) => c.id));
-    for (const [id, cfg] of Object.entries(data.connectors || {})) {
-      const c = cfg as any;
+    const safe: Record<string, { enabled: boolean; hasToken: boolean; scope: "global" | "project"; envVar?: string; label?: string; description?: string; custom?: boolean }> = {};
+
+    // Load global connectors
+    const globalData = loadJsonSafe(path.join(CONFIG_DIR, "connectors.json"));
+    for (const [id, cfg] of Object.entries((globalData.connectors || {}) as Record<string, any>)) {
       safe[id] = {
-        enabled: !!c.enabled,
-        hasToken: !!c.token,
-        ...(c.envVar ? { envVar: c.envVar } : {}),
-        ...(c.label ? { label: c.label } : {}),
-        ...(c.description ? { description: c.description } : {}),
+        enabled: !!cfg.enabled, hasToken: !!cfg.token, scope: "global",
+        ...(cfg.envVar ? { envVar: cfg.envVar } : {}),
+        ...(cfg.label ? { label: cfg.label } : {}),
+        ...(cfg.description ? { description: cfg.description } : {}),
         ...(!builtinIds.has(id) ? { custom: true } : {}),
       };
     }
+
+    // Load project connectors (override global)
+    if (projectId) {
+      const workDir = getWorkDir(projectId);
+      const projectData = loadJsonSafe(path.join(workDir, ".pipilot", "connectors.json"));
+      for (const [id, cfg] of Object.entries((projectData.connectors || {}) as Record<string, any>)) {
+        safe[id] = {
+          enabled: !!cfg.enabled, hasToken: !!cfg.token, scope: "project",
+          ...(cfg.envVar ? { envVar: cfg.envVar } : {}),
+          ...(cfg.label ? { label: cfg.label } : {}),
+          ...(cfg.description ? { description: cfg.description } : {}),
+          ...(!builtinIds.has(id) ? { custom: true } : {}),
+        };
+      }
+    }
+
     res.json({ connectors: safe });
   } catch {
     res.json({ connectors: {} });
@@ -5767,11 +5792,12 @@ app.get("/api/connectors/config", (req, res) => {
 });
 
 app.post("/api/connectors/save", express.json(), (req, res) => {
-  const { projectId, connectorId, token, enabled, envVar, label, description } = req.body;
-  if (!projectId || !connectorId) return res.status(400).json({ error: "projectId, connectorId required" });
-  const workDir = getWorkDir(projectId);
+  const { projectId, connectorId, token, enabled, envVar, label, description, scope } = req.body;
+  if (!connectorId) return res.status(400).json({ error: "connectorId required" });
+  // scope: "global" → CONFIG_DIR, "project" (default) → .pipilot/ in workspace
+  const isGlobal = scope === "global";
+  const dir = isGlobal ? CONFIG_DIR : path.join(getWorkDir(projectId || ""), ".pipilot");
   try {
-    const dir = path.join(workDir, ".pipilot");
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const p = path.join(dir, "connectors.json");
     let data: any = { connectors: {} };
