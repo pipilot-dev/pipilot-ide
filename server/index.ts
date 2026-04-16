@@ -50,7 +50,7 @@ app.use(cors());
 // even small video clips) inflated by base64 (~33% overhead) fit comfortably.
 app.use(express.json({ limit: "1gb" }));
 
-import { PORT_AGENT, WORKSPACE_BASE as WORKSPACE_DIR, CHECKPOINT_DIR } from "./config";
+import { PORT_AGENT, WORKSPACE_BASE as WORKSPACE_DIR, CHECKPOINT_DIR, CONFIG_DIR } from "./config";
 const PORT = process.env.PORT || PORT_AGENT;
 // Workspaces live in the project root, not in temp
 const WORKSPACE_BASE = WORKSPACE_DIR;
