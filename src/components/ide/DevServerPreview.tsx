@@ -933,7 +933,10 @@ export function DevServerPreview() {
 
                     {phoneOverlay === "notifications" && (
                       <div onClick={(e) => e.stopPropagation()} style={{ padding: "48px 16px 16px", flex: 1, overflowY: "auto" }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: "#fff", fontFamily: FONTS.sans, marginBottom: 12 }}>Notifications</div>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", fontFamily: FONTS.sans }}>Notifications</span>
+                          <button onClick={() => setPhoneOverlay("none")} style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 12, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#fff", fontSize: 11 }}>✕</button>
+                        </div>
                         {[
                           { app: "PiPilot", msg: "Build succeeded — app running on :8081", time: "now", color: "#FF6B35" },
                           { app: "Expo", msg: "Metro bundler ready", time: "2m", color: "#4630EB" },
@@ -959,6 +962,10 @@ export function DevServerPreview() {
 
                     {phoneOverlay === "quicksettings" && (
                       <div onClick={(e) => e.stopPropagation()} style={{ padding: "48px 16px 16px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", fontFamily: FONTS.sans }}>Quick Settings</span>
+                          <button onClick={() => setPhoneOverlay("none")} style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 12, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#fff", fontSize: 11 }}>✕</button>
+                        </div>
                         {/* Brightness slider */}
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
