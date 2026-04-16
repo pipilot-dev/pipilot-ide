@@ -502,6 +502,17 @@ export function DeploymentPanel() {
             {/* Vercel */}
             {platform === "vercel" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{
+                  display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 14px",
+                  background: `${C.info}08`, border: `1px solid ${C.info}20`, borderRadius: 6,
+                }}>
+                  <ArrowRight size={12} style={{ color: C.info, flexShrink: 0, marginTop: 2 }} />
+                  <span style={{ fontFamily: F.s, fontSize: 10, color: C.info, lineHeight: 1.5 }}>
+                    <strong>Tip:</strong> For auto-deploy on every git push, connect a GitHub repo instead.
+                    Push to GitHub first, then link the repo in <a href="https://vercel.com/new" target="_blank" style={{ color: C.info, textDecoration: "underline" }}>Vercel Dashboard</a>.
+                    This is a one-time direct upload.
+                  </span>
+                </div>
                 <div>
                   <label style={labelStyle}>Project Name</label>
                   <input value={vcProjectName} onChange={(e) => setVcProjectName(e.target.value)} style={inputStyle} placeholder="my-app" />
@@ -528,6 +539,17 @@ export function DeploymentPanel() {
             {/* Netlify */}
             {platform === "netlify" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{
+                  display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 14px",
+                  background: `${C.info}08`, border: `1px solid ${C.info}20`, borderRadius: 6,
+                }}>
+                  <ArrowRight size={12} style={{ color: C.info, flexShrink: 0, marginTop: 2 }} />
+                  <span style={{ fontFamily: F.s, fontSize: 10, color: C.info, lineHeight: 1.5 }}>
+                    <strong>Tip:</strong> For continuous deployment on every git push, link a GitHub repo in
+                    <a href="https://app.netlify.com/start" target="_blank" style={{ color: C.info, textDecoration: "underline" }}> Netlify Dashboard</a>.
+                    This is a one-time direct upload.
+                  </span>
+                </div>
                 <div>
                   <label style={labelStyle}>Site Name</label>
                   <input value={ntSiteName} onChange={(e) => setNtSiteName(e.target.value)} style={inputStyle} placeholder="my-site" />
@@ -546,6 +568,17 @@ export function DeploymentPanel() {
             {/* Cloudflare */}
             {platform === "cloudflare" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{
+                  display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 14px",
+                  background: `${C.info}08`, border: `1px solid ${C.info}20`, borderRadius: 6,
+                }}>
+                  <ArrowRight size={12} style={{ color: C.info, flexShrink: 0, marginTop: 2 }} />
+                  <span style={{ fontFamily: F.s, fontSize: 10, color: C.info, lineHeight: 1.5 }}>
+                    <strong>Tip:</strong> For auto-deploy on every push, connect a GitHub repo in
+                    <a href="https://dash.cloudflare.com/?to=/:account/pages" target="_blank" style={{ color: C.info, textDecoration: "underline" }}> Cloudflare Dashboard</a>.
+                    This is a one-time direct upload.
+                  </span>
+                </div>
                 <div>
                   <label style={labelStyle}>Project Name</label>
                   <input value={cfProjectName} onChange={(e) => setCfProjectName(e.target.value)} style={inputStyle} placeholder="my-pages-project" />
