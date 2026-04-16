@@ -4,6 +4,7 @@ import {
   Square,
   Trash2,
   Upload,
+  ArrowUp,
   Bot,
   Zap,
   ChevronDown,
@@ -2089,33 +2090,22 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                   <button
                     type="button"
                     style={{
-                      display: "flex", alignItems: "center", gap: 8,
-                      padding: "6px 16px",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      width: 28, height: 28,
                       background: canSend ? C.accent : "transparent",
-                      color: canSend ? C.bg : C.textFaint,
-                      border: `1px solid ${canSend ? C.accent : C.border}`,
-                      borderRadius: 4,
-                      fontFamily: FONTS.mono,
-                      fontSize: 10, fontWeight: 700,
-                      letterSpacing: "0.12em",
-                      textTransform: "uppercase",
+                      color: canSend ? "#fff" : C.textFaint,
+                      border: canSend ? "none" : `1px solid ${C.border}`,
+                      borderRadius: 6,
                       cursor: canSend ? "pointer" : "not-allowed",
                       transition: "all 0.15s",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (canSend) {
-                        e.currentTarget.style.boxShadow = `0 0 20px ${C.accent}40`;
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.boxShadow = "none";
+                      flexShrink: 0,
                     }}
                     onClick={handleSend}
                     disabled={!canSend}
                     data-testid="chat-send-btn"
+                    title={isStreaming ? "Queue message" : "Send message"}
                   >
-                    {isStreaming ? "Queue" : "Send"}
-                    <Send size={10} strokeWidth={1.8} />
+                    <ArrowUp size={14} strokeWidth={2.5} />
                   </button>
                 );
               })()}

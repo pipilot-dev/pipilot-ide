@@ -210,16 +210,22 @@ export function useAgentChat(
       .then((dbMsgs) => {
         // Discard if a newer load was started
         if (loadVersionRef.current !== version) return;
-        setMessages(dbMsgs.map((m) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          timestamp: m.timestamp,
-          toolCalls: m.toolCalls ? JSON.parse(m.toolCalls) : undefined,
-          parts: m.parts ? JSON.parse(m.parts) : undefined,
-          tool_call_id: m.tool_call_id,
-          reverted: m.reverted || undefined,
-        })));
+        setMessages(dbMsgs.map((m) => {
+          // Fix stale "running" tools from interrupted streams — show as cancelled
+          let toolCalls = m.toolCalls ? JSON.parse(m.toolCalls) : undefined;
+          if (toolCalls) {
+            toolCalls = toolCalls.map((tc: any) =>
+              (tc.status === "running" || tc.status === "pending")
+                ? { ...tc, status: "error", result: "Cancelled — stream interrupted" }
+                : tc
+            );
+          }
+          return {
+            id: m.id, role: m.role, content: m.content, timestamp: m.timestamp,
+            toolCalls, parts: m.parts ? JSON.parse(m.parts) : undefined,
+            tool_call_id: m.tool_call_id, reverted: m.reverted || undefined,
+          };
+        }));
       })
       .catch(() => {});
   }, [currentSessionId]);
