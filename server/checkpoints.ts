@@ -75,11 +75,11 @@ function writeIndex(projectId: string, entries: CheckpointMeta[]) {
 
 // ── Git helpers ──────────────────────────────────────────────────────
 
-async function git(workDir: string, args: string): Promise<string> {
+async function git(workDir: string, args: string, env?: Record<string, string>): Promise<string> {
   const { stdout } = await execAsync(`git ${args}`, {
     cwd: workDir,
     maxBuffer: 10 * 1024 * 1024,
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", ...env },
   });
   return stdout.trim();
 }
@@ -156,24 +156,29 @@ export async function createCheckpoint(opts: {
 
   await ensureGitRepo(opts.workDir);
 
-  // ── Create checkpoint WITHOUT touching HEAD or any branch ──
+  // ── Create checkpoint WITHOUT touching HEAD, branches, or the user's index ──
   //
-  // 1. Stage all current files into the index
-  await git(opts.workDir, "add -A");
-  // 2. Write the index as a tree object (returns tree SHA)
-  const treeSha = await git(opts.workDir, "write-tree");
-  // 3. Create a commit object pointing to that tree (not on any branch)
-  const msg = `checkpoint: ${opts.label}`.replace(/"/g, '\\"');
-  const sha = await git(opts.workDir, `commit-tree ${treeSha} -m "${msg}"`);
-  // 4. Reset the index back to HEAD so we don't leave staged changes
-  //    that would show up in the user's next `git status`
-  try { await git(opts.workDir, "reset HEAD"); } catch {
-    // reset fails if there's no HEAD yet (brand new repo with no commits).
-    // In that case, just clear the index.
-    try { await git(opts.workDir, "rm -r --cached ."); } catch {}
+  // We use a TEMPORARY index file (GIT_INDEX_FILE) so `git add` and
+  // `git write-tree` operate on our own private index, leaving the user's
+  // staging area and commit history completely untouched.
+  const tmpIndex = path.join(opts.workDir, ".git", `pipilot-checkpoint-${Date.now()}.tmp`);
+  const tmpEnv = { GIT_INDEX_FILE: tmpIndex };
+
+  let sha: string;
+  try {
+    // 1. Stage all files into the temporary index
+    await git(opts.workDir, "add -A", tmpEnv);
+    // 2. Write the temp index as a tree object
+    const treeSha = await git(opts.workDir, "write-tree", tmpEnv);
+    // 3. Create a dangling commit object (not on any branch)
+    const msg = `checkpoint: ${opts.label}`.replace(/"/g, '\\"');
+    sha = await git(opts.workDir, `commit-tree ${treeSha} -m "${msg}"`);
+    // 4. Protect from garbage collection
+    await protectFromGC(opts.workDir, sha);
+  } finally {
+    // 5. Clean up the temporary index file
+    try { fs.unlinkSync(tmpIndex); } catch {}
   }
-  // 5. Protect from garbage collection
-  await protectFromGC(opts.workDir, sha);
 
   const fileCount = await countFilesAtCommit(opts.workDir, sha);
 
@@ -220,6 +225,10 @@ export async function restoreCheckpoint(opts: {
   const entry = readIndex(opts.projectId).find((m) => m.id === opts.checkpointId);
   if (!entry?.sha) return { success: false, restored: 0, deleted: 0, message: "Checkpoint not found" };
 
+  // Use a temporary index so we don't corrupt the user's staging area.
+  const tmpIndex = path.join(opts.workDir, ".git", `pipilot-restore-${Date.now()}.tmp`);
+  const tmpEnv = { GIT_INDEX_FILE: tmpIndex };
+
   try {
     // Verify the commit object exists
     await git(opts.workDir, `cat-file -t ${entry.sha}`);
@@ -227,23 +236,19 @@ export async function restoreCheckpoint(opts: {
     // Restore working tree to match the checkpoint's tree, WITHOUT
     // moving HEAD or creating any commits on the user's branch.
     //
-    // 1. Load the checkpoint's tree into the index
-    await git(opts.workDir, `read-tree ${entry.sha}`);
-    // 2. Write the index contents to the working tree
-    await git(opts.workDir, "checkout-index -a -f");
+    // 1. Load the checkpoint's tree into a temporary index
+    await git(opts.workDir, `read-tree ${entry.sha}`, tmpEnv);
+    // 2. Write the temp index contents to the working tree
+    await git(opts.workDir, "checkout-index -a -f", tmpEnv);
     // 3. Remove files that exist in working tree but not in the checkpoint
     await git(opts.workDir, "clean -fd");
-    // 4. Reset the index back to HEAD so `git status` shows the diff
-    //    between HEAD and the restored (checkpoint) state cleanly.
-    //    This means the user sees "modified" files, not a dirty index.
-    try { await git(opts.workDir, "reset HEAD"); } catch {
-      try { await git(opts.workDir, "rm -r --cached ."); } catch {}
-    }
 
     const fileCount = await countFilesAtCommit(opts.workDir, entry.sha);
     return { success: true, restored: fileCount, deleted: 0 };
   } catch (err: any) {
     return { success: false, restored: 0, deleted: 0, message: err.message };
+  } finally {
+    try { fs.unlinkSync(tmpIndex); } catch {}
   }
 }
 
