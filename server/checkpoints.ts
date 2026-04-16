@@ -1,9 +1,13 @@
 /**
- * Server-side workspace checkpoints — git-backed only.
+ * Server-side workspace checkpoints — git-backed, branch-free.
  *
- * Each checkpoint is a git commit in the workspace directory.
- * Metadata (SHA, label, messageId) stored in a lightweight index file.
- * Restore uses `git checkout <sha> -- .` + `git clean -fd`.
+ * Uses git plumbing commands (write-tree, commit-tree) to create
+ * snapshot commits WITHOUT touching HEAD or any branch. The user's
+ * commit history stays clean — checkpoints are "dangling" objects
+ * that only exist in our index file.
+ *
+ * Create:  git add -A → git write-tree → git commit-tree → reset index
+ * Restore: git read-tree <sha> → git checkout-index -a -f → git clean -fd
  */
 
 import path from "path";
@@ -20,6 +24,10 @@ const SKIP_DIRS = [
 ];
 
 const MAX_CHECKPOINTS_PER_PROJECT = 50;
+
+// Prevent git GC from collecting our dangling checkpoint commits.
+// We store refs in .git/refs/pipilot/ so git knows they're reachable.
+const CHECKPOINT_REF_PREFIX = "refs/pipilot/cp";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -71,6 +79,7 @@ async function git(workDir: string, args: string): Promise<string> {
   const { stdout } = await execAsync(`git ${args}`, {
     cwd: workDir,
     maxBuffer: 10 * 1024 * 1024,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
   });
   return stdout.trim();
 }
@@ -100,7 +109,7 @@ function ensureGitignore(workDir: string) {
 }
 
 async function ensureGitUser(workDir: string) {
-  try { await git(workDir, "config user.name"); } catch { await git(workDir, 'config user.name "PiPilot Checkpoints"'); }
+  try { await git(workDir, "config user.name"); } catch { await git(workDir, 'config user.name "PiPilot"'); }
   try { await git(workDir, "config user.email"); } catch { await git(workDir, 'config user.email "checkpoints@pipilot.local"'); }
 }
 
@@ -113,6 +122,24 @@ async function countFilesAtCommit(workDir: string, sha: string): Promise<number>
     const out = await git(workDir, `ls-tree -r --name-only ${sha}`);
     return out ? out.split("\n").length : 0;
   } catch { return 0; }
+}
+
+/**
+ * Store a ref so git GC won't collect our checkpoint commit.
+ * Refs go in .git/refs/pipilot/cp-<short-sha> — invisible to
+ * normal branch/tag listings.
+ */
+async function protectFromGC(workDir: string, sha: string) {
+  try {
+    await git(workDir, `update-ref ${CHECKPOINT_REF_PREFIX}-${sha.slice(0, 12)} ${sha}`);
+  } catch {}
+}
+
+/** Remove the GC-protection ref when a checkpoint is deleted. */
+async function unprotectFromGC(workDir: string, sha: string) {
+  try {
+    await git(workDir, `update-ref -d ${CHECKPOINT_REF_PREFIX}-${sha.slice(0, 12)}`);
+  } catch {}
 }
 
 // ── Public API ───────────────────────────────────────────────────────
@@ -128,11 +155,26 @@ export async function createCheckpoint(opts: {
   if (!(await isGitCheckpointsAvailable())) throw new Error("Git is not installed. Install git to enable checkpoints.");
 
   await ensureGitRepo(opts.workDir);
-  await git(opts.workDir, "add -A");
 
+  // ── Create checkpoint WITHOUT touching HEAD or any branch ──
+  //
+  // 1. Stage all current files into the index
+  await git(opts.workDir, "add -A");
+  // 2. Write the index as a tree object (returns tree SHA)
+  const treeSha = await git(opts.workDir, "write-tree");
+  // 3. Create a commit object pointing to that tree (not on any branch)
   const msg = `checkpoint: ${opts.label}`.replace(/"/g, '\\"');
-  await git(opts.workDir, `commit -m "${msg}" --allow-empty`);
-  const sha = await git(opts.workDir, "rev-parse HEAD");
+  const sha = await git(opts.workDir, `commit-tree ${treeSha} -m "${msg}"`);
+  // 4. Reset the index back to HEAD so we don't leave staged changes
+  //    that would show up in the user's next `git status`
+  try { await git(opts.workDir, "reset HEAD"); } catch {
+    // reset fails if there's no HEAD yet (brand new repo with no commits).
+    // In that case, just clear the index.
+    try { await git(opts.workDir, "rm -r --cached ."); } catch {}
+  }
+  // 5. Protect from garbage collection
+  await protectFromGC(opts.workDir, sha);
+
   const fileCount = await countFilesAtCommit(opts.workDir, sha);
 
   const meta: CheckpointMeta = {
@@ -179,20 +221,24 @@ export async function restoreCheckpoint(opts: {
   if (!entry?.sha) return { success: false, restored: 0, deleted: 0, message: "Checkpoint not found" };
 
   try {
-    // Verify the commit exists
+    // Verify the commit object exists
     await git(opts.workDir, `cat-file -t ${entry.sha}`);
 
-    // Full restore: reset index + working tree to match the checkpoint commit.
-    // 1. Reset the index to the checkpoint state (stages removals of files
-    //    that didn't exist at that point and restores old file contents)
+    // Restore working tree to match the checkpoint's tree, WITHOUT
+    // moving HEAD or creating any commits on the user's branch.
+    //
+    // 1. Load the checkpoint's tree into the index
     await git(opts.workDir, `read-tree ${entry.sha}`);
-    // 2. Update the working tree to match the new index state
-    await git(opts.workDir, `checkout-index -a -f`);
-    // 3. Remove any files in the working tree that aren't in the checkpoint
-    //    (files added in later commits that are now unstaged by read-tree)
+    // 2. Write the index contents to the working tree
+    await git(opts.workDir, "checkout-index -a -f");
+    // 3. Remove files that exist in working tree but not in the checkpoint
     await git(opts.workDir, "clean -fd");
-    // 4. Point HEAD at the checkpoint commit so subsequent checkpoints chain correctly
-    await git(opts.workDir, `reset --soft ${entry.sha}`);
+    // 4. Reset the index back to HEAD so `git status` shows the diff
+    //    between HEAD and the restored (checkpoint) state cleanly.
+    //    This means the user sees "modified" files, not a dirty index.
+    try { await git(opts.workDir, "reset HEAD"); } catch {
+      try { await git(opts.workDir, "rm -r --cached ."); } catch {}
+    }
 
     const fileCount = await countFilesAtCommit(opts.workDir, entry.sha);
     return { success: true, restored: fileCount, deleted: 0 };
@@ -201,7 +247,17 @@ export async function restoreCheckpoint(opts: {
   }
 }
 
-export function deleteCheckpoint(projectId: string, checkpointId: string) {
+export async function deleteCheckpoint(projectId: string, checkpointId: string) {
+  const entry = readIndex(projectId).find((m) => m.id === checkpointId);
+  // Remove GC protection ref
+  if (entry?.sha) {
+    // Try to find the workDir — best effort
+    try {
+      const { resolveWorkspaceDir } = await import("./workspaces");
+      const workDir = resolveWorkspaceDir(projectId);
+      await unprotectFromGC(workDir, entry.sha);
+    } catch {}
+  }
   const index = readIndex(projectId).filter((m) => m.id !== checkpointId);
   writeIndex(projectId, index);
 }
