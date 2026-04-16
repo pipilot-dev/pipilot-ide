@@ -10,7 +10,7 @@ import {
   GitBranch, Globe, Server, Cloud, Rocket, CheckCircle2,
   AlertCircle, Loader2, ExternalLink, Copy, RefreshCw,
   ChevronDown, Lock, Eye, EyeOff, Sparkles, Clock,
-  XCircle, ArrowRight, Terminal,
+  XCircle, ArrowRight, Terminal, Package, Cpu,
 } from "lucide-react";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { COLORS as C, FONTS } from "@/lib/design-tokens";
@@ -18,7 +18,7 @@ import { deploySite } from "@/lib/deploy";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Platform = "github" | "vercel" | "netlify" | "cloudflare" | "puter";
+type Platform = "github" | "vercel" | "netlify" | "cloudflare" | "puter" | "npm" | "cf-workers";
 type DeployStatus = "idle" | "deploying" | "success" | "error";
 
 interface DeployRecord {
@@ -42,9 +42,11 @@ interface PlatformInfo {
 const PLATFORMS: PlatformInfo[] = [
   { id: "puter", name: "Puter", icon: <Rocket size={18} />, color: "#c6ff3d", description: "Free static hosting (HTML/CSS/JS)" },
   { id: "github", name: "GitHub", icon: <GitBranch size={18} />, color: "#f0f6fc", description: "Push to repository" },
-  { id: "vercel", name: "Vercel", icon: <Globe size={18} />, color: "#fff", description: "Deploy frontend + serverless" },
+  { id: "vercel", name: "Vercel", icon: <Globe size={18} />, color: "#fff", description: "Frontend + serverless" },
   { id: "netlify", name: "Netlify", icon: <Server size={18} />, color: "#00c7b7", description: "Static sites + functions" },
-  { id: "cloudflare", name: "Cloudflare", icon: <Cloud size={18} />, color: "#f38020", description: "Pages + Workers" },
+  { id: "cloudflare", name: "Cloudflare", icon: <Cloud size={18} />, color: "#f38020", description: "Pages (direct upload)" },
+  { id: "npm", name: "npm", icon: <Package size={18} />, color: "#cb3837", description: "Publish packages & CLIs" },
+  { id: "cf-workers", name: "Workers", icon: <Cpu size={18} />, color: "#f6821f", description: "Cloudflare edge workers" },
 ];
 
 const F = { m: FONTS.mono, s: FONTS.sans };
@@ -135,6 +137,14 @@ export function DeploymentPanel() {
   // Puter
   const [puterSlug, setPuterSlug] = useState("");
   const [hasPackageJson, setHasPackageJson] = useState(false);
+
+  // npm publish
+  const [npmAccess, setNpmAccess] = useState<"public" | "restricted">("public");
+  const [npmTag, setNpmTag] = useState("latest");
+
+  // Cloudflare Workers
+  const [cfwName, setCfwName] = useState("");
+  const [cfwEntryPoint, setCfwEntryPoint] = useState("src/index.ts");
 
   // Load connector status + history
   const refresh = useCallback(async () => {
@@ -280,11 +290,45 @@ export function DeploymentPanel() {
             branch: cfBranch,
           });
           if (result.error) throw new Error(result.error);
-          const url = result.url || result.deploymentUrl;
-          addLog(`Deployed! URL: ${url}`);
-          setDeployUrl(url || "");
+          const cfUrl = result.url || result.deploymentUrl;
+          addLog(`Deployed! URL: ${cfUrl}`);
+          setDeployUrl(cfUrl || "");
           setDeployStatus("success");
-          await recordDeploy({ platform: "cloudflare", url: url || "", status: "success", projectName: cfProjectName });
+          await recordDeploy({ platform: "cloudflare", url: cfUrl || "", status: "success", projectName: cfProjectName });
+          break;
+        }
+
+        case "npm": {
+          if (!hasPackageJson) throw new Error("No package.json found. npm publish requires a valid package.");
+          addLog(`Publishing to npm (access: ${npmAccess}, tag: ${npmTag})...`);
+          result = await post("/api/cloud/npm/publish", {
+            projectId: pid,
+            access: npmAccess,
+            tag: npmTag,
+          });
+          if (result.error) throw new Error(result.error);
+          const npmUrl = result.url || `https://www.npmjs.com/package/${result.name}`;
+          addLog(`Published! ${result.name}@${result.version}`);
+          addLog(`URL: ${npmUrl}`);
+          setDeployUrl(npmUrl);
+          setDeployStatus("success");
+          await recordDeploy({ platform: "npm", url: npmUrl, status: "success", projectName: result.name || pid, message: `${result.name}@${result.version}` });
+          break;
+        }
+
+        case "cf-workers": {
+          addLog(`Deploying Cloudflare Worker: ${cfwName}`);
+          result = await post("/api/cloud/cloudflare/workers/deploy", {
+            projectId: pid,
+            workerName: cfwName,
+            entryPoint: cfwEntryPoint,
+          });
+          if (result.error) throw new Error(result.error);
+          const wUrl = result.url || `https://${cfwName}.workers.dev`;
+          addLog(`Deployed! URL: ${wUrl}`);
+          setDeployUrl(wUrl);
+          setDeployStatus("success");
+          await recordDeploy({ platform: "cf-workers", url: wUrl, status: "success", projectName: cfwName });
           break;
         }
       }
@@ -299,8 +343,10 @@ export function DeploymentPanel() {
     }
   };
 
-  // Puter needs no token — it's free/anonymous. All others need a connector token.
-  const isConnected = platform === "puter" ? true : connStatus[platform];
+  // Puter needs no token. cf-workers uses the cloudflare token. All others match by platform id.
+  const isConnected = platform === "puter" ? true
+    : platform === "cf-workers" ? connStatus["cloudflare"]
+    : connStatus[platform];
 
   // ── Render ───────────────────────────────────────────────────────────
 
@@ -330,10 +376,10 @@ export function DeploymentPanel() {
         </div>
 
         {/* ── Platform Cards ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8 }}>
           {PLATFORMS.map((p) => {
             const active = platform === p.id;
-            const connected = p.id === "puter" ? true : connStatus[p.id];
+            const connected = p.id === "puter" ? true : p.id === "cf-workers" ? connStatus["cloudflare"] : connStatus[p.id];
             return (
               <button
                 key={p.id}
@@ -590,15 +636,83 @@ export function DeploymentPanel() {
               </div>
             )}
 
+            {/* npm */}
+            {platform === "npm" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {!hasPackageJson && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8, padding: "10px 14px",
+                    background: `${C.error}10`, border: `1px solid ${C.error}30`, borderRadius: 6,
+                  }}>
+                    <XCircle size={14} style={{ color: C.error, flexShrink: 0 }} />
+                    <span style={{ fontFamily: F.s, fontSize: 11, color: C.error }}>
+                      No package.json found. Create one first (npm init) with name, version, and main/exports fields.
+                    </span>
+                  </div>
+                )}
+                {hasPackageJson && (
+                  <>
+                    <div style={{
+                      padding: "10px 14px", background: `${C.warn}08`, border: `1px solid ${C.warn}20`, borderRadius: 6,
+                    }}>
+                      <span style={{ fontFamily: F.s, fontSize: 10, color: C.warn, lineHeight: 1.5 }}>
+                        Publishes the package to the npm registry. Make sure <span style={{ fontFamily: F.m }}>name</span>, <span style={{ fontFamily: F.m }}>version</span>, and <span style={{ fontFamily: F.m }}>main</span> are set in package.json. Runs <span style={{ fontFamily: F.m }}>npm publish</span> under the hood.
+                      </span>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Access</label>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {(["public", "restricted"] as const).map((a) => (
+                          <button key={a} onClick={() => setNpmAccess(a)} style={{
+                            ...btnGhost, flex: 1, fontSize: 10,
+                            background: npmAccess === a ? `${C.accent}15` : "transparent",
+                            borderColor: npmAccess === a ? C.accent : C.border,
+                            color: npmAccess === a ? C.accent : C.textMid,
+                          }}>
+                            {a === "public" ? "Public" : "Restricted (scoped)"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Tag</label>
+                      <input value={npmTag} onChange={(e) => setNpmTag(e.target.value)} style={inputStyle} placeholder="latest" />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Cloudflare Workers */}
+            {platform === "cf-workers" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{
+                  padding: "10px 14px", background: `${C.info}08`, border: `1px solid ${C.info}20`, borderRadius: 6,
+                }}>
+                  <span style={{ fontFamily: F.s, fontSize: 10, color: C.info, lineHeight: 1.5 }}>
+                    Deploys a Cloudflare Worker using the Wrangler API. The entry point should export a <span style={{ fontFamily: F.m }}>fetch</span> handler. Uses your Cloudflare API token.
+                  </span>
+                </div>
+                <div>
+                  <label style={labelStyle}>Worker Name</label>
+                  <input value={cfwName} onChange={(e) => setCfwName(e.target.value)} style={inputStyle} placeholder="my-worker" />
+                </div>
+                <div>
+                  <label style={labelStyle}>Entry Point</label>
+                  <input value={cfwEntryPoint} onChange={(e) => setCfwEntryPoint(e.target.value)} style={inputStyle} placeholder="src/index.ts" />
+                </div>
+              </div>
+            )}
+
             {/* Deploy button */}
             <div style={{ marginTop: 20 }}>
               <button
                 onClick={handleDeploy}
-                disabled={!isConnected || deployStatus === "deploying" || (platform === "puter" && hasPackageJson)}
+                disabled={!isConnected || deployStatus === "deploying" || (platform === "puter" && hasPackageJson) || (platform === "npm" && !hasPackageJson)}
                 style={{
                   ...btnPrimary, width: "100%", padding: "10px 20px", fontSize: 12,
-                  opacity: (!isConnected || (platform === "puter" && hasPackageJson)) ? 0.4 : 1,
-                  cursor: (!isConnected || (platform === "puter" && hasPackageJson)) ? "not-allowed" : "pointer",
+                  opacity: (!isConnected || (platform === "puter" && hasPackageJson) || (platform === "npm" && !hasPackageJson)) ? 0.4 : 1,
+                  cursor: (!isConnected || (platform === "puter" && hasPackageJson) || (platform === "npm" && !hasPackageJson)) ? "not-allowed" : "pointer",
                 }}
               >
                 <Rocket size={13} />

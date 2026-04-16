@@ -1682,6 +1682,55 @@ function createIdeToolServer(projectId: string) {
     },
   );
 
+  const publishToNpm = tool(
+    "publish_to_npm",
+    "Publish the current project as an npm package. Requires package.json with name and version. " +
+    "Requires the npm connector token. Runs `npm publish` with the configured access and tag.",
+    {
+      access: z.enum(["public", "restricted"]).default("public").describe("public = anyone can install, restricted = scoped private"),
+      tag: z.string().default("latest").describe("Distribution tag (latest, beta, next, etc.)"),
+    },
+    async (args) => {
+      try {
+        const res = await fetch(`http://localhost:${PORT}/api/cloud/npm/publish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId, ...args }),
+        });
+        const data = await res.json() as any;
+        if (data.error) return { content: [{ type: "text" as const, text: `npm publish failed: ${data.error}` }], isError: true };
+        return { content: [{ type: "text" as const, text: `Published to npm!\nPackage: ${data.name}@${data.version}\nURL: ${data.url}` }] };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `npm publish error: ${err.message}` }], isError: true };
+      }
+    },
+  );
+
+  const deployToCloudflareWorkers = tool(
+    "deploy_to_cloudflare_workers",
+    "Deploy a Cloudflare Worker. Reads the entry point script and uploads it via the Cloudflare API. " +
+    "The script should export a fetch handler (ES module) or use addEventListener (service worker). " +
+    "Requires the Cloudflare connector token.",
+    {
+      workerName: z.string().describe("Worker name (becomes worker-name.account.workers.dev)"),
+      entryPoint: z.string().default("src/index.ts").describe("Path to the worker script (e.g. src/index.ts, worker.js)"),
+    },
+    async (args) => {
+      try {
+        const res = await fetch(`http://localhost:${PORT}/api/cloud/cloudflare/workers/deploy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId, ...args }),
+        });
+        const data = await res.json() as any;
+        if (data.error) return { content: [{ type: "text" as const, text: `Worker deploy failed: ${data.error}` }], isError: true };
+        return { content: [{ type: "text" as const, text: `Deployed Cloudflare Worker!\nURL: ${data.url}\nWorker: ${data.workerName}` }] };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `Worker deploy error: ${err.message}` }], isError: true };
+      }
+    },
+  );
+
   const listDeployments = tool(
     "list_deployments",
     "List recent deployments for the current project across all platforms (GitHub, Vercel, Netlify, Cloudflare). " +
@@ -1733,7 +1782,7 @@ function createIdeToolServer(projectId: string) {
       updateProjectContext, frontendDesignGuide, analyzeUi, screenshotPreview,
       memory, runInTerminal, searchCodebase, generateImage,
       deployToGithub, deployToVercel, deployToNetlify, deployToCloudflare,
-      listDeployments, checkConnectors,
+      publishToNpm, deployToCloudflareWorkers, listDeployments, checkConnectors,
     ],
   });
 }
@@ -2554,7 +2603,9 @@ Always prioritize proactive security and automation while maintaining developer 
 - **GitHub**: Use deploy_to_github. Good for version control. Recommend for all projects.
 - **Vercel**: Use deploy_to_vercel. Best for Next.js, React, Vue, Vite projects. Direct file upload (no git needed). For auto-deploy on push, recommend the user link their GitHub repo in Vercel Dashboard.
 - **Netlify**: Use deploy_to_netlify. Great for static sites and JAMstack. Direct file upload. Set publishDir to "dist" or "build" for built projects, empty for static HTML.
-- **Cloudflare**: Use deploy_to_cloudflare. Best for edge-first apps, Workers. Direct file upload to Cloudflare Pages.
+- **Cloudflare Pages**: Use deploy_to_cloudflare. Best for edge-first static sites. Direct file upload.
+- **Cloudflare Workers**: Use deploy_to_cloudflare_workers. For serverless edge functions. Script must export a fetch handler (ES module) or use addEventListener. Entry point defaults to src/index.ts.
+- **npm**: Use publish_to_npm. For publishing npm packages and CLIs. Requires package.json with name + version. Check access (public vs restricted for scoped packages) and tag (latest, beta, next).
 
 ## Rules
 
@@ -2562,6 +2613,8 @@ Always prioritize proactive security and automation while maintaining developer 
 - If deploying a built project (React/Vue/Next), run the build first via Bash (npm run build), then deploy the output directory.
 - For Vercel, set the framework hint if you can detect it from package.json.
 - For Netlify, set publishDir to the build output folder.
+- For npm: verify package.json has name, version, main/exports before publishing. Run tests first if available. Bump version if the current version is already published.
+- For Cloudflare Workers: read the entry point to verify it has a fetch handler. If it's TypeScript, the API handles it (Cloudflare compiles TS natively).
 - Always call list_deployments after a successful deploy to confirm it was recorded.
 - If a deploy fails, read the error carefully and suggest a fix (wrong token, missing files, name conflict, etc.).
 
@@ -2580,6 +2633,8 @@ Technology expertise: Docker, Kubernetes, GitHub Actions, Terraform, Helm, ArgoC
               "mcp__pipilot__deploy_to_vercel",
               "mcp__pipilot__deploy_to_netlify",
               "mcp__pipilot__deploy_to_cloudflare",
+              "mcp__pipilot__publish_to_npm",
+              "mcp__pipilot__deploy_to_cloudflare_workers",
               "mcp__pipilot__list_deployments",
               "mcp__pipilot__check_connectors",
               "mcp__pipilot__manage_dev_server",

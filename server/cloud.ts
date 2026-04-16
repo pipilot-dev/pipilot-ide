@@ -1070,6 +1070,141 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
     }
   });
 
+  // POST /api/cloud/npm/publish — publish package to npm registry
+  router.post("/npm/publish", async (req, res) => {
+    const { projectId, access, tag } = req.body;
+    const token = getToken(projectId, "npm");
+    if (!token) return res.status(401).json({ error: "npm not connected. Add your npm token in the Cloud panel." });
+
+    try {
+      const workDir = getWorkDir(projectId);
+      const pkgPath = path.join(workDir, "package.json");
+      if (!fs.existsSync(pkgPath)) return res.status(400).json({ error: "No package.json found" });
+
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      if (!pkg.name) return res.status(400).json({ error: "package.json has no 'name' field" });
+      if (!pkg.version) return res.status(400).json({ error: "package.json has no 'version' field" });
+
+      // Write temporary .npmrc with the token
+      const npmrcPath = path.join(workDir, ".npmrc");
+      const existingNpmrc = fs.existsSync(npmrcPath) ? fs.readFileSync(npmrcPath, "utf8") : "";
+      const tokenLine = `//registry.npmjs.org/:_authToken=${token}`;
+      if (!existingNpmrc.includes(tokenLine)) {
+        fs.writeFileSync(npmrcPath, existingNpmrc + (existingNpmrc.endsWith("\n") ? "" : "\n") + tokenLine + "\n");
+      }
+
+      // Run npm publish
+      const { execSync } = await import("child_process");
+      const accessFlag = access === "restricted" ? "--access restricted" : "--access public";
+      const tagFlag = tag && tag !== "latest" ? `--tag ${tag}` : "";
+      const cmd = `npm publish ${accessFlag} ${tagFlag}`.trim();
+
+      try {
+        const output = execSync(cmd, { cwd: workDir, encoding: "utf8", timeout: 60000, env: { ...process.env, NPM_TOKEN: token } });
+        const url = `https://www.npmjs.com/package/${pkg.name}`;
+        res.json({ success: true, name: pkg.name, version: pkg.version, url, output: output.trim() });
+      } catch (pubErr: any) {
+        const stderr = pubErr.stderr || pubErr.message || "";
+        res.status(400).json({ error: `npm publish failed: ${stderr.slice(0, 500)}` });
+      } finally {
+        // Restore original .npmrc (remove token line we added)
+        if (!existingNpmrc.includes(tokenLine)) {
+          if (existingNpmrc) {
+            fs.writeFileSync(npmrcPath, existingNpmrc);
+          } else {
+            try { fs.unlinkSync(npmrcPath); } catch {}
+          }
+        }
+      }
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
+  // POST /api/cloud/cloudflare/workers/deploy — deploy a Cloudflare Worker
+  router.post("/cloudflare/workers/deploy", async (req, res) => {
+    const { projectId, workerName, entryPoint } = req.body;
+    const token = getToken(projectId, "cloudflare");
+    if (!token) return res.status(401).json({ error: "Cloudflare not connected. Add your API token in the Cloud panel." });
+    if (!workerName) return res.status(400).json({ error: "workerName required" });
+
+    try {
+      // 1. Get account ID
+      const acctRes = await fetch("https://api.cloudflare.com/client/v4/accounts", { headers: { Authorization: `Bearer ${token}` } });
+      const acctData = await acctRes.json() as any;
+      const accountId = acctData.result?.[0]?.id;
+      if (!accountId) return res.status(400).json({ error: "No Cloudflare account found" });
+
+      // 2. Read the worker script
+      const workDir = getWorkDir(projectId);
+      const entry = entryPoint || "src/index.ts";
+      const scriptPath = path.join(workDir, entry);
+
+      // Try the entry point directly, fall back to index.js/index.ts
+      let scriptContent: string;
+      if (fs.existsSync(scriptPath)) {
+        scriptContent = fs.readFileSync(scriptPath, "utf8");
+      } else if (fs.existsSync(path.join(workDir, "index.js"))) {
+        scriptContent = fs.readFileSync(path.join(workDir, "index.js"), "utf8");
+      } else if (fs.existsSync(path.join(workDir, "index.ts"))) {
+        scriptContent = fs.readFileSync(path.join(workDir, "index.ts"), "utf8");
+      } else {
+        return res.status(400).json({ error: `Entry point not found: ${entry}. Create a worker script with a fetch handler.` });
+      }
+
+      // 3. Upload the worker script via Cloudflare API
+      // For simple scripts, use the single-script upload endpoint
+      const FormData = (await import("form-data")).default;
+      const formData = new FormData();
+
+      // Determine if it's a module worker (export default) or service worker (addEventListener)
+      const isModule = /export\s+default/.test(scriptContent);
+
+      if (isModule) {
+        // ES module format — use metadata + worker module
+        const metadata = JSON.stringify({
+          main_module: "worker.js",
+          compatibility_date: new Date().toISOString().split("T")[0],
+        });
+        formData.append("metadata", metadata, { contentType: "application/json" });
+        formData.append("worker.js", scriptContent, { contentType: "application/javascript+module" });
+      } else {
+        // Service worker format
+        formData.append("script", scriptContent, { contentType: "application/javascript" });
+      }
+
+      const deployRes = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${workerName}`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...formData.getHeaders(),
+          },
+          body: formData as any,
+        }
+      );
+      const deployData = await deployRes.json() as any;
+
+      if (!deployData.success) {
+        return res.status(400).json({ error: deployData.errors?.[0]?.message || "Worker deployment failed" });
+      }
+
+      // 4. Enable the workers.dev subdomain route
+      try {
+        await fetch(
+          `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${workerName}/subdomain`,
+          {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: true }),
+          }
+        );
+      } catch {} // non-fatal if subdomain toggle fails
+
+      const url = `https://${workerName}.${acctData.result?.[0]?.name || accountId}.workers.dev`;
+      res.json({ success: true, url, deploymentUrl: url, workerName });
+    } catch (e: any) { res.status(502).json({ error: e.message }); }
+  });
+
   // Global error handler — catches any unhandled errors in route handlers
   // so they return 500 instead of crashing the server process.
   router.use((err: any, _req: any, res: any, _next: any) => {
