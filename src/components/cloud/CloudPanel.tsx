@@ -67,6 +67,7 @@ export function CloudPanel() {
   const [dropdown, setDropdown] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [showTok, setShowTok] = useState(false);
+  const [tokenScope, setTokenScope] = useState<"project" | "global">("project");
   const ddRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
@@ -85,7 +86,7 @@ export function CloudPanel() {
 
   const saveTok = async () => {
     if (!p || !tokenInput.trim()) return;
-    await post("/api/connectors/save", { projectId: p, connectorId: prov, token: tokenInput.trim(), enabled: true });
+    await post("/api/connectors/save", { projectId: p, connectorId: prov, token: tokenInput.trim(), enabled: true, scope: tokenScope });
     setTokenInput(""); refresh(); notify("success", `${info.name} Connected`);
   };
 
@@ -128,7 +129,21 @@ export function CloudPanel() {
               </div>
               <button onClick={saveTok} disabled={!tokenInput.trim()} style={{ ...btnPrimary, opacity: tokenInput.trim() ? 1 : 0.4 }}>Connect</button>
             </div>
-            <a href={`https://${info.tokenUrl}`} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 3, marginTop: 10, fontSize: 9, color: C.accent, textDecoration: "none" }}>Get token <ExternalLink size={8} /></a>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 10 }}>
+              {(["project", "global"] as const).map((s) => (
+                <button key={s} onClick={() => setTokenScope(s)} style={{
+                  padding: "1px 6px", fontSize: 8, fontFamily: FONTS.mono, fontWeight: 600, borderRadius: 2, border: "none", cursor: "pointer",
+                  letterSpacing: "0.04em", textTransform: "uppercase",
+                  background: tokenScope === s ? (s === "global" ? "#6cb6ff18" : `${C.accent}18`) : "transparent",
+                  color: tokenScope === s ? (s === "global" ? "#6cb6ff" : C.accent) : C.textFaint,
+                }}>{s === "project" ? "Project" : "Global"}</button>
+              ))}
+              <span style={{ fontSize: 8, color: C.textFaint, fontFamily: FONTS.mono }}>
+                {tokenScope === "global" ? "all projects" : "this project"}
+              </span>
+              <span style={{ color: C.textFaint, margin: "0 2px" }}>|</span>
+              <a href={`https://${info.tokenUrl}`} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 8, color: C.accent, textDecoration: "none" }}>Get token <ExternalLink size={7} /></a>
+            </div>
           </div>
         ) : (
           <>
