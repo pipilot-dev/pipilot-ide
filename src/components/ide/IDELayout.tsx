@@ -1743,12 +1743,10 @@ export function IDELayout() {
         </button>
         <button
           className="flex items-center gap-1 hover:opacity-80 transition-opacity"
-          onClick={handleDeploy}
-          disabled={deploying}
-          style={lastDeploy?.success ? { color: C.ok } : undefined}
+          onClick={() => setActiveView("deploy")}
         >
-          {deploying ? <Loader2 size={11} className="animate-spin" /> : <Rocket size={11} />}
-          <span>{deploying ? "Deploying..." : "Deploy"}</span>
+          <Rocket size={11} />
+          <span>Deploy</span>
         </button>
         {lastDeploy?.success && (
           <a

@@ -14,10 +14,11 @@ import {
 } from "lucide-react";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { COLORS as C, FONTS } from "@/lib/design-tokens";
+import { deploySite } from "@/lib/deploy";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Platform = "github" | "vercel" | "netlify" | "cloudflare";
+type Platform = "github" | "vercel" | "netlify" | "cloudflare" | "puter";
 type DeployStatus = "idle" | "deploying" | "success" | "error";
 
 interface DeployRecord {
@@ -39,6 +40,7 @@ interface PlatformInfo {
 }
 
 const PLATFORMS: PlatformInfo[] = [
+  { id: "puter", name: "Puter", icon: <Rocket size={18} />, color: "#c6ff3d", description: "Free static hosting (HTML/CSS/JS)" },
   { id: "github", name: "GitHub", icon: <GitBranch size={18} />, color: "#f0f6fc", description: "Push to repository" },
   { id: "vercel", name: "Vercel", icon: <Globe size={18} />, color: "#fff", description: "Deploy frontend + serverless" },
   { id: "netlify", name: "Netlify", icon: <Server size={18} />, color: "#00c7b7", description: "Static sites + functions" },
@@ -98,7 +100,7 @@ export function DeploymentPanel() {
   const pid = activeProjectId || "";
 
   // State
-  const [platform, setPlatform] = useState<Platform>("github");
+  const [platform, setPlatform] = useState<Platform>("puter");
   const [connStatus, setConnStatus] = useState<Record<string, boolean>>({});
   const [deployStatus, setDeployStatus] = useState<DeployStatus>("idle");
   const [deployUrl, setDeployUrl] = useState("");
@@ -130,6 +132,10 @@ export function DeploymentPanel() {
   const [cfProjectName, setCfProjectName] = useState("");
   const [cfBranch, setCfBranch] = useState("main");
 
+  // Puter
+  const [puterSlug, setPuterSlug] = useState("");
+  const [hasPackageJson, setHasPackageJson] = useState(false);
+
   // Load connector status + history
   const refresh = useCallback(async () => {
     if (!pid) return;
@@ -145,7 +151,7 @@ export function DeploymentPanel() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Auto-fill repo/project names from project
+  // Auto-fill repo/project names from project + detect package.json
   useEffect(() => {
     if (!pid) return;
     const name = generateRepoName(pid);
@@ -153,6 +159,11 @@ export function DeploymentPanel() {
     setVcProjectName(name);
     setNtSiteName(name);
     setCfProjectName(name);
+    setPuterSlug(name);
+    // Check if project has package.json (= not a static site)
+    api(`/api/files/read?projectId=${encodeURIComponent(pid)}&path=package.json`)
+      .then((d) => setHasPackageJson(!d.error && d.content !== undefined))
+      .catch(() => setHasPackageJson(false));
   }, [pid]);
 
   // Load GitHub repos when switching to existing mode
@@ -191,6 +202,21 @@ export function DeploymentPanel() {
       let result: any;
 
       switch (platform) {
+        case "puter": {
+          if (hasPackageJson) {
+            throw new Error("Puter only supports static sites (HTML/CSS/JS). This project has a package.json — use Vercel, Netlify, or Cloudflare instead.");
+          }
+          addLog("Deploying to Puter (static hosting)...");
+          const puterResult = await deploySite(pid, puterSlug || pid);
+          if (!puterResult.success) throw new Error(puterResult.error || "Puter deploy failed");
+          addLog(`Uploaded ${puterResult.fileCount} files`);
+          addLog(`Live at: ${puterResult.url}`);
+          setDeployUrl(puterResult.url);
+          setDeployStatus("success");
+          await recordDeploy({ platform: "puter", url: puterResult.url, status: "success", projectName: puterSlug || pid });
+          break;
+        }
+
         case "github": {
           addLog(ghMode === "new" ? `Creating repository: ${ghRepoName}` : `Pushing to: ${ghSelectedRepo}`);
           result = await post("/api/cloud/github/git-push", {
@@ -273,7 +299,8 @@ export function DeploymentPanel() {
     }
   };
 
-  const isConnected = connStatus[platform];
+  // Puter needs no token — it's free/anonymous. All others need a connector token.
+  const isConnected = platform === "puter" ? true : connStatus[platform];
 
   // ── Render ───────────────────────────────────────────────────────────
 
@@ -303,10 +330,10 @@ export function DeploymentPanel() {
         </div>
 
         {/* ── Platform Cards ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
           {PLATFORMS.map((p) => {
             const active = platform === p.id;
-            const connected = connStatus[p.id];
+            const connected = p.id === "puter" ? true : connStatus[p.id];
             return (
               <button
                 key={p.id}
@@ -363,6 +390,38 @@ export function DeploymentPanel() {
         {/* ── Deploy Form (per platform) ── */}
         {deployStatus === "idle" && (
           <div style={{ maxWidth: 520 }}>
+            {/* Puter — free static hosting */}
+            {platform === "puter" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {hasPackageJson && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8, padding: "10px 14px",
+                    background: `${C.error}10`, border: `1px solid ${C.error}30`, borderRadius: 6,
+                  }}>
+                    <XCircle size={14} style={{ color: C.error, flexShrink: 0 }} />
+                    <span style={{ fontFamily: F.s, fontSize: 11, color: C.error }}>
+                      Puter only supports static sites (HTML/CSS/JS). This project has a package.json — use Vercel, Netlify, or Cloudflare instead.
+                    </span>
+                  </div>
+                )}
+                {!hasPackageJson && (
+                  <>
+                    <div style={{
+                      padding: "10px 14px", background: `${C.ok}08`, border: `1px solid ${C.ok}20`, borderRadius: 6,
+                    }}>
+                      <span style={{ fontFamily: F.s, fontSize: 11, color: C.ok }}>
+                        Free instant hosting — no account needed. Your static site will be live at <span style={{ fontFamily: F.m, fontSize: 10 }}>{puterSlug || "your-project"}.puter.site</span>
+                      </span>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Site Slug</label>
+                      <input value={puterSlug} onChange={(e) => setPuterSlug(e.target.value)} style={inputStyle} placeholder="my-site" />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             {/* GitHub */}
             {platform === "github" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -502,11 +561,11 @@ export function DeploymentPanel() {
             <div style={{ marginTop: 20 }}>
               <button
                 onClick={handleDeploy}
-                disabled={!isConnected || deployStatus === "deploying"}
+                disabled={!isConnected || deployStatus === "deploying" || (platform === "puter" && hasPackageJson)}
                 style={{
                   ...btnPrimary, width: "100%", padding: "10px 20px", fontSize: 12,
-                  opacity: !isConnected ? 0.4 : 1,
-                  cursor: !isConnected ? "not-allowed" : "pointer",
+                  opacity: (!isConnected || (platform === "puter" && hasPackageJson)) ? 0.4 : 1,
+                  cursor: (!isConnected || (platform === "puter" && hasPackageJson)) ? "not-allowed" : "pointer",
                 }}
               >
                 <Rocket size={13} />
