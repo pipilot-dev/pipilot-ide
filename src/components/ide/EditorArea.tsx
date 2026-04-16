@@ -1429,6 +1429,30 @@ declare module "*.woff2" { const content: string; export default content; }
       },
     });
 
+    // ── CodeActionProvider for lightbulb "Fix with AI" menu ──
+    // Shows a lightbulb on lines with errors/warnings. Clicking it
+    // offers "Fix with AI" which sends the error to the chat agent.
+    monaco.languages.registerCodeActionProvider("*", {
+      provideCodeActions(model, range) {
+        const markers = monaco.editor.getModelMarkers({ resource: model.uri })
+          .filter((m) => m.severity >= monaco.MarkerSeverity.Warning &&
+            range.startLineNumber <= m.endLineNumber && range.endLineNumber >= m.startLineNumber);
+        if (markers.length === 0) return { actions: [], dispose() {} };
+
+        const actions = markers.slice(0, 3).map((marker) => ({
+          title: `Fix with AI: ${marker.message.slice(0, 60)}${marker.message.length > 60 ? "..." : ""}`,
+          kind: "quickfix",
+          diagnostics: [marker],
+          isPreferred: true,
+          command: {
+            id: "pipilot.quickFix",
+            title: "Fix with AI",
+          },
+        }));
+        return { actions, dispose() {} };
+      },
+    });
+
     // Register inline AI completion provider (Copilot-like ghost text)
     // Uses background-poll architecture: synchronous cache reads in
     // provideInlineCompletions, async fetcher fills the cache while typing
