@@ -1564,6 +1564,154 @@ function createIdeToolServer(projectId: string) {
     },
   );
 
+  // ── Deployment tools — deploy to GitHub, Vercel, Netlify, Cloudflare ──
+  // These give the agent (and its deployment subagent) direct access to
+  // deploy, list, and manage deployments without needing Bash CLI commands.
+
+  const deployToGithub = tool(
+    "deploy_to_github",
+    "Push the current project to a GitHub repository. Can create a new repo or push to an existing one. " +
+    "Requires the GitHub connector token to be configured.",
+    {
+      repoName: z.string().optional().describe("Repository name to create (for new repos)"),
+      repoFullName: z.string().optional().describe("Full name (owner/repo) of existing repo to push to"),
+      description: z.string().optional().describe("Repository description"),
+      commitMessage: z.string().default("Deploy from PiPilot").describe("Commit message"),
+      isPrivate: z.boolean().default(false).describe("Make the repository private"),
+      createNew: z.boolean().default(true).describe("true = create new repo, false = push to existing"),
+    },
+    async (args) => {
+      try {
+        const res = await fetch(`http://localhost:${PORT}/api/cloud/github/git-push`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId, ...args }),
+        });
+        const data = await res.json() as any;
+        if (data.error) return { content: [{ type: "text" as const, text: `GitHub deploy failed: ${data.error}` }], isError: true };
+        const url = data.url || data.html_url || `https://github.com/${data.full_name || args.repoName}`;
+        return { content: [{ type: "text" as const, text: `Pushed to GitHub!\nURL: ${url}\nRepo: ${data.full_name || args.repoName}` }] };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `GitHub deploy error: ${err.message}` }], isError: true };
+      }
+    },
+  );
+
+  const deployToVercel = tool(
+    "deploy_to_vercel",
+    "Deploy the current project to Vercel via direct file upload. Creates a new deployment with all project files. " +
+    "No GitHub repo required. Requires the Vercel connector token.",
+    {
+      projectName: z.string().describe("Vercel project name (lowercase, hyphens allowed)"),
+      framework: z.string().optional().describe("Framework hint: nextjs, vite, create-react-app, vue, nuxtjs, svelte, angular, gatsby, astro, remix. Omit for auto-detect."),
+    },
+    async (args) => {
+      try {
+        const res = await fetch(`http://localhost:${PORT}/api/cloud/vercel/deploy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId, ...args }),
+        });
+        const data = await res.json() as any;
+        if (data.error) return { content: [{ type: "text" as const, text: `Vercel deploy failed: ${data.error}` }], isError: true };
+        return { content: [{ type: "text" as const, text: `Deployed to Vercel!\nURL: ${data.url || data.deploymentUrl}\nStatus: ${data.readyState || "deploying"}` }] };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `Vercel deploy error: ${err.message}` }], isError: true };
+      }
+    },
+  );
+
+  const deployToNetlify = tool(
+    "deploy_to_netlify",
+    "Deploy the current project to Netlify via direct file upload. Creates a new site or updates existing. " +
+    "No GitHub repo required. Requires the Netlify connector token.",
+    {
+      siteName: z.string().describe("Netlify site name (becomes sitename.netlify.app)"),
+      publishDir: z.string().optional().default("").describe("Directory to deploy (e.g. 'dist', 'build', '.next'). Empty = deploy project root."),
+    },
+    async (args) => {
+      try {
+        const res = await fetch(`http://localhost:${PORT}/api/cloud/netlify/deploy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId, ...args }),
+        });
+        const data = await res.json() as any;
+        if (data.error) return { content: [{ type: "text" as const, text: `Netlify deploy failed: ${data.error}` }], isError: true };
+        return { content: [{ type: "text" as const, text: `Deployed to Netlify!\nURL: ${data.url || data.deploymentUrl}\nSite ID: ${data.siteId || ""}` }] };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `Netlify deploy error: ${err.message}` }], isError: true };
+      }
+    },
+  );
+
+  const deployToCloudflare = tool(
+    "deploy_to_cloudflare",
+    "Deploy the current project to Cloudflare Pages via direct file upload. Creates a new Pages project or updates existing. " +
+    "No GitHub repo required. Requires the Cloudflare connector token.",
+    {
+      projectName: z.string().describe("Cloudflare Pages project name"),
+      branch: z.string().optional().default("main").describe("Production branch name"),
+    },
+    async (args) => {
+      try {
+        const res = await fetch(`http://localhost:${PORT}/api/cloud/cloudflare/deploy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId, ...args }),
+        });
+        const data = await res.json() as any;
+        if (data.error) return { content: [{ type: "text" as const, text: `Cloudflare deploy failed: ${data.error}` }], isError: true };
+        return { content: [{ type: "text" as const, text: `Deployed to Cloudflare Pages!\nURL: ${data.url || data.deploymentUrl}` }] };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `Cloudflare deploy error: ${err.message}` }], isError: true };
+      }
+    },
+  );
+
+  const listDeployments = tool(
+    "list_deployments",
+    "List recent deployments for the current project across all platforms (GitHub, Vercel, Netlify, Cloudflare). " +
+    "Returns deployment history with URLs, status, and timestamps.",
+    {},
+    async () => {
+      try {
+        const res = await fetch(`http://localhost:${PORT}/api/deployments/list?projectId=${encodeURIComponent(projectId)}`);
+        const data = await res.json() as any;
+        const deployments = data.deployments || [];
+        if (deployments.length === 0) return { content: [{ type: "text" as const, text: "No deployments found for this project." }] };
+        const lines = deployments.slice(0, 15).map((d: any) =>
+          `[${d.platform}] ${d.projectName} — ${d.status} — ${d.url || "no URL"}${d.message ? ` (${d.message})` : ""} — ${new Date(d.createdAt).toLocaleString()}`
+        );
+        return { content: [{ type: "text" as const, text: `Recent deployments (${deployments.length}):\n\n${lines.join("\n")}` }] };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `Failed to list deployments: ${err.message}` }], isError: true };
+      }
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
+  const checkConnectors = tool(
+    "check_connectors",
+    "Check which deployment platform tokens are configured for this project. " +
+    "Returns connection status for GitHub, Vercel, Netlify, and Cloudflare.",
+    {},
+    async () => {
+      try {
+        const res = await fetch(`http://localhost:${PORT}/api/cloud/status?projectId=${encodeURIComponent(projectId)}`);
+        const data = await res.json() as any;
+        const providers = data.providers || {};
+        const lines = Object.entries(providers).map(([name, connected]) =>
+          `${connected ? "✓" : "✗"} ${name}: ${connected ? "connected" : "not configured"}`
+        );
+        return { content: [{ type: "text" as const, text: `Connector status:\n${lines.join("\n")}\n\nTo add a token, tell the user to open the Cloud panel and configure the connector.` }] };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `Failed to check connectors: ${err.message}` }], isError: true };
+      }
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
   return createSdkMcpServer({
     name: "pipilot",
     version: "1.0.0",
@@ -1571,6 +1719,8 @@ function createIdeToolServer(projectId: string) {
       getDiagnostics, manageDevServer, searchNpm, getDevServerLogs,
       updateProjectContext, frontendDesignGuide, analyzeUi, screenshotPreview,
       memory, runInTerminal, searchCodebase, generateImage,
+      deployToGithub, deployToVercel, deployToNetlify, deployToCloudflare,
+      listDeployments, checkConnectors,
     ],
   });
 }
@@ -2376,23 +2526,51 @@ Always prioritize proactive security and automation while maintaining developer 
           },
 
           "deployment-engineer": {
-            description: "Use this agent when designing CI/CD pipelines, configuring Docker/container deployments, setting up cloud infrastructure, or automating release processes.",
-            prompt: `You are a senior deployment engineer with expertise in CI/CD pipelines, container orchestration, cloud infrastructure, and release automation. Your focus is on reliable, fast, and safe production deployments.
+            description: "Use this agent when the user wants to deploy their project, push to GitHub, deploy to Vercel/Netlify/Cloudflare, check deployment status, manage deployment configuration, or set up CI/CD. This agent has direct access to deployment tools for all platforms.",
+            prompt: `You are a deployment specialist with direct access to deploy tools for GitHub, Vercel, Netlify, and Cloudflare. You can deploy projects, check connector status, and manage deployment history.
 
-When building deployment pipelines:
-- Design multi-stage CI/CD with build, test, scan, and deploy phases
-- Write Dockerfiles with multi-stage builds and security best practices
-- Configure Kubernetes deployments, services, and ingress
-- Implement deployment strategies (blue-green, canary, rolling updates)
-- Set up GitOps workflows with automated drift detection
-- Configure monitoring, alerting, and rollback automation
-- Manage secrets and environment-specific configuration
-- Optimize build caching and parallel execution for speed
+## Workflow
 
-Technology expertise: Docker, Kubernetes, GitHub Actions, GitLab CI, Jenkins, Terraform, Helm, ArgoCD, AWS/Azure/GCP, Nginx, Caddy, PM2.
+1. ALWAYS start by calling check_connectors to see which platforms have tokens configured.
+2. If the user's preferred platform isn't connected, tell them to add the token in the Cloud panel.
+3. Use the appropriate deploy tool (deploy_to_github, deploy_to_vercel, deploy_to_netlify, deploy_to_cloudflare).
+4. After deploying, report the live URL back to the user.
 
-Always prioritize deployment safety and velocity while maintaining high reliability standards.`,
-            tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "mcp__pipilot__frontend_design_guide"],
+## Platform guidance
+
+- **GitHub**: Use deploy_to_github. Good for version control. Recommend for all projects.
+- **Vercel**: Use deploy_to_vercel. Best for Next.js, React, Vue, Vite projects. Direct file upload (no git needed). For auto-deploy on push, recommend the user link their GitHub repo in Vercel Dashboard.
+- **Netlify**: Use deploy_to_netlify. Great for static sites and JAMstack. Direct file upload. Set publishDir to "dist" or "build" for built projects, empty for static HTML.
+- **Cloudflare**: Use deploy_to_cloudflare. Best for edge-first apps, Workers. Direct file upload to Cloudflare Pages.
+
+## Rules
+
+- NEVER deploy to Puter (it's handled separately for static sites only).
+- If deploying a built project (React/Vue/Next), run the build first via Bash (npm run build), then deploy the output directory.
+- For Vercel, set the framework hint if you can detect it from package.json.
+- For Netlify, set publishDir to the build output folder.
+- Always call list_deployments after a successful deploy to confirm it was recorded.
+- If a deploy fails, read the error carefully and suggest a fix (wrong token, missing files, name conflict, etc.).
+
+## CI/CD setup (when asked)
+
+You also have Bash/Read/Write/Edit access for setting up CI/CD:
+- GitHub Actions: create .github/workflows/deploy.yml
+- Write Dockerfiles, docker-compose.yml
+- Configure Kubernetes manifests
+- Set up Terraform, Helm charts
+
+Technology expertise: Docker, Kubernetes, GitHub Actions, Terraform, Helm, ArgoCD, AWS/Azure/GCP, Nginx, Caddy, PM2.`,
+            tools: [
+              "Read", "Write", "Edit", "Bash", "Glob", "Grep",
+              "mcp__pipilot__deploy_to_github",
+              "mcp__pipilot__deploy_to_vercel",
+              "mcp__pipilot__deploy_to_netlify",
+              "mcp__pipilot__deploy_to_cloudflare",
+              "mcp__pipilot__list_deployments",
+              "mcp__pipilot__check_connectors",
+              "mcp__pipilot__manage_dev_server",
+            ],
             model: "sonnet" as const,
           },
 
@@ -5547,7 +5725,7 @@ app.get("/api/agents/list", (_req, res) => {
       { id: "ai-engineer", name: "AI Engineer", description: "AI/ML integration — LLM apps, RAG, prompt engineering", model: "sonnet", builtin: true },
       { id: "api-designer", name: "API Designer", description: "REST/GraphQL API design, OpenAPI specs, auth patterns", model: "sonnet", builtin: true },
       { id: "security-engineer", name: "Security Engineer", description: "Vulnerability assessment, OWASP, DevSecOps", model: "sonnet", builtin: true },
-      { id: "deployment-engineer", name: "Deployment Engineer", description: "CI/CD pipelines, Docker, Kubernetes, cloud infra", model: "sonnet", builtin: true },
+      { id: "deployment-engineer", name: "Deployment Engineer", description: "Deploy to GitHub/Vercel/Netlify/Cloudflare + CI/CD pipelines", model: "sonnet", builtin: true },
       { id: "frontend-designer", name: "Frontend Designer", description: "Distinctive UI design with design system persistence", model: "sonnet", builtin: true },
       { id: "agent-installer", name: "Agent Installer", description: "Browse and install subagents from VoltAgent repository", model: "sonnet", builtin: true },
       { id: "mcp-installer", name: "MCP Installer", description: "Search and install MCP servers from the official registry", model: "sonnet", builtin: true },
