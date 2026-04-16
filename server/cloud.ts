@@ -23,7 +23,7 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
   router.get("/status", (req, res) => {
     const projectId = req.query.projectId as string;
     if (!projectId) return res.status(400).json({ error: "projectId required" });
-    const providers = ["github", "vercel", "supabase", "neon", "netlify", "cloudflare"];
+    const providers = ["github", "vercel", "supabase", "neon", "netlify", "cloudflare", "npm"];
     const status: Record<string, boolean> = {};
     for (const p of providers) status[p] = !!getToken(projectId, p);
     res.json({ providers: status });

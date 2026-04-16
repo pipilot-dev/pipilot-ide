@@ -425,8 +425,15 @@ export function DeploymentPanel() {
             <AlertCircle size={14} style={{ color: C.warn, flexShrink: 0 }} />
             <span style={{ fontFamily: F.s, fontSize: 11, color: C.warn }}>
               {PLATFORMS.find((p) => p.id === platform)?.name} token not configured. Add it in the
-              <button onClick={() => { const e = new CustomEvent("pipilot:open-cloud"); window.dispatchEvent(e); }} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontFamily: F.s, fontSize: 11, textDecoration: "underline", padding: "0 3px" }}>
-                Cloud panel
+              <button onClick={() => {
+                // npm connector is in Extensions > Connectors, others in Cloud panel
+                if (platform === "npm") {
+                  window.dispatchEvent(new CustomEvent("pipilot:open-extensions"));
+                } else {
+                  window.dispatchEvent(new CustomEvent("pipilot:open-cloud"));
+                }
+              }} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontFamily: F.s, fontSize: 11, textDecoration: "underline", padding: "0 3px" }}>
+                {platform === "npm" ? "Extensions > Connectors" : "Cloud panel"}
               </button>
               first.
             </span>
