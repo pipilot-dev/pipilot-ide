@@ -176,6 +176,7 @@ export interface ScreenshotResult {
   sizeKB: number;
   title: string;
   analysis: string;
+  consoleLogs: { level: string; text: string }[];
 }
 
 /**
@@ -194,6 +195,23 @@ export async function screenshot(
 
   try {
     await page.setViewport({ width, height });
+
+    // Capture console output (logs, warnings, errors)
+    const consoleLogs: { level: string; text: string }[] = [];
+    page.on("console", (msg) => {
+      const level = msg.type(); // log, warn, error, info, debug
+      const text = msg.text();
+      if (text && consoleLogs.length < 50) {
+        consoleLogs.push({ level, text: text.slice(0, 200) });
+      }
+    });
+
+    // Capture uncaught page errors
+    page.on("pageerror", (err) => {
+      if (consoleLogs.length < 50) {
+        consoleLogs.push({ level: "error", text: `Uncaught: ${err.message.slice(0, 200)}` });
+      }
+    });
 
     // Navigate and wait for page to be ready
     await page.goto(url, {
@@ -273,7 +291,7 @@ export async function screenshot(
 
     const title = await page.title();
 
-    return { filePath: outputPath, base64, sizeKB, title, analysis };
+    return { filePath: outputPath, base64, sizeKB, title, analysis, consoleLogs };
   } finally {
     await page.close();
   }

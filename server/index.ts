@@ -1148,7 +1148,7 @@ function createIdeToolServer(projectId: string) {
             return {
               content: [
                 { type: "image" as const, data: result.base64, mimeType: "image/png" },
-                { type: "text" as const, text: `Screenshot captured (${result.sizeKB}KB) via headless Chrome.\nSaved: ${result.filePath}\nURL: ${devUrl}\n\nIMPORTANT: Use the Read tool on "${result.filePath}" to view the screenshot image and visually inspect the UI.\n\n${result.analysis}` },
+                { type: "text" as const, text: `Screenshot captured (${result.sizeKB}KB) via headless Chrome.\nSaved: ${result.filePath}\nURL: ${devUrl}\n\nIMPORTANT: Use the Read tool on "${result.filePath}" to view the screenshot image and visually inspect the UI.\n\n${result.analysis}${result.consoleLogs.length > 0 ? `\n\nConsole output (${result.consoleLogs.length} entries):\n${result.consoleLogs.map((l) => `  [${l.level}] ${l.text}`).join("\n")}` : "\n\nConsole: clean (no errors)"}` },
               ],
             };
           } catch {}
