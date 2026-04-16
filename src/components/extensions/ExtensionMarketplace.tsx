@@ -93,6 +93,18 @@ export function ExtensionMarketplace() {
     if (tab === "registry") searchRegistry(searchQuery);
   }, [tab]);
 
+  // Listen for external tab switch (e.g. Deploy panel → "open connectors tab")
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const t = (e as CustomEvent).detail?.tab;
+      if (t && ["mcp", "connectors", "agents", "themes", "registry"].includes(t)) {
+        setTab(t);
+      }
+    };
+    window.addEventListener("pipilot:extensions-set-tab", handler);
+    return () => window.removeEventListener("pipilot:extensions-set-tab", handler);
+  }, []);
+
   // Install MCP server
   const installMcp = useCallback(async (name: string, config: any) => {
     if (!activeProjectId) return;

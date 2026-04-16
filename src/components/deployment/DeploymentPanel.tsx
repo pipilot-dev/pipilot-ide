@@ -428,7 +428,7 @@ export function DeploymentPanel() {
               <button onClick={() => {
                 // npm connector is in Extensions > Connectors, others in Cloud panel
                 if (platform === "npm") {
-                  window.dispatchEvent(new CustomEvent("pipilot:open-extensions"));
+                  window.dispatchEvent(new CustomEvent("pipilot:open-extensions", { detail: { tab: "connectors" } }));
                 } else {
                   window.dispatchEvent(new CustomEvent("pipilot:open-cloud"));
                 }

@@ -972,6 +972,15 @@ export function IDELayout() {
     const openSettings = () => setActiveView("settings");
     const openFolderPicker = () => setShowOpenFolderPicker(true);
     const openGenerateModal = () => setShowGenerateModal(true);
+    const openExtensions = (e: Event) => {
+      setActiveView("extensions");
+      // Forward the detail (e.g. { tab: "connectors" }) so the panel can auto-switch
+      const detail = (e as CustomEvent).detail;
+      if (detail?.tab) {
+        setTimeout(() => window.dispatchEvent(new CustomEvent("pipilot:extensions-set-tab", { detail })), 50);
+      }
+    };
+    window.addEventListener("pipilot:open-extensions", openExtensions);
     window.addEventListener("pipilot:open-terminal", openTerminal);
     window.addEventListener("pipilot:open-settings", openSettings);
     window.addEventListener("pipilot:open-folder-picker", openFolderPicker);
@@ -979,6 +988,7 @@ export function IDELayout() {
     window.addEventListener("pipilot:show-generate-modal", openGenerateModal);
     return () => {
       window.removeEventListener("pipilot:open-chat", openChat);
+      window.removeEventListener("pipilot:open-extensions", openExtensions);
       window.removeEventListener("pipilot:open-terminal", openTerminal);
       window.removeEventListener("pipilot:open-settings", openSettings);
       window.removeEventListener("pipilot:open-folder-picker", openFolderPicker);
