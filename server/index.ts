@@ -1417,13 +1417,25 @@ function createIdeToolServer(projectId: string) {
       }
 
       // ── Symbols: function/class/export/interface definitions (pure Node.js) ──
+      // Finds definition lines (function, class, const, export, etc.) that
+      // contain the query. Works for both symbol names ("renderHome") and
+      // patterns ("export function", "async function", "class App").
       if (args.mode === "symbols" || args.mode === "all") {
         try {
-          const sym = args.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           const flags = args.caseSensitive ? "" : "i";
-          const symbolRe = new RegExp(
-            `(function|const|let|var|class|interface|type|enum|export|def|func|fn|pub fn|async function)\\s+(\\w+\\s+)*${sym}`, flags
+          const escaped = args.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+          // Two strategies combined:
+          // 1. Lines that ARE definitions AND contain the query
+          const defLineRe = /^\s*(export\s+)?(default\s+)?(async\s+)?(function\*?|class|interface|type|enum|const|let|var|def|func|fn|pub\s+fn|impl|struct|trait)\s+/;
+          const queryRe = new RegExp(escaped, flags);
+
+          // 2. Lines where the query appears right after a definition keyword
+          //    (catches "export function myFunc" when searching "myFunc")
+          const symAfterKeywordRe = new RegExp(
+            `(?:function\\*?|class|interface|type|enum|const|let|var|def|func|fn)\\s+${escaped}`, flags
           );
+
           const files = listFiles(workDir);
           let found = 0;
           for (const rel of files) {
@@ -1435,14 +1447,15 @@ function createIdeToolServer(projectId: string) {
               const content = fs.readFileSync(abs, "utf8");
               const lines = content.split("\n");
               for (let i = 0; i < lines.length && found < args.maxResults; i++) {
-                if (symbolRe.test(lines[i])) {
-                  // Context: 2 lines before/after
+                const line = lines[i];
+                // Match if: (line is a definition AND contains query) OR (query appears after a keyword)
+                if ((defLineRe.test(line) && queryRe.test(line)) || symAfterKeywordRe.test(line)) {
                   const start = Math.max(0, i - 2);
                   const end = Math.min(lines.length, i + 3);
                   const context = lines.slice(start, end).map((l, j) => `${start + j + 1}: ${l}`).join("\n");
                   results.push({
                     type: "symbol", file: rel, line: i + 1,
-                    match: lines[i].trim().slice(0, 200), context, score: 50,
+                    match: line.trim().slice(0, 200), context, score: 50,
                   });
                   found++;
                 }

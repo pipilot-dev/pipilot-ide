@@ -41,6 +41,7 @@ export function ExtensionMarketplace() {
   const { activeProjectId } = useActiveProject();
   const [tab, setTab] = useState<"mcp" | "connectors" | "agents" | "themes" | "registry">("mcp");
   const [searchQuery, setSearchQuery] = useState("");
+  const [installScope, setInstallScope] = useState<"project" | "global">("project");
 
   // Extension state
   const installed = useLiveQuery(() => db.extensions.toArray(), []) ?? [];
@@ -100,7 +101,7 @@ export function ExtensionMarketplace() {
       const res = await fetch("/api/mcp/install", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, name, config }),
+        body: JSON.stringify({ projectId: activeProjectId, name, config, scope: installScope }),
       });
       const data = await res.json();
       if (data.success) {
@@ -166,7 +167,7 @@ export function ExtensionMarketplace() {
       const res = await fetch("/api/connectors/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, connectorId, token, enabled: true }),
+        body: JSON.stringify({ projectId: activeProjectId, connectorId, token, enabled: true, scope: installScope }),
       });
       const data = await res.json();
       if (data.success) {
@@ -248,6 +249,37 @@ export function ExtensionMarketplace() {
           Registry
         </button>
       </div>
+
+      {/* Scope toggle — global vs project */}
+      {(tab === "mcp" || tab === "connectors" || tab === "registry") && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 6, padding: "6px 10px",
+          borderBottom: "1px solid hsl(220 13% 22%)", background: "hsl(220 13% 11%)",
+        }}>
+          <span style={{ fontFamily: FONTS.mono, fontSize: 8, color: "hsl(220 10% 48%)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            Scope:
+          </span>
+          {(["project", "global"] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setInstallScope(s)}
+              style={{
+                padding: "2px 8px", fontSize: 9, fontFamily: FONTS.mono, fontWeight: 600,
+                borderRadius: 3, border: "none", cursor: "pointer",
+                letterSpacing: "0.04em", textTransform: "uppercase",
+                background: installScope === s ? (s === "global" ? "#6cb6ff20" : "#FF6B3520") : "transparent",
+                color: installScope === s ? (s === "global" ? "#6cb6ff" : "#FF6B35") : "hsl(220 10% 48%)",
+                outline: installScope === s ? `1px solid ${s === "global" ? "#6cb6ff40" : "#FF6B3540"}` : "1px solid transparent",
+              }}
+            >
+              {s === "project" ? "This Project" : "All Projects"}
+            </button>
+          ))}
+          <span style={{ fontFamily: FONTS.sans, fontSize: 9, color: "hsl(220 10% 40%)", marginLeft: 4 }}>
+            {installScope === "global" ? "Installs apply to every project" : "Installs apply to this project only"}
+          </span>
+        </div>
+      )}
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
