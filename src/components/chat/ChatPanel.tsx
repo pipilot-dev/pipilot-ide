@@ -650,7 +650,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   const handleSend = () => {
     // Read from ref (latest value) — state may be stale since we skip
     // re-renders on normal typing for performance.
-    const currentInput = inputRef.current ?? input;
+    const currentInput = inputRef.current || input;
     const trimmed = currentInput.trim();
     if (!trimmed && attachments.length === 0) return;
     // NOTE: We DO allow sending while streaming. sendMessage detects the
