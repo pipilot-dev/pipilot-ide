@@ -5867,6 +5867,7 @@ app.get("/api/mcp/defaults", (_req, res) => {
       { name: "deepwiki", description: "Read wiki docs and ask questions about any public GitHub repository", type: "http", url: "https://mcp.deepwiki.com/mcp", builtin: true },
       { name: "sequential-thinking", description: "Structured reasoning for complex multi-step tasks", type: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-sequential-thinking"], builtin: true },
       { name: "chrome-devtools", description: "Chrome DevTools automation — inspect, debug, and interact with running pages", type: "stdio", command: "npx", args: ["chrome-devtools-mcp@latest", "--autoConnect"], builtin: true },
+      { name: "playwright", description: "Browser automation — navigate, click, fill forms, take screenshots, test web apps", type: "stdio", command: "npx", args: ["-y", "@anthropic-ai/mcp-server-playwright@latest"], builtin: true },
     ],
     configurable: [
       { name: "tavily", description: "Web search powered by Tavily AI", type: "http", urlTemplate: "https://mcp.tavily.com/mcp/?tavilyApiKey={TAVILY_API_KEY}", envVars: [{ name: "TAVILY_API_KEY", description: "Tavily API key (get at tavily.com)", required: true, secret: true }] },
