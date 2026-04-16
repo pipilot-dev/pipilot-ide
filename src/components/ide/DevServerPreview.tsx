@@ -770,8 +770,7 @@ export function DevServerPreview() {
             {isRunning ? (
               <div style={{
                 width: typeof iframeWidth === "number" ? iframeWidth + (responsiveMode === "mobile" ? 24 : 0) : "100%",
-                height: responsiveMode === "mobile" ? "calc(100% - 16px)" : "100%",
-                maxHeight: responsiveMode === "mobile" ? 812 + 24 : undefined,
+                height: responsiveMode === "mobile" ? "calc(100% - 8px)" : "100%",
                 position: "relative",
                 transition: "all 0.3s ease",
                 ...(responsiveMode === "mobile" ? {
