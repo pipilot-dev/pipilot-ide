@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useProblems, type Problem } from "@/contexts/ProblemsContext";
 import { createPortal } from "react-dom";
 import Editor, { OnMount, loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
@@ -826,6 +827,7 @@ export function EditorArea({
   const [dragTabId, setDragTabId] = useState<string | null>(null);
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
   const { activeProjectId } = useActiveProject();
+  const { problems } = useProblems();
 
   // ── Inline chat state ──
   const [inlineChat, setInlineChat] = useState<{
@@ -1059,6 +1061,47 @@ export function EditorArea({
   const activeTab = tabs.find((t) => t.node.id === activeTabId);
 
   const monacoRef = useRef<any>(null);
+
+  // ── Sync problems to Monaco markers (inline squiggly underlines) ──
+  useEffect(() => {
+    if (!monacoRef.current || !problems) return;
+    const m = monacoRef.current;
+
+    // Group problems by file
+    const byFile = new Map<string, Problem[]>();
+    for (const p of problems) {
+      if (!p.file || !p.line) continue;
+      const list = byFile.get(p.file) || [];
+      list.push(p);
+      byFile.set(p.file, list);
+    }
+
+    // Set markers on all open models
+    for (const model of m.editor.getModels()) {
+      const uri = model.uri.path?.replace(/^\//, "") || "";
+      // Match problems to model by file path (end-match for relative paths)
+      let matched: Problem[] = [];
+      for (const [file, probs] of byFile) {
+        if (uri === file || uri.endsWith(file) || file.endsWith(uri.split("/").pop() || "__none__")) {
+          matched = probs;
+          break;
+        }
+      }
+
+      m.editor.setModelMarkers(model, "pipilot-problems", matched.map((p) => ({
+        severity: p.type === "error" ? m.MarkerSeverity.Error
+          : p.type === "warning" ? m.MarkerSeverity.Warning
+          : m.MarkerSeverity.Info,
+        message: p.message,
+        startLineNumber: p.line || 1,
+        startColumn: p.column || 1,
+        endLineNumber: p.line || 1,
+        endColumn: (p.column || 1) + 200,
+        source: p.source,
+        code: p.code || undefined,
+      })));
+    }
+  }, [problems]);
 
   // ── Push settings into the running Monaco editor ──
   // Listen for the `pipilot:setting-changed` event (fired by both

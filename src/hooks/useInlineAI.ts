@@ -602,7 +602,13 @@ export function setupInlineAI(
       const hasNewline = e.changes.some((c) => c.text.includes("\n"));
       if (hasNewline) {
         cache.length = 0;
-        dlog("cache flushed — newline detected");
+        dlog("cache flushed — newline detected, immediate fetch");
+        // Skip debounce on newline — fetch immediately so suggestion
+        // arrives before Monaco's next provideInlineCompletions call
+        if (debouncedFetchTimer !== undefined) clearTimeout(debouncedFetchTimer);
+        debouncedFetchTimer = undefined;
+        fetchSuggestion();
+        return;
       }
       scheduleFetch();
     }),

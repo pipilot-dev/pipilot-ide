@@ -4,7 +4,7 @@ import {
   Play, Square, RefreshCw, ExternalLink, Loader2,
   ArrowLeft, ArrowRight, Maximize2, Minimize2,
   Monitor, Tablet, Smartphone, Terminal as TerminalIcon,
-  MousePointerClick, Camera, X,
+  MousePointerClick, Camera, X, Copy, Share2,
 } from "lucide-react";
 import { ConsolePanel, ConsoleEntry } from "./ConsolePanel";
 import { COLORS as C, FONTS } from "@/lib/design-tokens";
@@ -626,6 +626,21 @@ export function DevServerPreview() {
           </button>
         )}
 
+        {/* Copy URL */}
+        <button
+          onClick={() => {
+            if (previewUrl) {
+              navigator.clipboard.writeText(previewUrl);
+              window.dispatchEvent(new CustomEvent("pipilot:notify", { detail: { type: "success", title: "URL Copied", message: previewUrl } }));
+            }
+          }}
+          disabled={!isRunning}
+          title={`Copy URL${previewUrl ? `: ${previewUrl}` : ""}`}
+          style={navBtn(!isRunning)}
+        >
+          <Copy size={12} />
+        </button>
+
         {/* Open in new tab */}
         <button
           onClick={() => previewUrl && window.open(previewUrl, "_blank")}
@@ -635,6 +650,17 @@ export function DevServerPreview() {
         >
           <ExternalLink size={13} />
         </button>
+
+        {/* Port badge */}
+        {port && isRunning && (
+          <span style={{
+            padding: "1px 6px", borderRadius: 3, fontSize: 8,
+            fontFamily: FONTS.mono, fontWeight: 600,
+            background: `${C.ok}15`, color: C.ok, border: `1px solid ${C.ok}30`,
+          }}>
+            :{port}
+          </span>
+        )}
 
         {/* Fullscreen */}
         <button
