@@ -568,18 +568,80 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
 
   // ── Vercel write APIs ──
 
-  // POST /api/cloud/vercel/deploy — trigger deployment
+  // POST /api/cloud/vercel/deploy — direct file upload deployment (no git required)
+  // Reads project files from disk, uploads each file, then creates deployment.
+  // Vercel's v13 API: POST /v13/deployments with files[] array.
   router.post("/vercel/deploy", async (req, res) => {
-    const { projectId, vercelProjectId, ref } = req.body;
+    const { projectId, projectName, framework } = req.body;
     const token = getToken(projectId, "vercel");
-    if (!token) return res.status(401).json({ error: "Vercel not connected" });
+    if (!token) return res.status(401).json({ error: "Vercel not connected. Add your token in the Cloud panel." });
+
     try {
+      const crypto = await import("crypto");
+      const workDir = getWorkDir(projectId);
+      const skip = new Set(["node_modules", ".git", ".next", ".cache", "dist", "build", ".vite", ".pipilot", "coverage", ".turbo"]);
+
+      // 1. Collect all files with their SHA1 digests
+      const files: { file: string; sha: string; size: number; data: Buffer }[] = [];
+      const walkFiles = (dir: string, prefix: string) => {
+        try {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (skip.has(entry.name) || entry.name.startsWith(".")) continue;
+            const full = path.join(dir, entry.name);
+            const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) {
+              walkFiles(full, rel);
+            } else {
+              const stat = fs.statSync(full);
+              if (stat.size > 50 * 1024 * 1024) continue; // skip > 50MB
+              const data = fs.readFileSync(full);
+              const sha = crypto.createHash("sha1").update(data).digest("hex");
+              files.push({ file: rel, sha, size: data.length, data });
+            }
+          }
+        } catch {}
+      };
+      walkFiles(workDir, "");
+
+      if (files.length === 0) return res.status(400).json({ error: "No files found in project" });
+
+      // 2. Upload each file to Vercel's file API
+      for (const f of files) {
+        await fetch("https://api.vercel.com/v2/files", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/octet-stream",
+            "x-vercel-digest": f.sha,
+            "x-vercel-size": String(f.size),
+          },
+          body: f.data,
+        });
+      }
+
+      // 3. Create the deployment
+      const deployBody: any = {
+        name: projectName || projectId,
+        files: files.map((f) => ({ file: f.file, sha: f.sha, size: f.size })),
+        projectSettings: {},
+      };
+      if (framework && framework !== "auto") {
+        deployBody.projectSettings.framework = framework;
+      }
+
       const r = await fetch("https://api.vercel.com/v13/deployments", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ name: vercelProjectId, gitSource: { type: "github", ref } }),
+        body: JSON.stringify(deployBody),
       });
-      res.status(r.status).json(await r.json());
+      const data = await r.json() as any;
+
+      if (data.error) {
+        return res.status(r.status).json({ error: data.error.message || data.error.code || "Vercel deployment failed" });
+      }
+
+      const url = data.url ? `https://${data.url}` : data.alias?.[0] ? `https://${data.alias[0]}` : "";
+      res.json({ success: true, url, deploymentUrl: url, id: data.id, readyState: data.readyState });
     } catch (e: any) { res.status(502).json({ error: e.message }); }
   });
 
@@ -731,17 +793,99 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
 
   // ── Netlify write APIs ──
 
-  // POST /api/cloud/netlify/deploy — trigger deploy
+  // POST /api/cloud/netlify/deploy — direct file upload deployment (no git required)
+  // Creates a new site (or updates existing), then deploys files as a zip.
   router.post("/netlify/deploy", async (req, res) => {
-    const { projectId, siteId } = req.body;
+    const { projectId, siteName, buildCommand, publishDir } = req.body;
     const token = getToken(projectId, "netlify");
-    if (!token) return res.status(401).json({ error: "Netlify not connected" });
+    if (!token) return res.status(401).json({ error: "Netlify not connected. Add your token in the Cloud panel." });
+
     try {
-      const r = await fetch(`https://api.netlify.com/api/v1/sites/${siteId}/builds`, {
+      const workDir = getWorkDir(projectId);
+      const skip = new Set(["node_modules", ".git", ".next", ".cache", "dist", "build", ".vite", ".pipilot", "coverage", ".turbo"]);
+
+      // Determine which directory to deploy (publishDir or root)
+      const deployDir = publishDir && fs.existsSync(path.join(workDir, publishDir))
+        ? path.join(workDir, publishDir)
+        : workDir;
+
+      // 1. Collect files and compute SHA1 digests for Netlify's digest-based deploy
+      const crypto = await import("crypto");
+      const fileDigests: Record<string, string> = {};
+      const fileBuffers: Map<string, Buffer> = new Map();
+
+      const walkFiles = (dir: string, prefix: string) => {
+        try {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (skip.has(entry.name) || entry.name.startsWith(".")) continue;
+            const full = path.join(dir, entry.name);
+            const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) {
+              walkFiles(full, rel);
+            } else {
+              const stat = fs.statSync(full);
+              if (stat.size > 50 * 1024 * 1024) continue;
+              const data = fs.readFileSync(full);
+              const sha = crypto.createHash("sha1").update(data).digest("hex");
+              fileDigests[`/${rel}`] = sha;
+              fileBuffers.set(sha, data);
+            }
+          }
+        } catch {}
+      };
+      walkFiles(deployDir, "");
+
+      if (Object.keys(fileDigests).length === 0) return res.status(400).json({ error: "No files found in project" });
+
+      // 2. Create a new site if needed, or find existing
+      let siteId: string | null = null;
+      if (siteName) {
+        // Check if site exists
+        try {
+          const listRes = await fetch("https://api.netlify.com/api/v1/sites?per_page=100", { headers: { Authorization: `Bearer ${token}` } });
+          const sites = await listRes.json() as any[];
+          const existing = sites.find?.((s: any) => s.name === siteName || s.subdomain === siteName);
+          if (existing) siteId = existing.id;
+        } catch {}
+
+        // Create new site if not found
+        if (!siteId) {
+          const createRes = await fetch("https://api.netlify.com/api/v1/sites", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ name: siteName }),
+          });
+          const createData = await createRes.json() as any;
+          if (createData.id) siteId = createData.id;
+          else return res.status(400).json({ error: createData.message || "Failed to create Netlify site" });
+        }
+      }
+
+      if (!siteId) return res.status(400).json({ error: "siteName required for deployment" });
+
+      // 3. Create deploy with file digests — Netlify tells us which files it needs
+      const deployRes = await fetch(`https://api.netlify.com/api/v1/sites/${siteId}/deploys`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ files: fileDigests }),
       });
-      res.status(r.status).json(await r.json());
+      const deployData = await deployRes.json() as any;
+      if (!deployData.id) return res.status(400).json({ error: deployData.message || "Failed to create deploy" });
+
+      // 4. Upload any files that Netlify doesn't already have (required array)
+      const required: string[] = deployData.required || [];
+      for (const sha of required) {
+        const buf = fileBuffers.get(sha);
+        if (!buf) continue;
+        await fetch(`https://api.netlify.com/api/v1/deploys/${deployData.id}/files/${sha}`, {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+          body: buf,
+        });
+      }
+
+      const url = deployData.ssl_url || deployData.deploy_ssl_url || `https://${siteName}.netlify.app`;
+      res.json({ success: true, url, deploymentUrl: url, id: deployData.id, siteId });
     } catch (e: any) { res.status(502).json({ error: e.message }); }
   });
 
