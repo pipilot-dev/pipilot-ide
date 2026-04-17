@@ -107,11 +107,14 @@ jobs:
           # ARM64
           curl -Lo node-arm64.tar.gz "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-darwin-arm64.tar.gz"
           tar xzf node-arm64.tar.gz
-          cp "node-${NODE_VERSION}-darwin-arm64/bin/node" "src-tauri/binaries/node-sidecar-aarch64-apple-darwin"
           # x86_64
           curl -Lo node-x64.tar.gz "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-darwin-x64.tar.gz"
           tar xzf node-x64.tar.gz
-          cp "node-${NODE_VERSION}-darwin-x64/bin/node" "src-tauri/binaries/node-sidecar-x86_64-apple-darwin"
+          # Create universal (fat) binary for macOS universal target
+          lipo -create \
+            "node-${NODE_VERSION}-darwin-arm64/bin/node" \
+            "node-${NODE_VERSION}-darwin-x64/bin/node" \
+            -output "src-tauri/binaries/node-sidecar-universal-apple-darwin"
 
       - name: Download Node.js binary (Linux)
         if: matrix.platform == 'ubuntu-24.04'
