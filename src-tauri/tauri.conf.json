@@ -40,7 +40,7 @@
   "plugins": {
     "updater": {
       "active": true,
-      "pubkey": "${TAURI_SIGNING_PUBLIC_KEY}",
+      "pubkey": "REPLACE_WITH_OUTPUT_OF_tauri_signer_generate",
       "endpoints": [
         "https://github.com/pipilot-dev/pipilot-ide/releases/latest/download/latest.json"
       ],

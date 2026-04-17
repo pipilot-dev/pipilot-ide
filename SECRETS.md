@@ -73,9 +73,12 @@ need to create it manually.
 
 ## Quick-start checklist
 
-1. `pnpm exec tauri signer generate -w ~/.tauri/pipilot-ide.key`
-2. Add `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `TAURI_SIGNING_PUBLIC_KEY` to GitHub secrets.
-3. Paste the public key into `src-tauri/tauri.conf.json → plugins.updater.pubkey`.
+1. Generate your signing key pair:
+   ```bash
+   pnpm exec tauri signer generate -- -w ~/.tauri/pipilot-ide.key
+   ```
+2. Copy the **public key** printed to stdout into `src-tauri/tauri.conf.json` → `plugins.updater.pubkey`.
+3. Add `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `TAURI_SIGNING_PUBLIC_KEY` to GitHub secrets.
 4. *(macOS)* Export your Developer ID certificate as `.p12` and add the Apple secrets.
 5. *(Windows)* Export your code-signing certificate as `.pfx` and add the Windows secrets.
 6. Push a tag: `git tag v0.1.0 && git push origin v0.1.0`
