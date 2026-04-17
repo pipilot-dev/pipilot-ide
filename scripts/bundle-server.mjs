@@ -73,24 +73,9 @@ for (const mod of nativeModules) {
   }
 }
 
-// Also copy puppeteer-core (it's pure JS but has complex internal imports)
-const puppeteerSrc = resolve(ROOT, "node_modules", "puppeteer-core");
-const puppeteerDest = resolve(RESOURCES, "node_modules", "puppeteer-core");
-if (existsSync(puppeteerSrc)) {
-  if (existsSync(puppeteerDest)) rmSync(puppeteerDest, { recursive: true });
-  cpSync(puppeteerSrc, puppeteerDest, { recursive: true, dereference: true });
-  console.log("  ✓ puppeteer-core");
-  // Also copy chromium-bidi and devtools-protocol if present (puppeteer peer deps)
-  for (const peer of ["@puppeteer/browsers", "chromium-bidi", "devtools-protocol", "debug", "ms"]) {
-    const peerSrc = resolve(ROOT, "node_modules", peer);
-    const peerDest = resolve(RESOURCES, "node_modules", peer);
-    if (existsSync(peerSrc)) {
-      cpSync(peerSrc, peerDest, { recursive: true, dereference: true });
-      console.log(`  ✓ ${peer} (puppeteer peer)`);
-    }
-  }
-} else {
-  console.warn("  ⚠ puppeteer-core not found — screenshot feature won't work");
-}
+// puppeteer-core is NOT shipped — screenshot.ts lazy-loads it with try/catch
+// and fails gracefully if unavailable. This avoids bundling its many peer deps
+// (@puppeteer/browsers, chromium-bidi, devtools-protocol, etc.)
+console.log("  ℹ puppeteer-core skipped (lazy-loaded, fails gracefully)");
 
 console.log("[bundle] Done! Bundles written to src-tauri/resources/");

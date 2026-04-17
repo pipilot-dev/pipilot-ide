@@ -13,7 +13,14 @@ import { existsSync } from "fs";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import puppeteer, { type Browser } from "puppeteer-core";
+// Lazy-loaded to avoid crashing the server when puppeteer-core is unavailable
+let puppeteer: typeof import("puppeteer-core").default | null = null;
+type Browser = import("puppeteer-core").Browser;
+try {
+  puppeteer = require("puppeteer-core").default || require("puppeteer-core");
+} catch {
+  console.warn("[screenshot] puppeteer-core not available — screenshot feature disabled");
+}
 
 // ── Chrome/Chromium/Edge discovery ───────────────────────────────────────────
 
@@ -190,6 +197,9 @@ export async function screenshot(
   outputPath: string,
   { width = 1440, height = 900, timeout = 20000, waitForNetwork = true }: ScreenshotOptions = {}
 ): Promise<ScreenshotResult> {
+  if (!puppeteer) {
+    throw new Error("puppeteer-core is not available — screenshot feature disabled");
+  }
   const browser = await getBrowser();
   const page = await browser.newPage();
 
