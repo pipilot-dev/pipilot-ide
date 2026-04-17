@@ -5640,21 +5640,42 @@ process.on("SIGINT", () => { stopAllDevServers(); activePtys.forEach(p => p.kill
 const CODESTRAL_API_KEY = "DXfXAjwNIZcAv1ESKtoDwWZZF98lJxho";
 
 app.post("/api/codestral/fim", express.json({ limit: "1mb" }), async (req, res) => {
+  // Use Node's https module instead of fetch — the Agent SDK's subprocess
+  // can interfere with global fetch in some environments.
+  const https = await import("https");
+  const payload = JSON.stringify(req.body);
+  const options = {
+    hostname: "codestral.mistral.ai",
+    path: "/v1/fim/completions",
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${CODESTRAL_API_KEY}`,
+      "Content-Length": Buffer.byteLength(payload),
+    },
+    timeout: 10000,
+  };
   try {
-    const upstream = await fetch("https://codestral.mistral.ai/v1/fim/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${CODESTRAL_API_KEY}`,
-      },
-      body: JSON.stringify(req.body),
+    const data = await new Promise<string>((resolve, reject) => {
+      const req2 = https.request(options, (upstream) => {
+        let body = "";
+        upstream.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+        upstream.on("end", () => {
+          if (upstream.statusCode && upstream.statusCode >= 400) {
+            reject(new Error(`Codestral: ${upstream.statusCode}`));
+          } else {
+            resolve(body);
+          }
+        });
+      });
+      req2.on("error", reject);
+      req2.on("timeout", () => { req2.destroy(); reject(new Error("Codestral timeout")); });
+      req2.write(payload);
+      req2.end();
     });
-    if (!upstream.ok) {
-      return res.status(upstream.status).json({ error: `Codestral: ${upstream.status}` });
-    }
-    const data = await upstream.json();
-    res.json(data);
+    res.json(JSON.parse(data));
   } catch (err: any) {
+    console.error("[codestral/fim]", err.message);
     res.status(502).json({ error: err.message });
   }
 });
