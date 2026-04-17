@@ -110,7 +110,10 @@ jobs:
           # x86_64
           curl -Lo node-x64.tar.gz "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-darwin-x64.tar.gz"
           tar xzf node-x64.tar.gz
-          # Create universal (fat) binary for macOS universal target
+          # Tauri universal build compiles per-arch first, so it needs all three:
+          cp "node-${NODE_VERSION}-darwin-arm64/bin/node" "src-tauri/binaries/node-sidecar-aarch64-apple-darwin"
+          cp "node-${NODE_VERSION}-darwin-x64/bin/node" "src-tauri/binaries/node-sidecar-x86_64-apple-darwin"
+          # Universal fat binary for the final bundle
           lipo -create \
             "node-${NODE_VERSION}-darwin-arm64/bin/node" \
             "node-${NODE_VERSION}-darwin-x64/bin/node" \
