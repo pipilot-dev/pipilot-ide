@@ -87,6 +87,7 @@ jobs:
 
       # Ensure sidecar directories exist (gitignored)
       - name: Create sidecar directories
+        shell: bash
         run: mkdir -p src-tauri/binaries src-tauri/resources
 
       # Download Node.js binary for sidecar

@@ -107,10 +107,12 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 let state = window.state::<SidecarState>();
-                if let Some(child) = state.agent_child.lock().unwrap().take() {
+                let agent = state.agent_child.lock().unwrap().take();
+                let cloud = state.cloud_child.lock().unwrap().take();
+                if let Some(child) = agent {
                     let _ = child.kill();
                 }
-                if let Some(child) = state.cloud_child.lock().unwrap().take() {
+                if let Some(child) = cloud {
                     let _ = child.kill();
                 }
             }
