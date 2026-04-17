@@ -82,6 +82,35 @@ export function IDELayout() {
   const [deploying, setDeploying] = useState(false);
   const [lastDeploy, setLastDeploy] = useState<DeployResult | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [serverOnline, setServerOnline] = useState(true);
+
+  // ── Health monitor — detect server crashes and auto-reconnect ──
+  useEffect(() => {
+    let consecutive502 = 0;
+    const check = async () => {
+      try {
+        const res = await fetch("/api/health", { signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          if (!serverOnline) {
+            setServerOnline(true);
+            addNotification({ title: "Server Reconnected", message: "Backend server is back online", type: "success" });
+          }
+          consecutive502 = 0;
+        } else {
+          consecutive502++;
+        }
+      } catch {
+        consecutive502++;
+      }
+      if (consecutive502 >= 3 && serverOnline) {
+        setServerOnline(false);
+        addNotification({ title: "Server Offline", message: "Backend server is not responding. Check the terminal.", type: "error" });
+      }
+    };
+    const timer = setInterval(check, 10000); // check every 10s
+    check(); // initial check
+    return () => clearInterval(timer);
+  }, [serverOnline]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [problemsOpen, setProblemsOpen] = useState(false);
 
@@ -1780,11 +1809,11 @@ export function IDELayout() {
         {/* Connection status */}
         <div
           className="flex items-center gap-1.5"
-          title={isOnline ? "Connected to network" : "No network connection"}
-          style={{ color: isOnline ? C.ok : C.error }}
+          title={!isOnline ? "No network connection" : !serverOnline ? "Backend server offline — check terminal" : "Connected"}
+          style={{ color: !isOnline ? C.error : !serverOnline ? C.warn : C.ok }}
         >
-          {isOnline ? <Wifi size={11} /> : <WifiOff size={11} />}
-          <span>{isOnline ? "Online" : "Offline"}</span>
+          {!isOnline ? <WifiOff size={11} /> : <Wifi size={11} />}
+          <span>{!isOnline ? "Offline" : !serverOnline ? "Server Down" : "Online"}</span>
         </div>
 
         {/* System clock */}

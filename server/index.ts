@@ -1,17 +1,17 @@
 // Load .env first — all Agent SDK config comes from environment variables
 import "dotenv/config";
 
-// ── Prevent EPIPE crashes ──
-// When the client disconnects mid-stream (page refresh), the SSE response
-// socket is destroyed. Any subsequent write to it emits an unhandled
-// 'error' event with code EPIPE, which crashes the process. Catch it here.
+// ── Crash-proof error handling ──
+// NEVER exit on uncaught exceptions — log them and keep running.
+// The #1 cause of silent 502s is process.exit(1) on unexpected errors.
 process.on("uncaughtException", (err: any) => {
+  // Expected on client disconnect — ignore silently
   if (err?.code === "EPIPE" || err?.code === "ERR_STREAM_DESTROYED" || err?.code === "ERR_STREAM_WRITE_AFTER_END") {
-    // Expected on client disconnect — ignore silently
     return;
   }
-  console.error("[FATAL] Uncaught exception:", err);
-  process.exit(1);
+  console.error("[server] Uncaught exception (recovered, server still running):", err?.message || err);
+  console.error(err?.stack || "");
+  // Do NOT exit — keep serving. The error is logged for debugging.
 });
 
 import express from "express";
@@ -6135,6 +6135,11 @@ app.post("/api/connectors/remove", express.json(), (req, res) => {
 // Cloud API now runs as a separate process on port 3002.
 // See server/cloud.ts — run with: npx tsx server/cloud.ts --standalone
 // app.use("/api/cloud", createCloudRouter(getWorkDir));
+
+// ── Health check — frontend polls this to detect server crashes ──
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, uptime: process.uptime(), memory: Math.round(process.memoryUsage().rss / 1024 / 1024) });
+});
 
 app.listen(PORT, () => {
   console.log(`[agent-server] Running on http://localhost:${PORT}`);
