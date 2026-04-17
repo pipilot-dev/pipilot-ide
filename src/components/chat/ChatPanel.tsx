@@ -270,11 +270,24 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   }, [inputDraftKey]);
   const handleRevertToMessage = useCallback(
     async (messageId: string) => {
-      if (isStreaming) return;
+      // If agent is streaming, stop it first before restoring
+      if (isStreaming) {
+        stopStreaming();
+        // Also tell the server to stop the agent
+        try {
+          await fetch("/api/agent/stop", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId }),
+          });
+        } catch {}
+        // Small delay to let the abort propagate
+        await new Promise((r) => setTimeout(r, 300));
+      }
       const content = await revertToMessage(messageId);
       if (content) setInput(content);
     },
-    [revertToMessage, isStreaming]
+    [revertToMessage, isStreaming, stopStreaming, projectId]
   );
   const handleRedoToMessage = useCallback(
     async (messageId: string) => {
