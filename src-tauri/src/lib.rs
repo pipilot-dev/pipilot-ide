@@ -14,12 +14,19 @@ fn spawn_sidecar(
     extra_args: &[&str],
 ) -> Result<CommandChild, Box<dyn std::error::Error>> {
     // Resolve the resources directory where server bundles live
-    let resource_dir = app
+    let raw_resource_dir = app
         .path()
         .resource_dir()
         .expect("failed to resolve resource dir");
 
-    let script_path = resource_dir.join(script_name);
+    // On Windows, resource_dir() returns \\?\ prefixed paths which Node.js can't handle.
+    // Strip the prefix and canonicalize to a normal path.
+    let resource_dir_str = raw_resource_dir.to_string_lossy().to_string();
+    let resource_dir_str = resource_dir_str.strip_prefix("\\\\?\\").unwrap_or(&resource_dir_str).to_string();
+    let resource_dir = std::path::PathBuf::from(&resource_dir_str);
+
+    // Bundles are inside the resources/ subdirectory
+    let script_path = resource_dir.join("resources").join(script_name);
     let script_str = script_path.to_string_lossy().to_string();
 
     // Build args: [script_path, ...extra_args]
@@ -43,7 +50,7 @@ fn spawn_sidecar(
         .env("NODE_ENV", "production")
         .env(
             "NODE_PATH",
-            resource_dir.join("node_modules").to_string_lossy().to_string(),
+            resource_dir.join("resources").join("node_modules").to_string_lossy().to_string(),
         )
         // Baked-in API config — users shouldn't need manual .env setup
         .env("ANTHROPIC_BASE_URL", "https://the3rdacademy.com/api")
