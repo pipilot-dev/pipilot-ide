@@ -5653,7 +5653,7 @@ app.post("/api/codestral/fim", express.json({ limit: "1mb" }), async (req, res) 
       "Authorization": `Bearer ${CODESTRAL_API_KEY}`,
       "Content-Length": Buffer.byteLength(payload),
     },
-    timeout: 10000,
+    timeout: 30000,
   };
   try {
     const data = await new Promise<string>((resolve, reject) => {
