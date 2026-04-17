@@ -535,12 +535,20 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
 
       // POST to agent server. `mode` controls whether the agent runs in
       // normal build mode or in plan-only mode (research + plan, no edits).
+      // Connection timeout — if the server doesn't respond in 15s, abort.
+      // Prevents infinite "STREAMING" when the server is down.
+      const connectionTimeout = setTimeout(() => {
+        if (!controller.signal.aborted) controller.abort();
+      }, 15000);
+
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: userContent, systemPrompt, projectId: pid, mode }),
         signal: controller.signal,
       });
+
+      clearTimeout(connectionTimeout); // server responded, cancel the timeout
 
       if (!res.ok) {
         throw new Error(`Agent server error: ${res.status}`);
