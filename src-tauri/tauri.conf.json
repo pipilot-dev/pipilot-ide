@@ -47,16 +47,8 @@
       "resources/node_modules/**/*"
     ],
     "publisher": "PiPilot",
-    "copyright": "2025 PiPilot",
+    "copyright": "2026 PiPilot",
     "category": "DeveloperTool",
-    "createUpdaterArtifacts": true
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "",
-      "endpoints": [
-        "https://github.com/pipilot-dev/pipilot-ide/releases/latest/download/latest.json"
-      ]
-    }
+    "createUpdaterArtifacts": false
   }
 }
