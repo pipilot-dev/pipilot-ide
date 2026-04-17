@@ -10,7 +10,11 @@
     "dev:cloud": "tsx server/cloud.ts --standalone",
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "node scripts/bundle-server.mjs && tauri build",
+    "bundle:server": "node scripts/bundle-server.mjs"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -47,6 +51,7 @@
     "@tanstack/react-query": "5.96.0",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/cli": "^2.10.1",
+    "@tauri-apps/plugin-shell": "^2.2.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/file-saver": "^2.0.7",

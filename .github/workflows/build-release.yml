@@ -1,0 +1,149 @@
+name: Build & Release PiPilot IDE
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Create as draft release'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'windows-latest'
+            args: ''
+            target: ''
+            node_arch: 'win-x64'
+            node_ext: '.exe'
+            triple: 'x86_64-pc-windows-msvc'
+          - platform: 'macos-latest'
+            args: '--target universal-apple-darwin'
+            target: 'aarch64-apple-darwin,x86_64-apple-darwin'
+            node_arch: 'darwin-arm64'
+            node_ext: ''
+            triple: 'aarch64-apple-darwin'
+          - platform: 'ubuntu-24.04'
+            args: ''
+            target: ''
+            node_arch: 'linux-x64'
+            node_ext: ''
+            triple: 'x86_64-unknown-linux-gnu'
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # Linux: install system dependencies for Tauri v2
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      - name: Install frontend dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build
+
+      # Download Node.js binary for sidecar
+      - name: Download Node.js binary (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          NODE_VERSION="v22.16.0"
+          curl -Lo node.zip "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-win-x64.zip"
+          unzip -q node.zip
+          cp "node-${NODE_VERSION}-win-x64/node.exe" "src-tauri/binaries/node-sidecar-x86_64-pc-windows-msvc.exe"
+
+      - name: Download Node.js binary (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          NODE_VERSION="v22.16.0"
+          # ARM64
+          curl -Lo node-arm64.tar.gz "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-darwin-arm64.tar.gz"
+          tar xzf node-arm64.tar.gz
+          cp "node-${NODE_VERSION}-darwin-arm64/bin/node" "src-tauri/binaries/node-sidecar-aarch64-apple-darwin"
+          # x86_64
+          curl -Lo node-x64.tar.gz "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-darwin-x64.tar.gz"
+          tar xzf node-x64.tar.gz
+          cp "node-${NODE_VERSION}-darwin-x64/bin/node" "src-tauri/binaries/node-sidecar-x86_64-apple-darwin"
+
+      - name: Download Node.js binary (Linux)
+        if: matrix.platform == 'ubuntu-24.04'
+        run: |
+          NODE_VERSION="v22.16.0"
+          curl -Lo node.tar.xz "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz"
+          tar xJf node.tar.xz
+          cp "node-${NODE_VERSION}-linux-x64/bin/node" "src-tauri/binaries/node-sidecar-x86_64-unknown-linux-gnu"
+
+      # Bundle server code
+      - name: Bundle server for sidecar
+        run: node scripts/bundle-server.mjs
+
+      # macOS: add universal target
+      - name: Add macOS universal targets
+        if: matrix.platform == 'macos-latest'
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'PiPilot IDE ${{ github.ref_name }}'
+          includeUpdaterJson: true
+          releaseBody: |
+            ## PiPilot IDE ${{ github.ref_name }}
+            AI-native code editor with integrated terminal, cloud management, and autonomous agent.
+            ### Downloads
+            - **Windows**: `.msi` installer or `.exe` setup
+            - **macOS**: `.dmg` (universal — works on Intel + Apple Silicon)
+            - **Linux**: `.AppImage` or `.deb`
+          releaseDraft: ${{ github.event.inputs.draft || true }}
+          prerelease: false
+          args: ${{ matrix.args }}
