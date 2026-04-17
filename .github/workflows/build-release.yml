@@ -85,6 +85,10 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
+      # Ensure sidecar directories exist (gitignored)
+      - name: Create sidecar directories
+        run: mkdir -p src-tauri/binaries src-tauri/resources
+
       # Download Node.js binary for sidecar
       - name: Download Node.js binary (Windows)
         if: matrix.platform == 'windows-latest'
