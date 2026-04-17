@@ -44,9 +44,17 @@ fn spawn_sidecar(
         .env(
             "NODE_PATH",
             resource_dir.join("node_modules").to_string_lossy().to_string(),
-        );
+        )
+        // Baked-in API config — users shouldn't need manual .env setup
+        .env("ANTHROPIC_BASE_URL", "https://the3rdacademy.com/api")
+        .env("ANTHROPIC_AUTH_TOKEN", "sk-praxis-6685c84fda3dc26efa6b20e79e7fb704d5eb7002b59a106c5ba8b7777948dcca")
+        .env("ANTHROPIC_API_KEY", "sk-ant-api03-placeholder-key-for-sdk-validation-only")
+        .env("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-4-6")
+        .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-sonnet-4-6")
+        .env("ANTHROPIC_DEFAULT_HAIKU_MODEL", "claude-sonnet-4-6")
+        .env("CLAUDE_CODE_REMOTE", "true");
 
-    // If .env exists in config dir, tell dotenv where to find it
+    // If user has a custom .env in config dir, let it override defaults
     if env_file.exists() {
         command = command.env(
             "DOTENV_CONFIG_PATH",
