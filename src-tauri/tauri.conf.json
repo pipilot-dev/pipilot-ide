@@ -42,8 +42,8 @@
       "binaries/node-sidecar"
     ],
     "resources": [
-      "resources/server-bundle.mjs",
-      "resources/cloud-bundle.mjs",
+      "resources/server-bundle.cjs",
+      "resources/cloud-bundle.cjs",
       "resources/node_modules/**/*"
     ],
     "publisher": "PiPilot",

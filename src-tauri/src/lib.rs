@@ -124,7 +124,7 @@ pub fn run() {
                 // Ensure config dir exists (for .env placement)
                 let _ = std::fs::create_dir_all(&config_dir);
 
-                match spawn_sidecar(app, "server-bundle.mjs", &[]) {
+                match spawn_sidecar(app, "server-bundle.cjs", &[]) {
                     Ok(child) => {
                         log::info!("Agent sidecar spawned successfully");
                         app.manage(SidecarState {
@@ -142,7 +142,7 @@ pub fn run() {
                     }
                 }
 
-                match spawn_sidecar(app, "cloud-bundle.mjs", &["--standalone"]) {
+                match spawn_sidecar(app, "cloud-bundle.cjs", &["--standalone"]) {
                     Ok(child) => {
                         log::info!("Cloud sidecar spawned successfully");
                         let state = app.state::<SidecarState>();

@@ -2,8 +2,8 @@
  * Bundle PiPilot server code for Tauri sidecar distribution.
  *
  * Produces:
- *   src-tauri/resources/server-bundle.mjs  (agent server)
- *   src-tauri/resources/cloud-bundle.mjs   (cloud server)
+ *   src-tauri/resources/server-bundle.cjs  (agent server)
+ *   src-tauri/resources/cloud-bundle.cjs   (cloud server)
  *
  * Native modules (node-pty, puppeteer-core) are marked external —
  * they ship as-is in src-tauri/resources/node_modules/.
@@ -33,7 +33,7 @@ const shared = {
   bundle: true,
   platform: "node",
   target: "node20",
-  format: "esm",
+  format: "cjs",
   sourcemap: false,
   minify: false, // keep readable for debugging
   external: EXTERNALS,
@@ -42,18 +42,18 @@ const shared = {
   },
 };
 
-console.log("[bundle] Bundling server/index.ts → server-bundle.mjs ...");
+console.log("[bundle] Bundling server/index.ts → server-bundle.cjs ...");
 await build({
   ...shared,
   entryPoints: [resolve(ROOT, "server", "index.ts")],
-  outfile: resolve(RESOURCES, "server-bundle.mjs"),
+  outfile: resolve(RESOURCES, "server-bundle.cjs"),
 });
 
-console.log("[bundle] Bundling server/cloud.ts → cloud-bundle.mjs ...");
+console.log("[bundle] Bundling server/cloud.ts → cloud-bundle.cjs ...");
 await build({
   ...shared,
   entryPoints: [resolve(ROOT, "server", "cloud.ts")],
-  outfile: resolve(RESOURCES, "cloud-bundle.mjs"),
+  outfile: resolve(RESOURCES, "cloud-bundle.cjs"),
 });
 
 // Copy native module packages so require() can find them at runtime
@@ -81,7 +81,7 @@ if (existsSync(puppeteerSrc)) {
   cpSync(puppeteerSrc, puppeteerDest, { recursive: true, dereference: true });
   console.log("  ✓ puppeteer-core");
   // Also copy chromium-bidi and devtools-protocol if present (puppeteer peer deps)
-  for (const peer of ["chromium-bidi", "devtools-protocol", "debug", "ms"]) {
+  for (const peer of ["@puppeteer/browsers", "chromium-bidi", "devtools-protocol", "debug", "ms"]) {
     const peerSrc = resolve(ROOT, "node_modules", peer);
     const peerDest = resolve(RESOURCES, "node_modules", peer);
     if (existsSync(peerSrc)) {
