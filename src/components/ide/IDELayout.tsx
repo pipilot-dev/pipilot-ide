@@ -86,30 +86,35 @@ export function IDELayout() {
 
   // ── Health monitor — detect server crashes and auto-reconnect ──
   useEffect(() => {
-    let consecutive502 = 0;
+    let failCount = 0;
     const check = async () => {
       try {
-        const res = await fetch("/api/health", { signal: AbortSignal.timeout(3000) });
+        const res = await fetch("/api/health", { signal: AbortSignal.timeout(5000) });
         if (res.ok) {
           if (!serverOnline) {
             setServerOnline(true);
             addNotification({ title: "Server Reconnected", message: "Backend server is back online", type: "success" });
           }
-          consecutive502 = 0;
+          failCount = 0;
         } else {
-          consecutive502++;
+          failCount++;
         }
       } catch {
-        consecutive502++;
+        failCount++;
       }
-      if (consecutive502 >= 3 && serverOnline) {
+      // Only flag as down after 5 consecutive failures (50s of downtime)
+      if (failCount >= 5 && serverOnline) {
         setServerOnline(false);
         addNotification({ title: "Server Offline", message: "Backend server is not responding. Check the terminal.", type: "error" });
       }
     };
-    const timer = setInterval(check, 10000); // check every 10s
-    check(); // initial check
-    return () => clearInterval(timer);
+    // Grace period: don't check during first 10s (server might still be starting)
+    const startDelay = setTimeout(() => {
+      check();
+      timer = setInterval(check, 10000);
+    }, 10000);
+    let timer: ReturnType<typeof setInterval>;
+    return () => { clearTimeout(startDelay); clearInterval(timer); };
   }, [serverOnline]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [problemsOpen, setProblemsOpen] = useState(false);
