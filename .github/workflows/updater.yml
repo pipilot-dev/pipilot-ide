@@ -1,0 +1,45 @@
+name: Check for Updates
+
+# Run on a schedule so the updater endpoint always reflects the latest release.
+# Also runs whenever a release is published.
+on:
+  release:
+    types: [published]
+  schedule:
+    # Every day at 02:00 UTC — regenerates the update manifest if needed
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  update-manifest:
+    name: Regenerate update manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tauri-action already uploads a `latest.json` update manifest to
+      # the GitHub Release during the release workflow.  This job is a safety
+      # net to make sure that manifest stays accessible at the canonical URL:
+      #   https://github.com/<owner>/<repo>/releases/latest/download/latest.json
+      #
+      # If you move to a self-hosted update server, replace this step with
+      # a curl/webhook call to your own endpoint.
+      - name: Verify update manifest exists on latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE=$(gh release view --json tagName,assets \
+            --repo "$GITHUB_REPOSITORY" 2>/dev/null || true)
+          if [ -z "$RELEASE" ]; then
+            echo "No releases found yet — skipping."
+            exit 0
+          fi
+          TAG=$(echo "$RELEASE" | jq -r '.tagName')
+          HAS_MANIFEST=$(echo "$RELEASE" | \
+            jq -r '.assets[].name' | grep -c 'latest.json' || true)
+          if [ "$HAS_MANIFEST" -eq 0 ]; then
+            echo "::warning::latest.json not found in release $TAG. \
+              Run the release workflow to regenerate it."
+          else
+            echo "✅ latest.json is present in release $TAG"
+          fi

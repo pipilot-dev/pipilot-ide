@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "PiPilot IDE",
-        "width": 800,
-        "height": 600,
+        "width": 1280,
+        "height": 800,
         "resizable": true,
         "fullscreen": false
       }
@@ -32,6 +32,22 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "publisher": "PiPilot",
+    "copyright": "© 2024 PiPilot",
+    "category": "DeveloperTool"
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "pubkey": "${TAURI_SIGNING_PUBLIC_KEY}",
+      "endpoints": [
+        "https://github.com/pipilot-dev/pipilot-ide/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "windows": {
+        "installerArgs": []
+      }
+    }
   }
 }
