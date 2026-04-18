@@ -13,7 +13,7 @@
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "electron:dev": "electron-vite dev",
-    "electron:build": "vite build --config vite.config.ts && electron-vite build && electron-builder",
+    "electron:build": "electron-vite build && electron-builder",
     "electron:preview": "electron-vite preview",
     "postinstall": "electron-builder install-app-deps"
   },

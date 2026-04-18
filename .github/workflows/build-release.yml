@@ -54,10 +54,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Build frontend
-        run: pnpm build
-
-      - name: Build Electron
+      - name: Build Electron (main + preload + renderer)
         run: pnpm exec electron-vite build
 
       - name: Package app
