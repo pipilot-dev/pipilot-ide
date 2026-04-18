@@ -153,7 +153,9 @@
       "Bash(gh run:*)",
       "Bash(find node_modules/@anthropic-ai/claude-agent-sdk -name cli* -maxdepth 2)",
       "Bash(where claude:*)",
-      "Bash(npx kill-port:*)"
+      "Bash(npx kill-port:*)",
+      "WebFetch(domain:electron-vite.org)",
+      "Bash(npx --yes electron --version)"
     ]
   },
   "enableAllProjectMcpServers": true,
