@@ -1,6 +1,11 @@
 {
   "name": "pipilot-ide",
   "version": "0.1.0",
+  "description": "AI-native code editor with integrated terminal, cloud management, and autonomous coding agent",
+  "author": {
+    "name": "Hans Ade",
+    "email": "hans@pipilot.dev"
+  },
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
@@ -31,15 +36,9 @@
       "!node_modules/.cache",
       "!node_modules/.pnpm"
     ],
-    "extraResources": [
-      {
-        "from": ".env",
-        "to": ".env"
-      }
-    ],
     "win": {
       "target": ["nsis"],
-      "icon": "public/logo.png"
+      "icon": "public/icon.png"
     },
     "nsis": {
       "oneClick": false,
@@ -48,12 +47,12 @@
     },
     "mac": {
       "target": ["dmg"],
-      "icon": "public/logo.png",
+      "icon": "public/icon.png",
       "category": "public.app-category.developer-tools"
     },
     "linux": {
       "target": ["AppImage", "deb"],
-      "icon": "public/logo.png",
+      "icon": "public/icon.png",
       "category": "Development"
     },
     "publish": {
