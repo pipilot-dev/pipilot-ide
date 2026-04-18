@@ -28,19 +28,22 @@ function startServers() {
     ? path.join(__dirname, "..", "..")  // project root in dev
     : path.join(process.resourcesPath!, "app");  // packaged app
 
-  const tsxBin = isDev
-    ? path.join(serverDir, "node_modules", ".bin", "tsx")
-    : path.join(serverDir, "node_modules", ".bin", "tsx");
+  // Use tsx's JS entry point directly with Node, not the shell wrapper
+  // This avoids shell: true which fails in packaged apps (ENOENT cmd.exe)
+  const tsxEntry = path.join(serverDir, "node_modules", "tsx", "dist", "cli.mjs");
+  const nodeExe = process.execPath; // Electron's bundled Node.js
 
   const agentScript = path.join(serverDir, "server", "index.ts");
   const cloudScript = path.join(serverDir, "server", "cloud.ts");
 
+  console.log("[electron] Node:", nodeExe);
+  console.log("[electron] tsx entry:", tsxEntry);
   console.log("[electron] Starting agent server:", agentScript);
-  agentServer = spawn(tsxBin, [agentScript], {
+
+  agentServer = spawn(nodeExe, [tsxEntry, agentScript], {
     cwd: serverDir,
-    env: serverEnv,
+    env: { ...serverEnv, ELECTRON_RUN_AS_NODE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
-    shell: true,
   });
 
   agentServer.stdout?.on("data", (data: Buffer) => {
@@ -54,11 +57,10 @@ function startServers() {
   });
 
   console.log("[electron] Starting cloud server:", cloudScript);
-  cloudServer = spawn(tsxBin, [cloudScript, "--standalone"], {
+  cloudServer = spawn(nodeExe, [tsxEntry, cloudScript, "--standalone"], {
     cwd: serverDir,
-    env: serverEnv,
+    env: { ...serverEnv, ELECTRON_RUN_AS_NODE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
-    shell: true,
   });
 
   cloudServer.stdout?.on("data", (data: Buffer) => {
