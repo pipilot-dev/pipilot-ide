@@ -1,8 +1,9 @@
 {
-  "name": "@workspace/ai-ide",
-  "version": "0.0.0",
+  "name": "pipilot-ide",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./out/main/index.js",
   "scripts": {
     "dev": "concurrently \"vite --config vite.config.ts --host 0.0.0.0\" \"tsx server/index.ts\" \"tsx server/cloud.ts --standalone\"",
     "dev:client": "vite --config vite.config.ts --host 0.0.0.0",
@@ -10,7 +11,54 @@
     "dev:cloud": "tsx server/cloud.ts --standalone",
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "electron:dev": "electron-vite dev",
+    "electron:build": "vite build --config vite.config.ts && electron-vite build && electron-builder",
+    "electron:preview": "electron-vite preview",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "dev.pipilot.ide",
+    "productName": "PiPilot IDE",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "dist/**/*",
+      "server/**/*",
+      "node_modules/**/*",
+      "!node_modules/.cache",
+      "!node_modules/.pnpm"
+    ],
+    "extraResources": [
+      {
+        "from": ".env",
+        "to": ".env"
+      }
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": "public/logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": ["dmg"],
+      "icon": "public/logo.png",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "public/logo.png",
+      "category": "Development"
+    },
+    "publish": {
+      "provider": "github"
+    }
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -45,8 +93,6 @@
     "@tailwindcss/typography": "^0.5.15",
     "@tailwindcss/vite": "4.2.2",
     "@tanstack/react-query": "5.96.0",
-    "@tauri-apps/api": "^2.10.1",
-    "@tauri-apps/cli": "^2.10.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/file-saver": "^2.0.7",
@@ -58,6 +104,9 @@
     "clsx": "2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^3.6.0",
+    "electron": "^41.2.1",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
     "embla-carousel-react": "^8.6.0",
     "esbuild": "^0.28.0",
     "framer-motion": "12.38.0",

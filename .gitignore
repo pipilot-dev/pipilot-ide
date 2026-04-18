@@ -40,3 +40,7 @@ pids
 # OS
 .DS_Store
 Thumbs.db
+
+# Electron
+out/
+release/
