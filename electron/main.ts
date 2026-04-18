@@ -1,9 +1,8 @@
 import { app, BrowserWindow } from "electron";
-import { ChildProcess, fork, spawn } from "child_process";
+import { ChildProcess, spawn } from "child_process";
 import path from "path";
-import { fileURLToPath } from "url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// __dirname is provided by electron-vite's CJS shim — don't redeclare
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
 let mainWindow: BrowserWindow | null = null;
