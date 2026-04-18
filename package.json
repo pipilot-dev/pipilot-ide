@@ -48,7 +48,8 @@
     "mac": {
       "target": ["dmg"],
       "icon": "public/icon.png",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "x64ArchFiles": "Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/vendor/**/*"
     },
     "linux": {
       "target": ["AppImage", "deb"],
