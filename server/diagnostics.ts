@@ -16,8 +16,7 @@ import path from "path";
 import fs from "fs";
 
 const execAsync = promisify(exec);
-// Use __filename for CJS compat (import.meta.url is undefined in bundled CJS)
-const require = createRequire(typeof __filename !== "undefined" ? __filename : import.meta.url);
+const require = createRequire(import.meta.url);
 
 export interface Diagnostic {
   file: string;       // workspace-relative path

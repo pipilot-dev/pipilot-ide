@@ -1222,42 +1222,44 @@ export function createCloudRouter(getWorkDir: (id: string) => string) {
 // This isolates cloud API calls from the main agent server so slow external
 // requests (GitHub, Vercel, Cloudflare) don't block agent streaming or terminal.
 if (process.argv[1]?.includes("cloud") || process.argv.includes("--standalone")) {
-  // Use dynamic import wrapped in async IIFE to avoid top-level await (CJS compat)
-  (async () => {
-    const { WORKSPACE_BASE, PORT_CLOUD } = await import("./config.js");
+  // Dynamic import for standalone mode — avoid circular deps when imported as router
+  const cfg = await import("./config.js");
+  const WORKSPACE_BASE = cfg.WORKSPACE_BASE;
 
-    // Workspace resolution — same logic as index.ts
-    function resolveWorkDir(projectId: string): string {
-      try {
-        const regPath = path.join(WORKSPACE_BASE, ".pipilot-linked.json");
-        if (fs.existsSync(regPath)) {
-          const registry = JSON.parse(fs.readFileSync(regPath, "utf8"));
-          for (const entry of Object.values(registry) as any[]) {
-            if (entry.id === projectId && entry.absolutePath && fs.existsSync(entry.absolutePath)) {
-              return entry.absolutePath;
-            }
+  // Workspace resolution — same logic as index.ts
+  function resolveWorkDir(projectId: string): string {
+    // Check linked workspaces registry
+    try {
+      const regPath = path.join(WORKSPACE_BASE, ".pipilot-linked.json");
+      if (fs.existsSync(regPath)) {
+        const registry = JSON.parse(fs.readFileSync(regPath, "utf8"));
+        for (const entry of Object.values(registry) as any[]) {
+          if (entry.id === projectId && entry.absolutePath && fs.existsSync(entry.absolutePath)) {
+            return entry.absolutePath;
           }
         }
-      } catch {}
-      return path.join(WORKSPACE_BASE, projectId);
-    }
+      }
+    } catch {}
+    return path.join(WORKSPACE_BASE, projectId);
+  }
 
-    const app = express();
-    app.use(cors());
-    app.use(express.json({ limit: "5mb" }));
-    app.use("/api/cloud", createCloudRouter(resolveWorkDir));
+  const app = express();
+  app.use(cors());
+  app.use(express.json({ limit: "5mb" }));
+  app.use("/api/cloud", createCloudRouter(resolveWorkDir));
 
-    // Crash protection
-    process.on("uncaughtException", (err) => {
-      console.error("[cloud-server] Uncaught exception (non-fatal):", err.message);
-    });
-    process.on("unhandledRejection", (reason: any) => {
-      console.error("[cloud-server] Unhandled rejection (non-fatal):", reason?.message || reason);
-    });
+  const PORT = cfg.PORT_CLOUD;
 
-    app.listen(PORT_CLOUD, () => {
-      console.log(`[cloud-server] Running standalone on http://localhost:${PORT_CLOUD}`);
-      console.log(`[cloud-server] Workspace base: ${WORKSPACE_BASE}`);
-    });
-  })();
+  // Crash protection
+  process.on("uncaughtException", (err) => {
+    console.error("[cloud-server] Uncaught exception (non-fatal):", err.message);
+  });
+  process.on("unhandledRejection", (reason: any) => {
+    console.error("[cloud-server] Unhandled rejection (non-fatal):", reason?.message || reason);
+  });
+
+  app.listen(PORT, () => {
+    console.log(`[cloud-server] Running standalone on http://localhost:${PORT}`);
+    console.log(`[cloud-server] Workspace base: ${WORKSPACE_BASE}`);
+  });
 }

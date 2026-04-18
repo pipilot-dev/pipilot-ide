@@ -40,12 +40,3 @@ pids
 # OS
 .DS_Store
 Thumbs.db
-
-# Tauri
-src-tauri/target/
-src-tauri/binaries/
-src-tauri/resources/server-bundle.*
-src-tauri/resources/cloud-bundle.*
-src-tauri/Cargo.lock
-src-tauri/resources/node_modules/
-src-tauri/gen/

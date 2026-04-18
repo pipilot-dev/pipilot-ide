@@ -44,25 +44,6 @@ import path from "path";
 import os from "os";
 import { createCloudRouter } from "./cloud";
 
-// Resolve Claude Agent SDK CLI path for bundled CJS mode
-// In CJS bundles, import.meta.url is undefined so the SDK can't auto-resolve its CLI.
-let claudeCliPath: string | undefined;
-try {
-  claudeCliPath = require.resolve("@anthropic-ai/claude-agent-sdk/cli.js");
-} catch {
-  // In bundled mode, try to find it relative to the bundle
-  try {
-    const sdkDir = path.dirname(require.resolve("@anthropic-ai/claude-agent-sdk"));
-    const cliCandidate = path.join(sdkDir, "cli.js");
-    if (fs.existsSync(cliCandidate)) claudeCliPath = cliCandidate;
-  } catch {}
-}
-if (claudeCliPath) {
-  console.log(`[agent-server] Claude CLI path: ${claudeCliPath}`);
-} else {
-  console.warn("[agent-server] Claude CLI path not found — agent queries may fail");
-}
-
 const app = express();
 app.disable("x-powered-by"); // security: hide server fingerprint
 app.use(cors());
@@ -2479,7 +2460,6 @@ ${systemPrompt ? "\n## Additional Context\n" + systemPrompt.replace(/^(  (?:Acti
           allowDangerouslySkipPermissions: true,
           maxTurns: 1,
           abortController: compactAbort,
-          ...(claudeCliPath ? { pathToClaudeCodeExecutable: claudeCliPath } : {}),
         },
       })) {
         if ((msg as any).type === "system" && (msg as any).subtype === "compact_boundary") {
@@ -2678,12 +2658,14 @@ End your response with a section titled "## Plan" containing the numbered steps.
       options: {
         systemPrompt: agentSystemPrompt,
         cwd: workDir,
+        // In plan mode, use the SDK's built-in "plan" permission to actually
+        // block mutating tools at the protocol level (in addition to the
+        // system prompt instructions above).
         permissionMode: agentMode === "plan" ? "plan" : "bypassPermissions",
         allowDangerouslySkipPermissions: agentMode !== "plan",
         includePartialMessages: true,
         continue: !isFirstMessage,
         abortController,
-        ...(claudeCliPath ? { pathToClaudeCodeExecutable: claudeCliPath } : {}),
         // Register custom IDE tools + default MCP servers
         mcpServers: {
           pipilot: ideTools,
