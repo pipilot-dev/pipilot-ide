@@ -8,7 +8,7 @@
   },
   "private": true,
   "type": "module",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "concurrently \"vite --config vite.config.ts --host 0.0.0.0\" \"tsx server/index.ts\" \"tsx server/cloud.ts --standalone\"",
     "dev:client": "vite --config vite.config.ts --host 0.0.0.0",
@@ -17,8 +17,8 @@
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "electron:dev": "ELECTRON=1 vite dev",
-    "electron:build": "ELECTRON=1 tsc && ELECTRON=1 vite build && electron-builder",
+    "electron:dev": "node scripts/build-electron.mjs && concurrently \"vite dev\" \"electron .\"",
+    "electron:build": "vite build && node scripts/build-electron.mjs && electron-builder",
     "postinstall": "electron-builder install-app-deps"
   },
   "devDependencies": {

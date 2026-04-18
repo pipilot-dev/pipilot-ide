@@ -162,7 +162,18 @@
       "Bash(ELECTRON=1 pnpm exec vite build)",
       "Bash(ELECTRON=1 node_modules/.bin/vite dev)",
       "Bash(npx electron:*)",
-      "Bash(cat electron/handlers/*.ts)"
+      "Bash(cat electron/handlers/*.ts)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//c/Users/big/Documents/Projects/pipilot-ide/**)",
+      "Bash(done)",
+      "Bash(head -2 dist-electron/chunk-*.js)",
+      "Bash(head -3 dist-electron/chunk-*.js)",
+      "Bash(head -3 dist-electron/main*.js)",
+      "Bash(ELECTRON=1 pnpm exec vite dev)",
+      "Bash(cat /c/Users/big/AppData/Local/dev.pipilot.ide/logs/*.log)",
+      "Bash(find /c/Users/big/AppData -name *.log -path *pipilot*)",
+      "Bash(pnpm electron:dev)"
     ]
   },
   "enableAllProjectMcpServers": true,

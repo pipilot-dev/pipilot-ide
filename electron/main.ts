@@ -1,8 +1,7 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import path from "path";
-import { fileURLToPath } from "url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// __dirname is available natively in CJS output
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
 let mainWindow: BrowserWindow | null = null;
@@ -30,7 +29,7 @@ function createWindow() {
     title: "PiPilot IDE",
     icon: path.join(app.getAppPath(), "public", "icon.png"),
     webPreferences: {
-      preload: path.join(__dirname, "preload.mjs"),
+      preload: path.join(__dirname, "preload.cjs"),
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: false,

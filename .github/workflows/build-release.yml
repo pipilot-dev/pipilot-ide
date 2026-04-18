@@ -54,9 +54,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Build (frontend + electron main/preload)
-        run: ELECTRON=1 pnpm exec vite build
-        shell: bash
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Build Electron main + preload
+        run: node scripts/build-electron.mjs
 
       - name: Package app
         run: pnpm exec electron-builder ${{ matrix.args }} --publish always

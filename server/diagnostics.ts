@@ -11,12 +11,10 @@
 
 import { spawn, exec } from "child_process";
 import { promisify } from "util";
-import { createRequire } from "module";
 import path from "path";
 import fs from "fs";
 
 const execAsync = promisify(exec);
-const require = createRequire(import.meta.url);
 
 export interface Diagnostic {
   file: string;       // workspace-relative path
