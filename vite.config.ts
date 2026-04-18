@@ -162,6 +162,8 @@ export default defineConfig({
       },
     },
   },
+  // Use relative paths in Electron so file:// protocol works
+  base: isElectron ? "./" : "/",
   root: path.resolve(import.meta.dirname),
   // Exclude workspace HTML files from dep scanning — they're user projects,
   // not part of the IDE itself. Without this, Vite tries to parse them and

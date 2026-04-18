@@ -159,7 +159,10 @@
       "Bash(identify public/logo.png)",
       "Bash(npx --yes sharp-cli resize 512 512 -i public/logo.png -o build/icon.png)",
       "Bash(npx --yes @aspect-build/pnpm-lock-to-npm-lock)",
-      "Bash(ELECTRON=1 pnpm exec vite build)"
+      "Bash(ELECTRON=1 pnpm exec vite build)",
+      "Bash(ELECTRON=1 node_modules/.bin/vite dev)",
+      "Bash(npx electron:*)",
+      "Bash(cat electron/handlers/*.ts)"
     ]
   },
   "enableAllProjectMcpServers": true,
