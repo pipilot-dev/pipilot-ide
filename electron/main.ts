@@ -1,9 +1,9 @@
 import { app, BrowserWindow } from "electron";
-import { ChildProcess, spawn } from "child_process";
+import { spawn, ChildProcess } from "child_process";
 import path from "path";
 
-// __dirname is provided by electron-vite's CJS shim — don't redeclare
-const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
+// Vite dev server URL (set by vite-plugin-electron in dev mode)
+const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
 let mainWindow: BrowserWindow | null = null;
 let agentServer: ChildProcess | null = null;
@@ -19,62 +19,54 @@ const serverEnv = {
   ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-sonnet-4-6",
   ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-sonnet-4-6",
   CLAUDE_CODE_REMOTE: "true",
-  NODE_ENV: isDev ? "development" : "production",
 };
 
 // ── Spawn Express servers ──
 function startServers() {
-  const serverDir = isDev
-    ? path.join(__dirname, "..", "..")  // project root in dev
-    : path.join(process.resourcesPath!, "app");  // packaged app
+  // In packaged app: app.getAppPath() = resources/app.asar or resources/app
+  // In dev: app.getAppPath() = project root
+  const appRoot = app.getAppPath();
 
-  // Use tsx's JS entry point directly with Node, not the shell wrapper
-  // This avoids shell: true which fails in packaged apps (ENOENT cmd.exe)
-  const tsxEntry = path.join(serverDir, "node_modules", "tsx", "dist", "cli.mjs");
-  const nodeExe = process.execPath; // Electron's bundled Node.js
+  // tsx entry point (the actual JS, not the shell wrapper)
+  const tsxCli = path.join(appRoot, "node_modules", "tsx", "dist", "cli.mjs");
+  const agentScript = path.join(appRoot, "server", "index.ts");
+  const cloudScript = path.join(appRoot, "server", "cloud.ts");
 
-  const agentScript = path.join(serverDir, "server", "index.ts");
-  const cloudScript = path.join(serverDir, "server", "cloud.ts");
+  // Find a Node.js binary that works:
+  // In dev: just use system 'node'
+  // In packaged: use process.execPath with ELECTRON_RUN_AS_NODE
+  const useElectronAsNode = app.isPackaged;
+  const nodeBin = useElectronAsNode ? process.execPath : "node";
+  const extraEnv = useElectronAsNode ? { ELECTRON_RUN_AS_NODE: "1" } : {};
 
-  console.log("[electron] Node:", nodeExe);
-  console.log("[electron] tsx entry:", tsxEntry);
-  console.log("[electron] Starting agent server:", agentScript);
+  console.log("[electron] App root:", appRoot);
+  console.log("[electron] Node binary:", nodeBin);
+  console.log("[electron] tsx CLI:", tsxCli);
 
-  agentServer = spawn(nodeExe, [tsxEntry, agentScript], {
-    cwd: serverDir,
-    env: { ...serverEnv, ELECTRON_RUN_AS_NODE: "1" },
+  agentServer = spawn(nodeBin, [tsxCli, agentScript], {
+    cwd: appRoot,
+    env: { ...serverEnv, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  agentServer.stdout?.on("data", (data: Buffer) => {
-    console.log("[agent]", data.toString().trim());
-  });
-  agentServer.stderr?.on("data", (data: Buffer) => {
-    console.warn("[agent]", data.toString().trim());
-  });
-  agentServer.on("exit", (code) => {
-    console.log(`[agent] exited with code ${code}`);
-  });
+  agentServer.stdout?.on("data", (d: Buffer) => console.log("[agent]", d.toString().trim()));
+  agentServer.stderr?.on("data", (d: Buffer) => console.warn("[agent]", d.toString().trim()));
+  agentServer.on("error", (err) => console.error("[agent] spawn error:", err.message));
+  agentServer.on("exit", (code) => console.log(`[agent] exited with code ${code}`));
 
-  console.log("[electron] Starting cloud server:", cloudScript);
-  cloudServer = spawn(nodeExe, [tsxEntry, cloudScript, "--standalone"], {
-    cwd: serverDir,
-    env: { ...serverEnv, ELECTRON_RUN_AS_NODE: "1" },
+  cloudServer = spawn(nodeBin, [tsxCli, cloudScript, "--standalone"], {
+    cwd: appRoot,
+    env: { ...serverEnv, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  cloudServer.stdout?.on("data", (data: Buffer) => {
-    console.log("[cloud]", data.toString().trim());
-  });
-  cloudServer.stderr?.on("data", (data: Buffer) => {
-    console.warn("[cloud]", data.toString().trim());
-  });
-  cloudServer.on("exit", (code) => {
-    console.log(`[cloud] exited with code ${code}`);
-  });
+  cloudServer.stdout?.on("data", (d: Buffer) => console.log("[cloud]", d.toString().trim()));
+  cloudServer.stderr?.on("data", (d: Buffer) => console.warn("[cloud]", d.toString().trim()));
+  cloudServer.on("error", (err) => console.error("[cloud] spawn error:", err.message));
+  cloudServer.on("exit", (code) => console.log(`[cloud] exited with code ${code}`));
 }
 
-// ── Wait for server to be ready ──
+// ── Wait for server health check ──
 async function waitForServer(port: number, maxWait = 30000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
@@ -83,27 +75,19 @@ async function waitForServer(port: number, maxWait = 30000): Promise<boolean> {
         signal: AbortSignal.timeout(2000),
       });
       if (res.ok) return true;
-    } catch {
-      // not ready yet
-    }
+    } catch { /* not ready */ }
     await new Promise((r) => setTimeout(r, 500));
   }
   return false;
 }
 
-// ── Kill server processes ──
+// ── Kill servers ──
 function killServers() {
-  if (agentServer && !agentServer.killed) {
-    agentServer.kill();
-    agentServer = null;
-  }
-  if (cloudServer && !cloudServer.killed) {
-    cloudServer.kill();
-    cloudServer = null;
-  }
+  if (agentServer && !agentServer.killed) { agentServer.kill(); agentServer = null; }
+  if (cloudServer && !cloudServer.killed) { cloudServer.kill(); cloudServer = null; }
 }
 
-// ── Create main window ──
+// ── Create window ──
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -111,59 +95,44 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     title: "PiPilot IDE",
-    icon: path.join(__dirname, "..", "..", "public", "logo.png"),
+    icon: path.join(app.getAppPath(), "public", "icon.png"),
     webPreferences: {
-      preload: path.join(__dirname, "..", "preload", "index.js"),
+      preload: path.join(__dirname, "preload.mjs"),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false, // allow file:// to fetch localhost
+      webSecurity: false,
     },
   });
 
-  if (isDev) {
-    // Dev mode: load from Vite dev server
-    mainWindow.loadURL("http://localhost:51730");
-    mainWindow.webContents.openDevTools({ mode: "detach" });
+  if (VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(VITE_DEV_SERVER_URL);
   } else {
-    // Production: load built frontend
-    mainWindow.loadFile(path.join(__dirname, "..", "..", "dist", "index.html"));
+    mainWindow.loadFile(path.join(app.getAppPath(), "dist", "index.html"));
   }
 
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-  });
+  mainWindow.on("closed", () => { mainWindow = null; });
 }
 
 // ── App lifecycle ──
 app.whenReady().then(async () => {
-  // Start servers (in both dev and prod — in dev they may already be running)
-  if (!isDev) {
+  if (!VITE_DEV_SERVER_URL) {
+    // Production: start servers and wait
     startServers();
     console.log("[electron] Waiting for agent server...");
     const ready = await waitForServer(51731);
-    if (ready) {
-      console.log("[electron] Agent server ready!");
-    } else {
-      console.warn("[electron] Agent server did not respond in time, opening window anyway");
-    }
+    console.log(ready ? "[electron] Server ready!" : "[electron] Server timeout, opening anyway");
   }
 
   createWindow();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 app.on("window-all-closed", () => {
   killServers();
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
-  killServers();
-});
+app.on("before-quit", killServers);

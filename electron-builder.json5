@@ -1,0 +1,51 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "dev.pipilot.ide",
+  "productName": "PiPilot IDE",
+  "asar": true,
+  "asarUnpack": [
+    "node_modules/node-pty/**",
+    "node_modules/puppeteer-core/**",
+    "server/**"
+  ],
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "server/**/*",
+    "node_modules/**/*",
+    "public/icon.png",
+    "!node_modules/.cache",
+    "!node_modules/.pnpm",
+    "!src/**",
+    "!electron/**",
+    "!**/*.ts",
+    "!**/*.map"
+  ],
+  "win": {
+    "target": ["nsis"],
+    "icon": "public/icon.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true
+  },
+  "mac": {
+    "target": [
+      { "target": "dmg", "arch": ["x64", "arm64"] }
+    ],
+    "icon": "public/icon.png",
+    "category": "public.app-category.developer-tools"
+  },
+  "linux": {
+    "target": ["AppImage", "deb"],
+    "icon": "public/icon.png",
+    "category": "Development"
+  },
+  "publish": {
+    "provider": "github"
+  }
+}

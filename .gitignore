@@ -43,4 +43,5 @@ Thumbs.db
 
 # Electron
 out/
+dist-electron/
 release/

@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import electron from "vite-plugin-electron/simple";
 import path from "path";
 
 // Port config — must match server/config.ts values
@@ -8,10 +9,28 @@ const PORT_AGENT = parseInt(process.env.PIPILOT_PORT_AGENT || "51731");
 const PORT_CLOUD = parseInt(process.env.PIPILOT_PORT_CLOUD || "51732");
 const PORT_VITE = parseInt(process.env.PIPILOT_PORT_VITE || "51730");
 
+// Only include electron plugin when building for desktop
+const isElectron = process.env.ELECTRON === "1" || process.argv.includes("--electron");
+
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    ...(isElectron ? [electron({
+      main: {
+        entry: "electron/main.ts",
+        vite: {
+          build: {
+            rollupOptions: {
+              external: ["node-pty", "electron"],
+            },
+          },
+        },
+      },
+      preload: {
+        input: "electron/preload.ts",
+      },
+    })] : []),
   ],
   resolve: {
     alias: {
