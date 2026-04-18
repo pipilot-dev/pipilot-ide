@@ -1,6 +1,9 @@
 import { app, BrowserWindow } from "electron";
 import { spawn, ChildProcess } from "child_process";
 import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Vite dev server URL (set by vite-plugin-electron in dev mode)
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
