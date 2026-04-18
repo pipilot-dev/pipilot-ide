@@ -24,7 +24,7 @@ jobs:
           - platform: 'windows-latest'
             args: '--win'
           - platform: 'macos-latest'
-            args: '--mac --universal'
+            args: '--mac'
           - platform: 'ubuntu-24.04'
             args: '--linux'
 

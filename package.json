@@ -46,10 +46,11 @@
       "allowToChangeInstallationDirectory": true
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] }
+      ],
       "icon": "public/icon.png",
-      "category": "public.app-category.developer-tools",
-      "x64ArchFiles": "Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/vendor/**/*"
+      "category": "public.app-category.developer-tools"
     },
     "linux": {
       "target": ["AppImage", "deb"],
