@@ -40,6 +40,7 @@ import { RunDebugPanel } from "@/components/ide/RunDebugPanel";
 import { SourceControlPanel } from "@/components/ide/SourceControlPanel";
 import { useProjects } from "@/hooks/useProjects";
 import { db, fileOps, LANG_MAP } from "@/lib/db";
+import { apiGet, apiPost } from "@/lib/api";
 
 // --- Search types ---
 type SearchMode = "filename" | "content";
@@ -313,21 +314,15 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
 
     async function performSearch() {
       try {
-        const res = await fetch("/api/project/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            projectId: activeProjectId,
-            query: debouncedQuery,
-            mode: searchMode,
-            caseSensitive,
-            useRegex,
-            maxResults: searchMaxResults,
-            exclude: searchExclude,
-          }),
+        const data = await apiPost("/api/project/search", {
+          projectId: activeProjectId,
+          query: debouncedQuery,
+          mode: searchMode,
+          caseSensitive,
+          useRegex,
+          maxResults: searchMaxResults,
+          exclude: searchExclude,
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
         if (cancelled) return;
         const results: SearchResult[] = data.results || [];
         setSearchResults(results);
@@ -1011,22 +1006,21 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
 
       const totalBytes = filesPayload.reduce((s, f) => s + (f.base64.length * 3) / 4, 0);
 
-      const res = await fetch("/api/files/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      let data: any;
+      try {
+        data = await apiPost("/api/files/upload", {
           projectId: activeProjectId,
           targetFolder: targetFolderPath,
           files: filesPayload,
-        }),
-      });
-      if (res.status === 413) {
-        throw new Error("Files are too large (server limit: 1GB total)");
+        });
+      } catch (e: any) {
+        // re-throw with a friendlier message if it's a 413
+        const msg = e?.message || "";
+        if (msg.includes("413")) throw new Error("Files are too large (server limit: 1GB total)");
+        throw new Error(data?.error || msg || "Upload failed");
       }
-      let data: any = {};
-      try { data = await res.json(); } catch {}
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || `Upload failed (${res.status})`);
+      if (!data.success) {
+        throw new Error(data.error || "Upload failed");
       }
       addNotification({
         type: "success",
@@ -1076,11 +1070,8 @@ export function SidebarPanel({ view, selectedFileId, onSelectFile, files, onSear
     let basePath = activeProject?.linkedPath;
     if (!basePath && activeProjectId) {
       try {
-        const res = await fetch(`/api/workspaces/info?projectId=${encodeURIComponent(activeProjectId)}`);
-        if (res.ok) {
-          const data = await res.json();
-          basePath = data.absolutePath || data.path;
-        }
+        const data = await apiGet("/api/workspaces/info", { projectId: activeProjectId });
+        basePath = data.absolutePath || data.path;
       } catch {}
     }
     if (!basePath) {

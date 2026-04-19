@@ -1,0 +1,52 @@
+{
+  "name": "nasty-map-exceed-gp666",
+  "productName": "nasty-map-exceed-gp666",
+  "description": "My Electron application description",
+  "keywords": [],
+  "main": "./main.js",
+  "version": "1.0.0",
+  "author": "big",
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "echo \"No linting configured\""
+  },
+  "dependencies": {
+    "esbuild": "^0.28.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "8.0.0-alpha.3",
+    "@electron-forge/maker-deb": "8.0.0-alpha.3",
+    "@electron-forge/maker-rpm": "8.0.0-alpha.3",
+    "@electron-forge/maker-squirrel": "8.0.0-alpha.3",
+    "@electron-forge/maker-zip": "8.0.0-alpha.3",
+    "electron": "42.0.0-beta.4"
+  },
+  "config": {
+    "forge": {
+      "packagerConfig": {},
+      "makers": [
+        {
+          "name": "@electron-forge/maker-squirrel"
+        },
+        {
+          "name": "@electron-forge/maker-zip",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "name": "@electron-forge/maker-deb",
+          "config": {}
+        },
+        {
+          "name": "@electron-forge/maker-rpm",
+          "config": {}
+        }
+      ]
+    }
+  },
+  "license": "MIT"
+}

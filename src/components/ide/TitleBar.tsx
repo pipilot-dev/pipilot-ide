@@ -296,7 +296,7 @@ export function TitleBar(props: TitleBarHandlers) {
         }}
       >
         <img
-          src="/logo.png"
+          src={`${import.meta.env.BASE_URL}logo.png`}
           alt="PiPilot"
           style={{ width: 16, height: 16, objectFit: "contain" }}
         />

@@ -11,6 +11,7 @@ import { BUILTIN_EXTENSIONS } from "@/lib/extensions/builtin";
 import { ExtensionCard } from "./ExtensionCard";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { COLORS as C, FONTS } from "@/lib/design-tokens";
+import { apiGet, apiPost } from "@/lib/api";
 
 interface McpServerInfo {
   name: string;
@@ -64,13 +65,12 @@ export function ExtensionMarketplace() {
 
   // Load defaults + user config
   useEffect(() => {
-    fetch("/api/mcp/defaults").then((r) => r.json()).then(setDefaults).catch(() => {});
+    apiGet("/api/mcp/defaults").then(setDefaults).catch(() => {});
   }, []);
 
   const refreshUserMcp = useCallback(() => {
     if (!activeProjectId) return;
-    fetch(`/api/mcp/config?projectId=${encodeURIComponent(activeProjectId)}`)
-      .then((r) => r.json())
+    apiGet("/api/mcp/config", { projectId: activeProjectId })
       .then((d) => setUserMcp(d.mcpServers || {}))
       .catch(() => {});
   }, [activeProjectId]);
@@ -81,8 +81,7 @@ export function ExtensionMarketplace() {
   const searchRegistry = useCallback(async (q: string) => {
     setRegistryLoading(true);
     try {
-      const res = await fetch(`/api/mcp/search?search=${encodeURIComponent(q)}&limit=30`);
-      const data = await res.json();
+      const data = await apiGet("/api/mcp/search", { search: q, limit: "30" });
       setRegistryResults(data.servers || []);
     } catch {} finally {
       setRegistryLoading(false);
@@ -110,12 +109,7 @@ export function ExtensionMarketplace() {
     if (!activeProjectId) return;
     setInstalling(name);
     try {
-      const res = await fetch("/api/mcp/install", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, name, config, scope: installScope }),
-      });
-      const data = await res.json();
+      const data = await apiPost("/api/mcp/install", { projectId: activeProjectId, name, config, scope: installScope });
       if (data.success) {
         window.dispatchEvent(new CustomEvent("pipilot:notify", {
           detail: { type: "success", title: "MCP Server Installed", message: `${name} is now available to the AI agent` },
@@ -139,11 +133,7 @@ export function ExtensionMarketplace() {
   const uninstallMcp = useCallback(async (name: string) => {
     if (!activeProjectId) return;
     try {
-      await fetch("/api/mcp/uninstall", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, name }),
-      });
+      await apiPost("/api/mcp/uninstall", { projectId: activeProjectId, name });
       window.dispatchEvent(new CustomEvent("pipilot:notify", {
         detail: { type: "info", title: "MCP Server Removed", message: name },
       }));
@@ -160,13 +150,12 @@ export function ExtensionMarketplace() {
   const [customForm, setCustomForm] = useState({ id: "", envVar: "", token: "", description: "" });
 
   useEffect(() => {
-    fetch("/api/connectors/list").then((r) => r.json()).then((d) => setCliConnectors(d.connectors || [])).catch(() => {});
+    apiGet("/api/connectors/list").then((d) => setCliConnectors(d.connectors || [])).catch(() => {});
   }, []);
 
   const refreshConnectors = useCallback(() => {
     if (!activeProjectId) return;
-    fetch(`/api/connectors/config?projectId=${encodeURIComponent(activeProjectId)}`)
-      .then((r) => r.json())
+    apiGet("/api/connectors/config", { projectId: activeProjectId })
       .then((d) => setConnectorStatus(d.connectors || {}))
       .catch(() => {});
   }, [activeProjectId]);
@@ -176,12 +165,7 @@ export function ExtensionMarketplace() {
   const saveConnector = useCallback(async (connectorId: string, token: string) => {
     if (!activeProjectId) return;
     try {
-      const res = await fetch("/api/connectors/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, connectorId, token, enabled: true, scope: installScope }),
-      });
-      const data = await res.json();
+      const data = await apiPost("/api/connectors/save", { projectId: activeProjectId, connectorId, token, enabled: true, scope: installScope });
       if (data.success) {
         window.dispatchEvent(new CustomEvent("pipilot:notify", {
           detail: { type: "success", title: "Connector Configured", message: `${connectorId} — token saved. Agent can now use the CLI.` },
@@ -196,11 +180,7 @@ export function ExtensionMarketplace() {
   const removeConnector = useCallback(async (connectorId: string) => {
     if (!activeProjectId) return;
     try {
-      await fetch("/api/connectors/remove", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, connectorId }),
-      });
+      await apiPost("/api/connectors/remove", { projectId: activeProjectId, connectorId });
       window.dispatchEvent(new CustomEvent("pipilot:notify", {
         detail: { type: "info", title: "Connector Removed", message: connectorId },
       }));
@@ -732,18 +712,14 @@ export function ExtensionMarketplace() {
                           await saveConnector(customForm.id, customForm.token);
                           // Save again with metadata
                           if (activeProjectId) {
-                            await fetch("/api/connectors/save", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({
-                                projectId: activeProjectId,
-                                connectorId: customForm.id,
-                                token: customForm.token,
-                                envVar: customForm.envVar,
-                                label: customForm.id,
-                                description: customForm.description,
-                                enabled: true,
-                              }),
+                            await apiPost("/api/connectors/save", {
+                              projectId: activeProjectId,
+                              connectorId: customForm.id,
+                              token: customForm.token,
+                              envVar: customForm.envVar,
+                              label: customForm.id,
+                              description: customForm.description,
+                              enabled: true,
                             });
                             refreshConnectors();
                           }
@@ -840,7 +816,7 @@ function AgentsTab({ searchQuery }: { searchQuery: string }) {
   const [browsing, setBrowsing] = useState(false);
 
   useEffect(() => {
-    fetch("/api/agents/list").then((r) => r.json()).then((d) => setAgents(d.agents || [])).catch(() => {});
+    apiGet("/api/agents/list").then((d) => setAgents(d.agents || [])).catch(() => {});
   }, []);
 
   const browseRepo = async () => {

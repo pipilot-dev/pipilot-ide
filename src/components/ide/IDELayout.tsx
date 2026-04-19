@@ -47,6 +47,7 @@ import { useNotifications } from "@/contexts/NotificationContext";
 import { useProblems } from "@/contexts/ProblemsContext";
 import { useGitStatusCount } from "@/hooks/useGitStatusCount";
 import { useRealGit } from "@/hooks/useRealGit";
+import { apiGet, apiPost, apiDelete } from "@/lib/api";
 
 function findFileById(nodes: FileNode[], id: string): FileNode | null {
   for (const node of nodes) {
@@ -89,16 +90,12 @@ export function IDELayout() {
     let failCount = 0;
     const check = async () => {
       try {
-        const res = await fetch("/api/health", { signal: AbortSignal.timeout(5000) });
-        if (res.ok) {
-          if (!serverOnline) {
-            setServerOnline(true);
-            addNotification({ title: "Server Reconnected", message: "Backend server is back online", type: "success" });
-          }
-          failCount = 0;
-        } else {
-          failCount++;
+        await apiGet("/api/health");
+        if (!serverOnline) {
+          setServerOnline(true);
+          addNotification({ title: "Server Reconnected", message: "Backend server is back online", type: "success" });
         }
+        failCount = 0;
       } catch {
         failCount++;
       }
@@ -242,11 +239,7 @@ export function IDELayout() {
   // File operation callbacks — route to DB or server based on mode
   const handleCreateFile = useCallback(async (filePath: string, content: string = "") => {
     if (activeProvider === "claude-agent") {
-      await fetch("/api/files/write", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, path: filePath, content }),
-      });
+      await apiPost("/api/files/write", { projectId: activeProjectId, path: filePath, content });
     } else {
       const name = filePath.split("/").pop() || filePath;
       const parentPath = filePath.includes("/") ? filePath.split("/").slice(0, -1).join("/") : "";
@@ -262,11 +255,7 @@ export function IDELayout() {
 
   const handleCreateFolder = useCallback(async (folderPath: string) => {
     if (activeProvider === "claude-agent") {
-      await fetch("/api/files/mkdir", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, path: folderPath }),
-      });
+      await apiPost("/api/files/mkdir", { projectId: activeProjectId, path: folderPath });
     } else {
       const name = folderPath.split("/").pop() || folderPath;
       const parentPath = folderPath.includes("/") ? folderPath.split("/").slice(0, -1).join("/") : "";
@@ -279,11 +268,7 @@ export function IDELayout() {
 
   const handleRenameFile = useCallback(async (oldPath: string, newPath: string) => {
     if (activeProvider === "claude-agent") {
-      await fetch("/api/files/rename", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, oldPath, newPath }),
-      });
+      await apiPost("/api/files/rename", { projectId: activeProjectId, oldPath, newPath });
     } else {
       const file = await db.files.get(oldPath);
       if (file) {
@@ -297,7 +282,7 @@ export function IDELayout() {
 
   const handleDeleteFile = useCallback(async (filePath: string) => {
     if (activeProvider === "claude-agent") {
-      await fetch(`/api/files?projectId=${encodeURIComponent(activeProjectId)}&path=${encodeURIComponent(filePath)}`, { method: "DELETE" });
+      await apiDelete("/api/files", { projectId: activeProjectId, path: filePath });
     } else {
       const file = await db.files.get(filePath);
       if (file?.type === "folder") {
@@ -312,11 +297,7 @@ export function IDELayout() {
 
   const handleUpdateFileContent = useCallback(async (filePath: string, content: string) => {
     if (activeProvider === "claude-agent") {
-      await fetch("/api/files/write", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, path: filePath, content }),
-      });
+      await apiPost("/api/files/write", { projectId: activeProjectId, path: filePath, content });
     } else {
       await db.files.update(filePath, { content, updatedAt: new Date() });
     }
@@ -326,9 +307,7 @@ export function IDELayout() {
   const handleGetFileContent = useCallback(async (filePath: string): Promise<string> => {
     if (activeProvider === "claude-agent") {
       try {
-        const res = await fetch(`/api/files/read?projectId=${encodeURIComponent(activeProjectId)}&path=${encodeURIComponent(filePath)}`);
-        if (!res.ok) return "";
-        const data = await res.json();
+        const data = await apiGet("/api/files/read", { projectId: activeProjectId, path: filePath });
         return data.content || "";
       } catch {
         return "";
@@ -343,8 +322,8 @@ export function IDELayout() {
   const handleCheckFileExists = useCallback(async (filePath: string): Promise<boolean> => {
     if (activeProvider === "claude-agent") {
       try {
-        const res = await fetch(`/api/files/read?projectId=${encodeURIComponent(activeProjectId)}&path=${encodeURIComponent(filePath)}`);
-        return res.ok;
+        await apiGet("/api/files/read", { projectId: activeProjectId, path: filePath });
+        return true;
       } catch {
         return false;
       }
@@ -387,8 +366,7 @@ export function IDELayout() {
         // In agent mode, deploy from disk files via server API
         if (activeProvider === "claude-agent") {
           try {
-            const treeRes = await fetch(`/api/files/tree?projectId=${encodeURIComponent(activeProjectId)}`);
-            const treeData = await treeRes.json();
+            const treeData = await apiGet("/api/files/tree", { projectId: activeProjectId });
             const flatFiles: { path: string; content: string }[] = [];
             function flattenTree(nodes: any[]) {
               for (const n of nodes) {
@@ -1273,7 +1251,7 @@ export function IDELayout() {
           opacity: 0,
         }}>
           <img
-            src="/logo.png"
+            src={`${import.meta.env.BASE_URL}logo.png`}
             alt="PiPilot"
             style={{
               width: 56, height: 56,
@@ -1856,12 +1834,7 @@ function GenerateModal({ onClose, onGenerate }: { onClose: () => void; onGenerat
         reader.onload = () => resolve((reader.result as string).split(",")[1]);
         reader.readAsDataURL(file);
       });
-      const res = await fetch("/api/files/upload-temp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: file.name, base64 }),
-      });
-      const data = await res.json();
+      const data = await apiPost("/api/files/upload-temp", { fileName: file.name, base64 });
       if (data.path) setFiles((prev) => [...prev, { name: file.name, path: data.path }]);
     } catch {}
   };

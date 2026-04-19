@@ -8,13 +8,14 @@ import { useActiveProject } from "@/contexts/ProjectContext";
 import { FolderPicker } from "./FolderPicker";
 import { CloneRepoModal } from "./CloneRepoModal";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
+import { apiPost } from "@/lib/api";
 
 interface WelcomePageProps {
   onOpenPreview?: () => void;
   onNewFile?: () => void;
 }
 
-const LOGO_URL = "/logo.png";
+const LOGO_URL = `${import.meta.env.BASE_URL}logo.png`;
 const F = { d: FONTS.display, m: FONTS.mono, s: FONTS.sans };
 
 function relativeTime(date: Date | string): string {
@@ -84,12 +85,7 @@ export function WelcomePage({ onOpenPreview, onNewFile }: WelcomePageProps) {
         reader.onload = () => resolve((reader.result as string).split(",")[1]);
         reader.readAsDataURL(file);
       });
-      const res = await fetch("/api/files/upload-temp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: file.name, base64 }),
-      });
-      const data = await res.json();
+      const data = await apiPost("/api/files/upload-temp", { fileName: file.name, base64 });
       if (data.path) return { name: file.name, path: data.path };
     } catch {}
     return null;

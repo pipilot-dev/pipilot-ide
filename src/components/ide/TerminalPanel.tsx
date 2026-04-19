@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, KeyboardEvent } from "react";
 import { Plus, X, Trash2, Terminal as TerminalIcon, ChevronDown } from "lucide-react";
 import { db } from "@/lib/db";
 import { useActiveProject } from "@/contexts/ProjectContext";
+import { apiGet, apiPost } from "@/lib/api";
 import { XTerminal } from "@/components/ide/XTerminal";
 import { RealTerminal } from "@/components/ide/RealTerminal";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
@@ -904,8 +905,7 @@ export function TerminalPanel({ onClose }: { onClose?: () => void }) {
   const [platform, setPlatform] = useState<string>("");
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/terminal/profiles")
-      .then((r) => r.json())
+    apiGet("/api/terminal/profiles")
       .then((data) => {
         if (cancelled) return;
         setProfiles(data.profiles || []);
@@ -963,11 +963,7 @@ export function TerminalPanel({ onClose }: { onClose?: () => void }) {
     // Destroy PTY if it's a real shell
     const shell = shells.find(s => s.id === id);
     if (shell?.type === "real") {
-      fetch("/api/terminal/destroy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: id }),
-      }).catch(() => {});
+      apiPost("/api/terminal/destroy", { sessionId: id }).catch(() => {});
     }
     setShells((prev) => {
       const next = prev.filter((s) => s.id !== id);

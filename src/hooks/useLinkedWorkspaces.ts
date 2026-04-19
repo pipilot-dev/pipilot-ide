@@ -4,6 +4,7 @@
  */
 
 import { useState, useCallback, useEffect } from "react";
+import { apiGet, apiPost } from "@/lib/api";
 
 export interface LinkedWorkspace {
   id: string;
@@ -23,9 +24,7 @@ export function useLinkedWorkspaces() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/workspaces/list");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await apiGet("/api/workspaces/list");
       setWorkspaces(data.workspaces || []);
     } catch (err: any) {
       setError(err.message);
@@ -41,12 +40,7 @@ export function useLinkedWorkspaces() {
   const linkFolder = useCallback(async (absolutePath: string, name?: string): Promise<LinkedWorkspace | null> => {
     setError(null);
     try {
-      const res = await fetch("/api/workspaces/link", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ absolutePath, name }),
-      });
-      const data = await res.json();
+      const data = await apiPost("/api/workspaces/link", { absolutePath, name });
       if (!data.success) {
         throw new Error(data.error || "Failed to link folder");
       }
@@ -60,11 +54,7 @@ export function useLinkedWorkspaces() {
 
   const unlinkFolder = useCallback(async (projectId: string) => {
     try {
-      await fetch("/api/workspaces/unlink", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId }),
-      });
+      await apiPost("/api/workspaces/unlink", { projectId });
       await refresh();
     } catch (err: any) {
       setError(err.message);
@@ -73,11 +63,7 @@ export function useLinkedWorkspaces() {
 
   const touchWorkspace = useCallback(async (projectId: string) => {
     try {
-      await fetch("/api/workspaces/touch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId }),
-      });
+      await apiPost("/api/workspaces/touch", { projectId });
     } catch {}
   }, []);
 

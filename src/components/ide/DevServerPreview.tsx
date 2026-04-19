@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useActiveProject } from "@/contexts/ProjectContext";
+import { apiGet, apiPost, apiStream, type StreamHandle } from "@/lib/api";
 import {
   Play, Square, RefreshCw, ExternalLink, Loader2,
   ArrowLeft, ArrowRight, Maximize2, Minimize2,
@@ -42,7 +43,7 @@ export function DevServerPreview() {
   const [port, setPort] = useState<number | null>(null);
   const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval>>();
-  const sseRef = useRef<EventSource | null>(null);
+  const sseRef = useRef<StreamHandle | null>(null);
 
   /* ── Navigation history ───────────────────────────────────────────── */
   const [history, setHistory] = useState<string[]>([]);
@@ -88,20 +89,16 @@ export function DevServerPreview() {
     }
     if (!activeProjectId) return;
 
-    const es = new EventSource(`/api/dev-server/logs?projectId=${encodeURIComponent(activeProjectId)}`);
-    sseRef.current = es;
-
-    es.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
+    const handle = apiStream("/api/dev-server/logs", { projectId: activeProjectId }, {
+      onData: (data) => {
         const level = data.level === "error" ? "error" : data.level === "warn" ? "warn" : data.source === "system" ? "system" : "info";
         addEntry(level, data.source === "system" ? "system" : "server", data.text);
-      } catch {}
-    };
+      },
+      onError: () => {},
+    });
+    sseRef.current = handle;
 
-    es.onerror = () => {};
-
-    return () => { es.close(); sseRef.current = null; };
+    return () => { handle.close(); sseRef.current = null; };
   }, [status, activeProjectId, addEntry]);
 
   /* ── Listen for iframe console messages ───────────────────────────── */
@@ -171,9 +168,7 @@ export function DevServerPreview() {
 
     pollRef.current = setInterval(async () => {
       try {
-        const res = await fetch(`/api/dev-server/status?projectId=${encodeURIComponent(activeProjectId)}`);
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await apiGet("/api/dev-server/status", { projectId: activeProjectId });
 
         if (data.running && data.port) {
           setStatus("running");
@@ -213,12 +208,7 @@ export function DevServerPreview() {
     addEntry("system", "system", "Starting dev server...");
 
     try {
-      const res = await fetch("/api/dev-server/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId }),
-      });
-      const data = await res.json();
+      const data = await apiPost("/api/dev-server/start", { projectId: activeProjectId });
       if (data.success) {
         if (data.reused && data.port) {
           setStatus("running");
@@ -242,11 +232,7 @@ export function DevServerPreview() {
 
   const handleStop = useCallback(async () => {
     try {
-      await fetch("/api/dev-server/stop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId }),
-      });
+      await apiPost("/api/dev-server/stop", { projectId: activeProjectId });
     } catch {}
     setStatus("stopped");
     setPreviewUrl("");
@@ -442,8 +428,7 @@ export function DevServerPreview() {
     if (!activeProjectId) return;
     if (autoStartedForRef.current === activeProjectId) return;
 
-    fetch(`/api/dev-server/status?projectId=${encodeURIComponent(activeProjectId)}`)
-      .then(r => r.json())
+    apiGet("/api/dev-server/status", { projectId: activeProjectId })
       .then(data => {
         if (autoStartedForRef.current === activeProjectId) return;
         autoStartedForRef.current = activeProjectId;

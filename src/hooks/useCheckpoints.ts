@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, DBFile, DBCheckpoint } from "@/lib/db";
 import { useActiveProject } from "@/contexts/ProjectContext";
+import { apiGet, apiPost } from "@/lib/api";
 
 const MAX_CHECKPOINTS = 50;
 
@@ -53,8 +54,7 @@ export function useCheckpoints() {
   const refreshServerCheckpoints = useCallback(async () => {
     if (!activeProjectId || !useServer) return;
     try {
-      const res = await fetch(`/api/checkpoints/list?projectId=${encodeURIComponent(activeProjectId)}`);
-      const data = await res.json();
+      const data = await apiGet("/api/checkpoints/list", { projectId: activeProjectId });
       setServerCheckpoints(data.checkpoints || []);
     } catch {}
   }, [activeProjectId, useServer]);
@@ -101,12 +101,7 @@ export function useCheckpoints() {
       // Server-side branch — for linked projects (files on disk)
       if (useServer) {
         try {
-          const res = await fetch("/api/checkpoints/create", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ projectId: activeProjectId, label, messageId }),
-          });
-          const data = await res.json();
+          const data = await apiPost("/api/checkpoints/create", { projectId: activeProjectId, label, messageId });
           if (data.success) {
             await refreshServerCheckpoints();
             setCurrentIndex(0);
@@ -162,10 +157,7 @@ export function useCheckpoints() {
       // Server-side branch
       if (useServer) {
         try {
-          const res = await fetch(
-            `/api/checkpoints/find-before?projectId=${encodeURIComponent(activeProjectId)}&messageId=${encodeURIComponent(messageId)}`,
-          );
-          const data = await res.json();
+          const data = await apiGet("/api/checkpoints/find-before", { projectId: activeProjectId, messageId });
           return data.checkpoint?.id || null;
         } catch {
           return null;
@@ -204,12 +196,7 @@ export function useCheckpoints() {
       // Server-side branch — restore disk files via the server
       if (useServer) {
         try {
-          const res = await fetch("/api/checkpoints/restore", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ projectId: activeProjectId, checkpointId: id }),
-          });
-          const data = await res.json();
+          const data = await apiPost("/api/checkpoints/restore", { projectId: activeProjectId, checkpointId: id });
           if (data.success) {
             // Tell file watchers to re-sync
             window.dispatchEvent(new CustomEvent("pipilot:files-changed"));

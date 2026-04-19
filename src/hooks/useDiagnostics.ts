@@ -1,6 +1,7 @@
 import { useCallback, useState, useRef, useEffect } from "react";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { useProblems, type Problem } from "@/contexts/ProblemsContext";
+import { apiGet, apiPost } from "@/lib/api";
 
 export interface ServerDiagnostic {
   file: string;
@@ -45,13 +46,7 @@ export function useDiagnostics() {
     if (seededRef.current.has(activeProjectId)) return null;
     seededRef.current.add(activeProjectId);
     try {
-      const res = await fetch("/api/project/seed-config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId }),
-      });
-      if (!res.ok) return null;
-      const report: SeedReport = await res.json();
+      const report: SeedReport = await apiPost("/api/project/seed-config", { projectId: activeProjectId });
       if (report.added.length > 0) {
         setLastSeedReport(report);
       }
@@ -70,14 +65,7 @@ export function useDiagnostics() {
       // check on a fresh project gets meaningful diagnostics.
       await seedMissingConfigs();
 
-      const res = await fetch(
-        `/api/diagnostics/check?projectId=${encodeURIComponent(activeProjectId)}&source=all`,
-      );
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
-      }
-      const data: CheckResult = await res.json();
+      const data: CheckResult = await apiGet("/api/diagnostics/check", { projectId: activeProjectId, source: "all" });
       setLastResult(data);
 
       // Map server diagnostics → ProblemsContext shape, grouped per source

@@ -26,6 +26,7 @@ import {
   X,
   Settings,
 } from "lucide-react";
+import { apiPost } from "@/lib/api";
 import { useChat, ChatMode, ToolExecutor, WorkspaceContext, CheckpointManager } from "@/hooks/useChat";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
@@ -275,11 +276,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
         stopStreaming();
         // Also tell the server to stop the agent
         try {
-          await fetch("/api/agent/stop", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ projectId }),
-          });
+          await apiPost("/api/agent/stop", { projectId });
         } catch {}
         // Small delay to let the abort propagate
         await new Promise((r) => setTimeout(r, 300));
@@ -529,11 +526,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
   useEffect(() => {
     const handler = () => {
       if (!projectId) return;
-      fetch("/api/agent/skip-tool", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId }),
-      }).catch(() => {});
+      apiPost("/api/agent/skip-tool", { projectId }).catch(() => {});
     };
     window.addEventListener("pipilot:skip-tool", handler);
     return () => window.removeEventListener("pipilot:skip-tool", handler);
@@ -1777,12 +1770,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                   reader.onload = () => resolve((reader.result as string).split(",")[1]);
                   reader.readAsDataURL(file);
                 });
-                const res = await fetch("/api/files/upload-temp", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ fileName: file.name, base64 }),
-                });
-                const data = await res.json();
+                const data = await apiPost("/api/files/upload-temp", { fileName: file.name, base64 });
                 if (data.path) {
                   setAttachments((prev) => [...prev, {
                     id: `__upload_${Date.now()}_${file.name}__`,
@@ -2011,12 +1999,7 @@ export function ChatPanel({ toolExecutor, workspaceContext, checkpointManager, p
                       reader.onload = () => resolve((reader.result as string).split(",")[1]);
                       reader.readAsDataURL(file);
                     });
-                    const res = await fetch("/api/files/upload-temp", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ fileName: file.name, base64 }),
-                    });
-                    const data = await res.json();
+                    const data = await apiPost("/api/files/upload-temp", { fileName: file.name, base64 });
                     if (data.path) {
                       setAttachments((prev) => [...prev, {
                         id: `__upload_${Date.now()}__`,

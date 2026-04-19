@@ -35,6 +35,7 @@ import { setupInlineAI, configureInlineAI } from "@/hooks/useInlineAI";
 import { useSettings } from "@/hooks/useSettings";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { COLORS as C, FONTS } from "@/lib/design-tokens";
+import { apiGet, apiPostStream } from "@/lib/api";
 
 /**
  * Editorial Terminal Monaco theme. Defined at module scope so both
@@ -987,48 +988,34 @@ export function EditorArea({
     setInlineChatHistory(newHistory);
 
     try {
-      const res = await fetch("/api/codestral/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "codestral-latest",
-          messages: [systemMsg, ...newHistory],
-          temperature: 0.3,
-          max_tokens: 1024,
-          stream: true,
-        }),
-      });
-
-      if (!res.ok) throw new Error(`${res.status}`);
-
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       let fullResponse = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
-          try {
-            const parsed = JSON.parse(line.slice(6));
-            const delta = parsed.choices?.[0]?.delta?.content;
-            if (delta) {
-              fullResponse += delta;
-              setInlineChatResponse(fullResponse);
-              // Auto-scroll response area
-              if (inlineChatResponseRef.current) {
-                inlineChatResponseRef.current.scrollTop = inlineChatResponseRef.current.scrollHeight;
+      await new Promise<void>((resolve, reject) => {
+        apiPostStream(
+          "/api/codestral/chat",
+          {
+            model: "codestral-latest",
+            messages: [systemMsg, ...newHistory],
+            temperature: 0.3,
+            max_tokens: 1024,
+            stream: true,
+          },
+          {
+            onData: (parsed: any) => {
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) {
+                fullResponse += delta;
+                setInlineChatResponse(fullResponse);
+                // Auto-scroll response area
+                if (inlineChatResponseRef.current) {
+                  inlineChatResponseRef.current.scrollTop = inlineChatResponseRef.current.scrollHeight;
+                }
               }
-            }
-          } catch {}
-        }
-      }
+            },
+            onDone: () => resolve(),
+            onError: (err: any) => reject(err || new Error("Stream error")),
+          },
+        );
+      });
 
       setInlineChatHistory((prev) => {
         const updated = [...prev, { role: "assistant", content: fullResponse }];
@@ -1627,8 +1614,8 @@ declare module "*.woff2" { const content: string; export default content; }
       fetchedTypesRef.current.add(dep);
 
       // Fetch type definitions from the workspace's node_modules
-      fetch(`/api/files/types?projectId=${encodeURIComponent(activeProjectId)}&package=${encodeURIComponent(dep)}`)
-        .then(res => res.ok ? res.json() : null)
+      apiGet("/api/files/types", { projectId: activeProjectId, package: dep })
+        .catch(() => null)
         .then(data => {
           if (!data?.files) return;
           // Register all .d.ts files as extra libs

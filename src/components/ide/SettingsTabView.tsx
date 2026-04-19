@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { useSettings } from "@/hooks/useSettings";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
+import { apiGet, apiPost } from "@/lib/api";
 
 interface CategoryDef {
   id: string;
@@ -67,8 +68,7 @@ export function SettingsTabView() {
 
   // Load git author config from server
   useEffect(() => {
-    fetch("/api/git/config")
-      .then(r => r.json())
+    apiGet("/api/git/config")
       .then(data => {
         if (data.name || data.email) {
           setGitAuthor({ name: data.name || "", email: data.email || "" });
@@ -93,12 +93,7 @@ export function SettingsTabView() {
   const saveGitConfig = async () => {
     setGitSavingHint("saving...");
     try {
-      const res = await fetch("/api/git/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(gitAuthor),
-      });
-      const data = await res.json();
+      const data = await apiPost("/api/git/config", gitAuthor);
       setGitSavingHint(data.success ? "saved" : "failed");
     } catch {
       setGitSavingHint("failed");

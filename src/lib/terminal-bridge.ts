@@ -3,6 +3,8 @@
  * Components use this instead of calling fetch/EventSource directly.
  */
 
+import { apiPost, apiStream, isElectron } from "@/lib/api";
+
 export interface TerminalBridge {
   create(opts: { projectId: string; sessionId: string; profile?: string }): Promise<{ id: string }>;
   write(sessionId: string, data: string): void;
@@ -21,25 +23,16 @@ function flushWrite(sessionId: string) {
   const data = entry.buffer;
   entry.buffer = "";
   entry.timer = null;
-  fetch("/api/terminal/write", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, data }),
-  }).catch(() => {});
+  apiPost("/api/terminal/write", { sessionId, data }).catch(() => {});
 }
 
 export const terminalBridge: TerminalBridge = {
   async create(opts) {
-    const res = await fetch("/api/terminal/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: opts.projectId,
-        sessionId: opts.sessionId,
-        profile: opts.profile,
-      }),
+    await apiPost("/api/terminal/create", {
+      projectId: opts.projectId,
+      sessionId: opts.sessionId,
+      profile: opts.profile,
     });
-    if (!res.ok) throw new Error("Failed to create terminal session");
     return { id: opts.sessionId };
   },
 
@@ -55,11 +48,7 @@ export const terminalBridge: TerminalBridge = {
   },
 
   resize(sessionId, cols, rows) {
-    fetch("/api/terminal/resize", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, cols, rows }),
-    }).catch(() => {});
+    apiPost("/api/terminal/resize", { sessionId, cols, rows }).catch(() => {});
   },
 
   kill(sessionId) {
@@ -67,27 +56,31 @@ export const terminalBridge: TerminalBridge = {
   },
 
   onData(sessionId, callback) {
-    const es = new EventSource(`/api/terminal/stream?sessionId=${encodeURIComponent(sessionId)}`);
-    es.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.output) callback(data.output);
-        if (data.exit) es.close();
-      } catch {}
-    };
-    return () => es.close();
+    const handle = apiStream(
+      "/api/terminal/stream",
+      { sessionId },
+      {
+        onData(data) {
+          if (data.output) callback(data.output);
+          if (data.exit) handle.close();
+        },
+      },
+    );
+    return () => handle.close();
   },
 
   onExit(sessionId, callback) {
-    const es = new EventSource(`/api/terminal/stream?sessionId=${encodeURIComponent(sessionId)}`);
-    es.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.exit) { callback(); es.close(); }
-      } catch {}
-    };
-    return () => es.close();
+    const handle = apiStream(
+      "/api/terminal/stream",
+      { sessionId },
+      {
+        onData(data) {
+          if (data.exit) { callback(); handle.close(); }
+        },
+      },
+    );
+    return () => handle.close();
   },
 };
 
-export const isDesktopApp = !!(window as any).electronAPI?.isElectron;
+export const isDesktopApp = isElectron;

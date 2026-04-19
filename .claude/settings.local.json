@@ -173,7 +173,16 @@
       "Bash(ELECTRON=1 pnpm exec vite dev)",
       "Bash(cat /c/Users/big/AppData/Local/dev.pipilot.ide/logs/*.log)",
       "Bash(find /c/Users/big/AppData -name *.log -path *pipilot*)",
-      "Bash(pnpm electron:dev)"
+      "Bash(pnpm electron:dev)",
+      "Bash(start \"\" node_modules/.bin/electron.cmd .)",
+      "Bash(npm start:*)",
+      "Bash(ELECTRON=1 pnpm build)",
+      "Bash(cp main.js main.js.bak)",
+      "Bash(cp preload.js preload.js.bak)",
+      "Bash(cp package.json package.json.bak)",
+      "Bash(cp index.html index.html.bak)",
+      "Bash(cp renderer.js renderer.js.bak)",
+      "Bash(start \"\" npx electron-forge start)"
     ]
   },
   "enableAllProjectMcpServers": true,

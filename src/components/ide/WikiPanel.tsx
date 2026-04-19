@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { COLORS as C, FONTS } from "@/lib/design-tokens";
+import { apiGet } from "@/lib/api";
 
 interface WikiSection {
   id: string;
@@ -51,8 +52,7 @@ export function WikiPanel({ activeTabId }: WikiPanelProps = {}) {
     if (!activeProjectId) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/wiki/tree?projectId=${encodeURIComponent(activeProjectId)}`);
-      const data = await res.json();
+      const data = await apiGet("/api/wiki/tree", { projectId: activeProjectId });
       setSections(data.sections || []);
       setWikiExists(data.exists);
     } catch {} finally {

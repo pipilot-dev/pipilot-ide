@@ -1,5 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { db } from "@/lib/db";
+import { apiGet, apiPost, apiPostStream } from "@/lib/api";
+import type { StreamHandle } from "@/lib/api";
 import type { ChatMessage, ChatMode, ToolExecutor, WorkspaceContext, CheckpointManager } from "./useChat";
 
 function generateId() {
@@ -116,7 +118,7 @@ export function useAgentChat(
   const [currentSessionId, setCurrentSessionId] = useState<string>("");
   const currentSessionIdRef = useRef<string>("");
   currentSessionIdRef.current = currentSessionId;
-  const abortRef = useRef<AbortController | null>(null);
+  const abortRef = useRef<StreamHandle | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const contextRef = useRef<WorkspaceContext | undefined>(workspaceContext);
   const checkpointManagerRef = useRef<CheckpointManager | undefined>(checkpointManager);
@@ -242,8 +244,7 @@ export function useAgentChat(
 
     (async () => {
       try {
-        const res = await fetch(`/api/agent/replay?projectId=${encodeURIComponent(projectId)}`);
-        const data = await res.json();
+        const data = await apiGet("/api/agent/replay", { projectId });
         // Only process if there are buffered events and the stream is NOT
         // still active (we aborted it on disconnect). Also skip if we've
         // already processed this buffer (check if the last assistant msg
@@ -538,311 +539,291 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
       // Connection timeout — if the server doesn't respond in 15s, abort.
       // Prevents infinite "STREAMING" when the server is down.
       const connectionTimeout = setTimeout(() => {
-        if (!controller.signal.aborted) controller.abort();
+        abortRef.current?.close();
       }, 15000);
 
-      const res = await fetch("/api/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: userContent, systemPrompt, projectId: pid, mode }),
-        signal: controller.signal,
-      });
+      // Promise that resolves when the stream finishes (done/error) so we
+      // can await it below and run post-stream logic in the same try/catch.
+      await new Promise<void>((resolve, reject) => {
+        const handle = apiPostStream(
+          "/api/agent",
+          { prompt: userContent, systemPrompt, projectId: pid, mode },
+          {
+            onData: async (event) => {
+              // Server signals stream is complete — close cleanly
+              if (event.type === "done" || event.type === "complete") {
+                resolve();
+                return;
+              }
 
-      clearTimeout(connectionTimeout); // server responded, cancel the timeout
+              switch (event.type) {
+                case "text":
+                  // Primary text source — streamed, deduplicated by server
+                  if (event.data) {
+                    setMessages((prev) => prev.map((m) => {
+                      if (m.id !== assistantId) return m;
+                      const parts = [...(m.parts || [])];
+                      const lastPart = parts[parts.length - 1];
+                      if (lastPart && lastPart.type === "text") {
+                        parts[parts.length - 1] = { ...lastPart, content: (lastPart.content || "") + event.data };
+                      } else {
+                        parts.push({ type: "text", content: event.data });
+                      }
+                      return { ...m, content: m.content + event.data, parts };
+                    }));
 
-      if (!res.ok) {
-        throw new Error(`Agent server error: ${res.status}`);
-      }
+                    // Detect terminal command marker in streamed text
+                    const fullContent = (messagesRef.current.find(m => m.id === assistantId)?.content || "") + event.data;
+                    const termMatch = fullContent.match(/__TERMINAL_CMD__(.+?)__END_TERMINAL_CMD__/);
+                    if (termMatch && !(globalThis as any).__terminalCmdSent?.[termMatch[1]]) {
+                      if (!(globalThis as any).__terminalCmdSent) (globalThis as any).__terminalCmdSent = {};
+                      (globalThis as any).__terminalCmdSent[termMatch[1]] = true;
+                      const cmd = termMatch[1];
+                      window.dispatchEvent(new CustomEvent("pipilot:open-terminal"));
+                      setTimeout(() => {
+                        window.dispatchEvent(new CustomEvent("pipilot:terminal-send", { detail: { command: cmd } }));
+                      }, 1000);
+                    }
+                  }
+                  break;
 
-      // Parse SSE stream
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+                case "assistant":
+                case "compact_boundary":
+                  // The SDK compacted the conversation history. Show a brief
+                  // shimmer so the user knows context was optimized.
+                  setIsOptimizingContext(true);
+                  setTimeout(() => setIsOptimizingContext(false), 1500);
+                  console.log("[chat] conversation compacted by SDK",
+                    event.compact_metadata ? `(${event.compact_metadata.pre_tokens} tokens before)` : "");
+                  break;
 
-      let streamEnded = false;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done || streamEnded) break;
+                case "screenshot_request": {
+                  // Server's screenshot_preview tool is asking the frontend to capture
+                  // the preview. We render in a same-origin iframe, capture with html2canvas,
+                  // and POST the result back.
+                  const ssReqId = event.requestId;
+                  if (ssReqId) {
+                    (async () => {
+                      try {
+                        const { capturePreviewScreenshot } = await import("@/lib/screenshot");
+                        const result = await capturePreviewScreenshot(projectId);
+                        await apiPost("/api/screenshot-result", {
+                          requestId: ssReqId,
+                          dataUrl: result.dataUrl,
+                          layoutReport: result.layoutReport,
+                        });
+                      } catch (err) {
+                        // Send empty result so the server doesn't hang
+                        await apiPost("/api/screenshot-result", {
+                          requestId: ssReqId,
+                          dataUrl: "",
+                          layoutReport: `Screenshot capture failed: ${err}`,
+                        }).catch(() => {});
+                      }
+                    })();
+                  }
+                  break;
+                }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+                case "content_block_start":
+                case "content_block_delta":
+                case "user":
+                case "system":
+                case "heartbeat":
+                case "start":
+                case "status":
+                case "log":
+                case "stdout":
+                  // Ignore — assistant/content_block would duplicate streamed text
+                  // user/system are context messages, not display content
+                  break;
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
+                case "tool_use": {
+                  const toolId = event.id || generateId();
+                  // Sanitize file paths — strip workspace prefix for clean display
+                  let cleanInput = event.input;
+                  if (cleanInput && typeof cleanInput === "object") {
+                    cleanInput = { ...cleanInput };
+                    for (const key of ["file_path", "path", "command"]) {
+                      if (typeof cleanInput[key] === "string") {
+                        // Strip workspace paths like C:\Users\...\workspaces\projectId\
+                        cleanInput[key] = cleanInput[key]
+                          .replace(/^.*[\/\\]workspaces[\/\\][^\/\\]+[\/\\]/, "")
+                          .replace(/\\/g, "/");
+                      }
+                    }
+                  }
+                  const toolArgs = cleanInput ? JSON.stringify(cleanInput) : "{}";
 
-          try {
-            const event = JSON.parse(line.slice(6));
+                  // Capture TodoWrite events for the todo panel
+                  if (event.name === "TodoWrite" && event.input?.todos) {
+                    setTodos(event.input.todos);
+                  }
 
-            // Server signals stream is complete — break out of reader loop
-            if (event.type === "done" || event.type === "complete") {
-              streamEnded = true;
-              break;
-            }
-
-            switch (event.type) {
-              case "text":
-                // Primary text source — streamed, deduplicated by server
-                if (event.data) {
                   setMessages((prev) => prev.map((m) => {
                     if (m.id !== assistantId) return m;
-                    const parts = [...(m.parts || [])];
-                    const lastPart = parts[parts.length - 1];
-                    if (lastPart && lastPart.type === "text") {
-                      parts[parts.length - 1] = { ...lastPart, content: (lastPart.content || "") + event.data };
-                    } else {
-                      parts.push({ type: "text", content: event.data });
-                    }
-                    return { ...m, content: m.content + event.data, parts };
-                  }));
+                    const toolCalls = [...(m.toolCalls || [])];
 
-                  // Detect terminal command marker in streamed text
-                  const fullContent = (messagesRef.current.find(m => m.id === assistantId)?.content || "") + event.data;
-                  const termMatch = fullContent.match(/__TERMINAL_CMD__(.+?)__END_TERMINAL_CMD__/);
-                  if (termMatch && !(globalThis as any).__terminalCmdSent?.[termMatch[1]]) {
-                    if (!(globalThis as any).__terminalCmdSent) (globalThis as any).__terminalCmdSent = {};
-                    (globalThis as any).__terminalCmdSent[termMatch[1]] = true;
-                    const cmd = termMatch[1];
+                    // Merge if same ID exists (stream_event sends name first, assistant sends input later)
+                    const existingIdx = toolCalls.findIndex(tc => tc.id === toolId);
+                    if (existingIdx >= 0) {
+                      // Update with richer data (input)
+                      if (event.input) {
+                        toolCalls[existingIdx] = { ...toolCalls[existingIdx], arguments: toolArgs };
+                      }
+                    } else {
+                      toolCalls.push({
+                        id: toolId,
+                        name: event.name || "Tool",
+                        arguments: toolArgs,
+                        status: "running" as const,
+                      });
+                      // Also add tool part for interleaved rendering
+                      const parts = [...(m.parts || [])];
+                      parts.push({ type: "tool" as const, toolCallId: toolId });
+                      return { ...m, toolCalls, parts };
+                    }
+                    return { ...m, toolCalls };
+                  }));
+                  break;
+                }
+
+                case "tool_result": {
+                  let resultText = typeof event.result === "string"
+                    ? event.result
+                    : JSON.stringify(event.result);
+                  // Sanitize workspace paths in results
+                  if (resultText) {
+                    resultText = resultText.replace(/[A-Z]:\\[^\s]*?workspaces[\\\/][^\\\/\s]+[\\\/]/g, "");
+                    resultText = resultText.replace(/\/[^\s]*?workspaces\/[^\/\s]+\//g, "");
+                  }
+                  const truncResult = resultText?.substring(0, 2000) || "";
+
+                  setMessages((prev) => prev.map((m) => {
+                    if (m.id !== assistantId) return m;
+                    const toolCalls = [...(m.toolCalls || [])];
+                    const toolId = event.tool_use_id || generateId();
+
+                    // Find the tool_use pill that was already created
+                    const matchIdx = toolCalls.findIndex(tc => tc.id === toolId);
+                    if (matchIdx >= 0) {
+                      // Update existing pill with result
+                      toolCalls[matchIdx] = { ...toolCalls[matchIdx], status: "done" as const, result: truncResult };
+                      return { ...m, toolCalls };
+                    } else {
+                      // No tool_use was received — create pill from result (fallback)
+                      const { name: toolName, desc: toolDesc } = inferToolFromResult(resultText || "");
+                      toolCalls.push({
+                        id: toolId,
+                        name: toolName,
+                        arguments: JSON.stringify({ description: toolDesc }),
+                        status: "done" as const,
+                        result: truncResult,
+                      });
+                      const parts = [...(m.parts || [])];
+                      parts.push({ type: "tool" as const, toolCallId: toolId });
+                      return { ...m, toolCalls, parts };
+                    }
+                  }));
+                  break;
+                }
+
+                case "files_changed":
+                  break;
+
+                case "queued":
+                  // Message was queued because agent is busy
+                  break;
+
+                case "queued_next":
+                  // Server says there's a queued message to process next
+                  if (event.prompt) {
+                    setTimeout(() => sendMessage(event.prompt), 1000);
+                  }
+                  break;
+
+                case "result":
+                  // Final result — typewriter animate if no text was streamed
+                  if (event.result && typeof event.result === "string") {
+                    const currentContent = messagesRef.current.find(m => m.id === assistantId)?.content || "";
+                    if (!currentContent) {
+                      const text = event.result;
+                      const chunkSize = 3;
+                      const delay = 15;
+                      for (let i = 0; i < text.length; i += chunkSize) {
+                        const chunk = text.slice(i, i + chunkSize);
+                        setMessages((prev) => prev.map((m) => {
+                          if (m.id !== assistantId) return m;
+                          const parts = [...(m.parts || [])];
+                          const lastPart = parts[parts.length - 1];
+                          if (lastPart && lastPart.type === "text") {
+                            parts[parts.length - 1] = { ...lastPart, content: (lastPart.content || "") + chunk };
+                          } else {
+                            parts.push({ type: "text", content: chunk });
+                          }
+                          return { ...m, content: m.content + chunk, parts };
+                        }));
+                        await new Promise(r => setTimeout(r, delay));
+                      }
+                    }
+                  }
+                  // Append cost if available
+                  if (event.cost !== undefined && event.cost > 0) {
+                    const costStr = `\n\n---\n*Cost: $${event.cost.toFixed(4)}*`;
+                    setMessages((prev) => prev.map((m) =>
+                      m.id === assistantId ? { ...m, content: m.content + costStr } : m
+                    ));
+                  }
+                  break;
+
+                case "ask_user": {
+                  // Agent is asking a question — show it and collect answer
+                  setPendingQuestion({
+                    requestId: event.requestId,
+                    questions: event.questions,
+                  });
+                  break;
+                }
+
+                case "terminal_command": {
+                  // Legacy SSE-based terminal command (kept for compat)
+                  const cmd = event.command;
+                  if (cmd) {
                     window.dispatchEvent(new CustomEvent("pipilot:open-terminal"));
                     setTimeout(() => {
                       window.dispatchEvent(new CustomEvent("pipilot:terminal-send", { detail: { command: cmd } }));
                     }, 1000);
                   }
-                }
-                break;
-
-              case "assistant":
-              case "compact_boundary":
-                // The SDK compacted the conversation history. Show a brief
-                // shimmer so the user knows context was optimized.
-                setIsOptimizingContext(true);
-                setTimeout(() => setIsOptimizingContext(false), 1500);
-                console.log("[chat] conversation compacted by SDK",
-                  event.compact_metadata ? `(${event.compact_metadata.pre_tokens} tokens before)` : "");
-                break;
-
-              case "screenshot_request": {
-                // Server's screenshot_preview tool is asking the frontend to capture
-                // the preview. We render in a same-origin iframe, capture with html2canvas,
-                // and POST the result back.
-                const ssReqId = event.requestId;
-                if (ssReqId) {
-                  (async () => {
-                    try {
-                      const { capturePreviewScreenshot } = await import("@/lib/screenshot");
-                      const result = await capturePreviewScreenshot(projectId);
-                      await fetch("/api/screenshot-result", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          requestId: ssReqId,
-                          dataUrl: result.dataUrl,
-                          layoutReport: result.layoutReport,
-                        }),
-                      });
-                    } catch (err) {
-                      // Send empty result so the server doesn't hang
-                      await fetch("/api/screenshot-result", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ requestId: ssReqId, dataUrl: "", layoutReport: `Screenshot capture failed: ${err}` }),
-                      }).catch(() => {});
-                    }
-                  })();
-                }
-                break;
-              }
-
-              case "content_block_start":
-              case "content_block_delta":
-              case "user":
-              case "system":
-              case "heartbeat":
-              case "start":
-              case "status":
-              case "log":
-              case "stdout":
-                // Ignore — assistant/content_block would duplicate streamed text
-                // user/system are context messages, not display content
-                break;
-
-              case "tool_use": {
-                const toolId = event.id || generateId();
-                // Sanitize file paths — strip workspace prefix for clean display
-                let cleanInput = event.input;
-                if (cleanInput && typeof cleanInput === "object") {
-                  cleanInput = { ...cleanInput };
-                  for (const key of ["file_path", "path", "command"]) {
-                    if (typeof cleanInput[key] === "string") {
-                      // Strip workspace paths like C:\Users\...\workspaces\projectId\
-                      cleanInput[key] = cleanInput[key]
-                        .replace(/^.*[\/\\]workspaces[\/\\][^\/\\]+[\/\\]/, "")
-                        .replace(/\\/g, "/");
-                    }
-                  }
-                }
-                const toolArgs = cleanInput ? JSON.stringify(cleanInput) : "{}";
-
-                // Capture TodoWrite events for the todo panel
-                if (event.name === "TodoWrite" && event.input?.todos) {
-                  setTodos(event.input.todos);
+                  break;
                 }
 
-                setMessages((prev) => prev.map((m) => {
-                  if (m.id !== assistantId) return m;
-                  const toolCalls = [...(m.toolCalls || [])];
+                case "complete":
+                  // Stream done
+                  break;
 
-                  // Merge if same ID exists (stream_event sends name first, assistant sends input later)
-                  const existingIdx = toolCalls.findIndex(tc => tc.id === toolId);
-                  if (existingIdx >= 0) {
-                    // Update with richer data (input)
-                    if (event.input) {
-                      toolCalls[existingIdx] = { ...toolCalls[existingIdx], arguments: toolArgs };
-                    }
-                  } else {
-                    toolCalls.push({
-                      id: toolId,
-                      name: event.name || "Tool",
-                      arguments: toolArgs,
-                      status: "running" as const,
-                    });
-                    // Also add tool part for interleaved rendering
-                    const parts = [...(m.parts || [])];
-                    parts.push({ type: "tool" as const, toolCallId: toolId });
-                    return { ...m, toolCalls, parts };
-                  }
-                  return { ...m, toolCalls };
-                }));
-                break;
-              }
-
-              case "tool_result": {
-                let resultText = typeof event.result === "string"
-                  ? event.result
-                  : JSON.stringify(event.result);
-                // Sanitize workspace paths in results
-                if (resultText) {
-                  resultText = resultText.replace(/[A-Z]:\\[^\s]*?workspaces[\\\/][^\\\/\s]+[\\\/]/g, "");
-                  resultText = resultText.replace(/\/[^\s]*?workspaces\/[^\/\s]+\//g, "");
-                }
-                const truncResult = resultText?.substring(0, 2000) || "";
-
-                setMessages((prev) => prev.map((m) => {
-                  if (m.id !== assistantId) return m;
-                  const toolCalls = [...(m.toolCalls || [])];
-                  const toolId = event.tool_use_id || generateId();
-
-                  // Find the tool_use pill that was already created
-                  const matchIdx = toolCalls.findIndex(tc => tc.id === toolId);
-                  if (matchIdx >= 0) {
-                    // Update existing pill with result
-                    toolCalls[matchIdx] = { ...toolCalls[matchIdx], status: "done" as const, result: truncResult };
-                    return { ...m, toolCalls };
-                  } else {
-                    // No tool_use was received — create pill from result (fallback)
-                    const { name: toolName, desc: toolDesc } = inferToolFromResult(resultText || "");
-                    toolCalls.push({
-                      id: toolId,
-                      name: toolName,
-                      arguments: JSON.stringify({ description: toolDesc }),
-                      status: "done" as const,
-                      result: truncResult,
-                    });
-                    const parts = [...(m.parts || [])];
-                    parts.push({ type: "tool" as const, toolCallId: toolId });
-                    return { ...m, toolCalls, parts };
-                  }
-                }));
-                break;
-              }
-
-              case "files_changed":
-                break;
-
-              case "queued":
-                // Message was queued because agent is busy
-                break;
-
-              case "queued_next":
-                // Server says there's a queued message to process next
-                if (event.prompt) {
-                  setTimeout(() => sendMessage(event.prompt), 1000);
-                }
-                break;
-
-              case "result":
-                // Final result — typewriter animate if no text was streamed
-                if (event.result && typeof event.result === "string") {
-                  const currentContent = messagesRef.current.find(m => m.id === assistantId)?.content || "";
-                  if (!currentContent) {
-                    const text = event.result;
-                    const chunkSize = 3;
-                    const delay = 15;
-                    for (let i = 0; i < text.length; i += chunkSize) {
-                      const chunk = text.slice(i, i + chunkSize);
-                      setMessages((prev) => prev.map((m) => {
-                        if (m.id !== assistantId) return m;
-                        const parts = [...(m.parts || [])];
-                        const lastPart = parts[parts.length - 1];
-                        if (lastPart && lastPart.type === "text") {
-                          parts[parts.length - 1] = { ...lastPart, content: (lastPart.content || "") + chunk };
-                        } else {
-                          parts.push({ type: "text", content: chunk });
-                        }
-                        return { ...m, content: m.content + chunk, parts };
-                      }));
-                      await new Promise(r => setTimeout(r, delay));
-                    }
-                  }
-                }
-                // Append cost if available
-                if (event.cost !== undefined && event.cost > 0) {
-                  const costStr = `\n\n---\n*Cost: $${event.cost.toFixed(4)}*`;
+                case "error":
                   setMessages((prev) => prev.map((m) =>
-                    m.id === assistantId ? { ...m, content: m.content + costStr } : m
+                    m.id === assistantId ? {
+                      ...m,
+                      content: m.content + `\n\nError: ${event.message}`,
+                    } : m
                   ));
-                }
-                break;
-
-              case "ask_user": {
-                // Agent is asking a question — show it and collect answer
-                setPendingQuestion({
-                  requestId: event.requestId,
-                  questions: event.questions,
-                });
-                break;
+                  break;
               }
-
-              case "terminal_command": {
-                // Legacy SSE-based terminal command (kept for compat)
-                const cmd = event.command;
-                if (cmd) {
-                  window.dispatchEvent(new CustomEvent("pipilot:open-terminal"));
-                  setTimeout(() => {
-                    window.dispatchEvent(new CustomEvent("pipilot:terminal-send", { detail: { command: cmd } }));
-                  }, 1000);
-                }
-                break;
-              }
-
-              case "complete":
-                // Stream done
-                break;
-
-              case "error":
-                setMessages((prev) => prev.map((m) =>
-                  m.id === assistantId ? {
-                    ...m,
-                    content: m.content + `\n\nError: ${event.message}`,
-                  } : m
-                ));
-                break;
-            }
-          } catch {
-            // skip malformed events
+            },
+            onDone: () => {
+              clearTimeout(connectionTimeout);
+              resolve();
+            },
+            onError: (err) => {
+              clearTimeout(connectionTimeout);
+              reject(err || new Error("Agent stream error"));
+            },
           }
-        }
-      }
+        );
+        abortRef.current = handle;
+        clearTimeout(connectionTimeout); // server responded, cancel the timeout
+      });
 
       // Mark as done
       setMessages((prev) => prev.map((m) =>
@@ -857,11 +838,11 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
         ).catch(() => {});
       }
     } catch (err: any) {
-      if (err.name !== "AbortError") {
+      if (err?.name !== "AbortError" && err?.message !== "AbortError") {
         setMessages((prev) => prev.map((m) =>
           m.id === assistantId ? {
             ...m,
-            content: m.content || `Error: ${err.message || "Agent request failed"}`,
+            content: m.content || `Error: ${err?.message || "Agent request failed"}`,
             streaming: false,
           } : m
         ));
@@ -873,7 +854,7 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
   }, [isStreaming, mode]);
 
   const stopStreaming = useCallback(() => {
-    abortRef.current?.abort();
+    abortRef.current?.close();
     setIsStreaming(false);
     // Mark any running tool calls as "error" (cancelled) so the UI
     // shows an X icon instead of an infinite spinner
@@ -1095,13 +1076,9 @@ NEVER use generic AI aesthetics. No design should be the same. Vary between ligh
 
   const answerQuestion = useCallback(async (requestId: string, answers: Record<string, string>) => {
     try {
-      await fetch("/api/agent/answer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          requestId,
-          answer: { questions: pendingQuestion?.questions, answers },
-        }),
+      await apiPost("/api/agent/answer", {
+        requestId,
+        answer: { questions: pendingQuestion?.questions, answers },
       });
       setPendingQuestion(null);
     } catch (err) {

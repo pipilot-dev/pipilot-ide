@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { FileText, Loader2, RefreshCw, Plus, Minus } from "lucide-react";
+import { apiGet } from "@/lib/api";
 
 interface FileDiffViewProps {
   projectId: string;
@@ -156,13 +157,9 @@ export function FileDiffView({ projectId, filePath, staged }: FileDiffViewProps)
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    fetch(`/api/git/diff?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(filePath)}&staged=${staged}`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
+    apiGet("/api/git/diff", { projectId, path: filePath, staged: String(staged) })
       .then(setData)
-      .catch((e) => setError(e.message))
+      .catch((e: any) => setError(e.message))
       .finally(() => setLoading(false));
   }, [projectId, filePath, staged]);
 

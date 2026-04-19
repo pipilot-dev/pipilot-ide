@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { GitCommit, FileText, Loader2, ChevronDown, ChevronRight, User, Calendar, Hash } from "lucide-react";
+import { apiGet } from "@/lib/api";
 
 interface CommitFile {
   path: string;
@@ -98,11 +99,7 @@ export function CommitDetailView({ projectId, oid }: CommitDetailViewProps) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/git/commit-detail?projectId=${encodeURIComponent(projectId)}&oid=${encodeURIComponent(oid)}`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
+    apiGet("/api/git/commit-detail", { projectId, oid })
       .then((data) => {
         if (cancelled) return;
         if (data.error) {
@@ -115,7 +112,7 @@ export function CommitDetailView({ projectId, oid }: CommitDetailViewProps) {
           }
         }
       })
-      .catch((e) => { if (!cancelled) setError(e.message); })
+      .catch((e: any) => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [projectId, oid]);

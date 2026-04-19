@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { useActiveProject } from "@/contexts/ProjectContext";
 import { useCallback } from "react";
 import { getSeedFiles, type ProjectTemplate } from "@/lib/project-templates";
+import { apiPost, apiDelete } from "@/lib/api";
 
 export function useProjects() {
   const { activeProjectId, switchProject } = useActiveProject();
@@ -53,13 +54,9 @@ export function useProjects() {
 
     // Auto-seed template files to the server workspace
     try {
-      await fetch("/api/files/seed", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: id,
-          files: seedFiles.filter(f => f.type === "file").map(f => ({ path: f.id, content: f.content || "" })),
-        }),
+      await apiPost("/api/files/seed", {
+        projectId: id,
+        files: seedFiles.filter(f => f.type === "file").map(f => ({ path: f.id, content: f.content || "" })),
       });
     } catch {}
 
@@ -90,12 +87,7 @@ export function useProjects() {
    */
   const openFolder = useCallback(async (absolutePath: string, displayName?: string): Promise<string | null> => {
     try {
-      const res = await fetch("/api/workspaces/link", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ absolutePath, name: displayName }),
-      });
-      const data = await res.json();
+      const data = await apiPost("/api/workspaces/link", { absolutePath, name: displayName });
       if (!data.success) {
         throw new Error(data.error || "Failed to open folder");
       }
@@ -153,11 +145,7 @@ export function useProjects() {
     let partialResult: { partial: true; path: string; leftoverCount: number; message: string } | null = null;
     if (target?.type === "linked") {
       try {
-        await fetch("/api/workspaces/unlink", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ projectId: id }),
-        });
+        await apiPost("/api/workspaces/unlink", { projectId: id });
       } catch (err) {
         console.warn("[deleteProject] unlink failed:", err);
       }
@@ -169,30 +157,15 @@ export function useProjects() {
       // and re-throw it to the caller as a typed error so the UI can show
       // a dedicated manual-removal dialog.
       try {
-        const res = await fetch(
-          `/api/files/workspace?projectId=${encodeURIComponent(id)}`,
-          { method: "DELETE" },
-        );
-        if (!res.ok) {
-          let errMsg = `HTTP ${res.status}`;
-          try {
-            const data = await res.json();
-            if (data?.error) errMsg = data.error;
-          } catch {}
-          throw new Error(errMsg);
+        const data = await apiDelete("/api/files/workspace", { projectId: id });
+        if (data?.partial) {
+          partialResult = {
+            partial: true,
+            path: data.path,
+            leftoverCount: data.leftoverCount || 0,
+            message: data.message || "Folder couldn't be removed.",
+          };
         }
-        // Check for partial success
-        try {
-          const data = await res.json();
-          if (data?.partial) {
-            partialResult = {
-              partial: true,
-              path: data.path,
-              leftoverCount: data.leftoverCount || 0,
-              message: data.message || "Folder couldn't be removed.",
-            };
-          }
-        } catch {}
       } catch (err) {
         throw new Error(
           `Failed to delete workspace folder on disk: ${err instanceof Error ? err.message : "Unknown error"}`,
@@ -257,11 +230,7 @@ export function useProjects() {
     // The linkedPath is kept on the DBProject row so we can re-link later.
     if (target.type === "linked") {
       try {
-        await fetch("/api/workspaces/unlink", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ projectId: id }),
-        });
+        await apiPost("/api/workspaces/unlink", { projectId: id });
       } catch (err) {
         console.warn("[closeProject] unlink failed:", err);
       }
@@ -294,15 +263,7 @@ export function useProjects() {
     // reattaches to the on-disk folder.
     if (target.type === "linked" && target.linkedPath) {
       try {
-        const res = await fetch("/api/workspaces/link", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            absolutePath: target.linkedPath,
-            name: target.name,
-          }),
-        });
-        const data = await res.json();
+        const data = await apiPost("/api/workspaces/link", { absolutePath: target.linkedPath, name: target.name });
         if (!data.success) {
           throw new Error(data.error || "Failed to re-link folder");
         }

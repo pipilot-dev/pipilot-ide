@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { capturePreviewScreenshot } from "@/lib/screenshot";
 import { previewClick, previewScroll, previewType, previewFindElements } from "@/lib/browser-interact";
 import { runScript } from "@/lib/run-script";
+import { apiGet, apiPost, apiDelete, apiStream } from "@/lib/api";
 
 // Import types from useFileSystem
 export interface FileNode {
@@ -48,11 +49,7 @@ export function useFileSystemRemote() {
         }));
 
         // Seed the server workspace (idempotent — won't overwrite if exists)
-        await fetch("/api/files/seed", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ projectId: activeProjectId, files: filesToSeed }),
-        });
+        await apiPost("/api/files/seed", { projectId: activeProjectId, files: filesToSeed });
 
         seededRef.current = true;
       } catch (err) {
@@ -67,34 +64,34 @@ export function useFileSystemRemote() {
   useEffect(() => {
     if (!activeProjectId) return;
 
-    let eventSource: EventSource | null = null;
     let retryTimeout: ReturnType<typeof setTimeout>;
+    let handle: { close: () => void } | null = null;
 
     function connect() {
-      eventSource = new EventSource(`/api/files/watch?projectId=${encodeURIComponent(activeProjectId)}`);
-
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "tree" && data.files) {
-            setFiles(data.files);
-            if (!isReady) setIsReady(true);
-          }
-          // Ignore heartbeat
-        } catch {}
-      };
-
-      eventSource.onerror = () => {
-        // Reconnect after 3 seconds on error
-        eventSource?.close();
-        retryTimeout = setTimeout(connect, 3000);
-      };
+      handle = apiStream(
+        "/api/files/watch",
+        { projectId: activeProjectId },
+        {
+          onData(data) {
+            if (data.type === "tree" && data.files) {
+              setFiles(data.files);
+              if (!isReady) setIsReady(true);
+            }
+            // Ignore heartbeat
+          },
+          onError() {
+            // Reconnect after 3 seconds on error
+            handle?.close();
+            retryTimeout = setTimeout(connect, 3000);
+          },
+        },
+      );
     }
 
     connect();
 
     return () => {
-      eventSource?.close();
+      handle?.close();
       clearTimeout(retryTimeout);
     };
   }, [activeProjectId]);
@@ -102,11 +99,7 @@ export function useFileSystemRemote() {
   // Update file content via server API
   const updateFileContent = useCallback(async (filePath: string, content: string) => {
     try {
-      await fetch("/api/files/write", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: activeProjectId, path: filePath, content }),
-      });
+      await apiPost("/api/files/write", { projectId: activeProjectId, path: filePath, content });
     } catch (err) {
       console.error("[useFileSystemRemote] Write failed:", err);
     }
@@ -115,9 +108,10 @@ export function useFileSystemRemote() {
   // Read file content via server API
   const getFileContent = useCallback(async (filePath: string): Promise<string> => {
     try {
-      const res = await fetch(`/api/files/read?projectId=${encodeURIComponent(activeProjectId)}&path=${encodeURIComponent(filePath)}`);
-      if (!res.ok) return "";
-      const data = await res.json();
+      const data = await apiGet("/api/files/read", {
+        projectId: activeProjectId,
+        path: filePath,
+      });
       return data.content || "";
     } catch {
       return "";
@@ -132,11 +126,10 @@ export function useFileSystemRemote() {
    */
   const loadFolderChildren = useCallback(async (folderPath: string): Promise<void> => {
     try {
-      const res = await fetch(
-        `/api/files/list-dir?projectId=${encodeURIComponent(activeProjectId)}&path=${encodeURIComponent(folderPath)}`,
-      );
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await apiGet("/api/files/list-dir", {
+        projectId: activeProjectId,
+        path: folderPath,
+      });
       const children: FileNode[] = data.children || [];
 
       // Walk the tree and replace the matching folder's children
@@ -219,7 +212,10 @@ export function useFileSystemRemote() {
           return `Edited: ${args.path}`;
         }
         case "delete_file": {
-          await fetch(`/api/files?projectId=${encodeURIComponent(activeProjectId)}&path=${encodeURIComponent(args.path as string)}`, { method: "DELETE" });
+          await apiDelete("/api/files", {
+            projectId: activeProjectId,
+            path: args.path as string,
+          });
           setChangeLog(prev => [...prev, { type: "delete", path: args.path as string, timestamp: new Date() }]);
           return `Deleted: ${args.path}`;
         }
@@ -267,10 +263,10 @@ export function useFileSystemRemote() {
           return `Created ${filesList.length} files`;
         }
         case "rename_file": {
-          await fetch("/api/files/rename", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ projectId: activeProjectId, oldPath: args.oldPath, newPath: args.newPath }),
+          await apiPost("/api/files/rename", {
+            projectId: activeProjectId,
+            oldPath: args.oldPath,
+            newPath: args.newPath,
           });
           return `Renamed: ${args.oldPath} → ${args.newPath}`;
         }

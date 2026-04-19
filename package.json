@@ -18,7 +18,7 @@
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "electron:dev": "node scripts/build-electron.mjs && concurrently \"vite dev\" \"electron .\"",
-    "electron:build": "vite build && node scripts/build-electron.mjs && electron-builder",
+    "electron:build": "ELECTRON=1 vite build && node scripts/build-electron.mjs && electron-builder",
     "postinstall": "electron-builder install-app-deps"
   },
   "devDependencies": {

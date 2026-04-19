@@ -9,6 +9,7 @@ import {
   Check, Package, ChevronRight,
 } from "lucide-react";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
+import { apiGet } from "@/lib/api";
 
 interface FolderPickerProps {
   open: boolean;
@@ -42,13 +43,12 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
     if (!open) return;
     setError(null);
     setListing(null);
-    fetch("/api/fs/home")
-      .then((r) => r.json())
+    apiGet("/api/fs/home")
       .then((data: HomeInfo) => {
         setHome(data);
         loadPath(data.home);
       })
-      .catch((err) => setError(err.message));
+      .catch((err: any) => setError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -56,12 +56,7 @@ export function FolderPicker({ open, onClose, onPick }: FolderPickerProps) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/fs/list?path=${encodeURIComponent(path)}`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `HTTP ${res.status}`);
-      }
-      const data: FsListing = await res.json();
+      const data: FsListing = await apiGet("/api/fs/list", { path });
       setListing(data);
     } catch (err: any) {
       setError(err.message);

@@ -6,6 +6,7 @@
 import { useState, useEffect } from "react";
 import { GitBranch, Loader2 } from "lucide-react";
 import { COLORS as C, FONTS, injectFonts } from "@/lib/design-tokens";
+import { apiPost } from "@/lib/api";
 
 interface CloneRepoModalProps {
   open: boolean;
@@ -33,12 +34,7 @@ export function CloneRepoModal({ open, onClose, onCloned }: CloneRepoModalProps)
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/git/clone", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmed }),
-      });
-      const data = await res.json();
+      const data = await apiPost("/api/git/clone", { url: trimmed });
       if (!data.success) throw new Error(data.message || "Clone failed");
       if (data.path) await onCloned(data.path);
       onClose();

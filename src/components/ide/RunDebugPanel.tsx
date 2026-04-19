@@ -4,6 +4,7 @@ import {
   Zap, ListChecks, FileCode, Boxes, Globe, ChevronRight,
 } from "lucide-react";
 import { useActiveProject } from "@/contexts/ProjectContext";
+import { apiGet } from "@/lib/api";
 
 interface RunDebugPanelProps {
   onRunPreview?: () => void;
@@ -52,13 +53,8 @@ export function RunDebugPanel({ onRunPreview, onOpenTerminal }: RunDebugPanelPro
     if (!activeProjectId) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/project/scripts?projectId=${encodeURIComponent(activeProjectId)}`);
-      if (res.ok) {
-        const data = await res.json();
-        setScripts(data);
-      } else {
-        setScripts({ scripts: {}, hasPackageJson: false });
-      }
+      const data = await apiGet("/api/project/scripts", { projectId: activeProjectId });
+      setScripts(data);
     } catch {
       setScripts({ scripts: {}, hasPackageJson: false });
     } finally {
