@@ -886,6 +886,65 @@ export function registerFileSystemHandlers(ctx: IpcContext) {
 
     return { files: typesMap, package: pkg };
   });
+
+  // ── GET /api/fs/home — useful starting points for folder picker ──
+  ctx.get("/api/fs/home", async () => {
+    const home = os.homedir();
+    const candidates: { name: string; path: string }[] = [];
+    candidates.push({ name: "Home", path: home });
+    candidates.push({ name: "Documents", path: path.join(home, "Documents") });
+    candidates.push({ name: "Desktop", path: path.join(home, "Desktop") });
+    candidates.push({ name: "Downloads", path: path.join(home, "Downloads") });
+
+    if (process.platform === "win32") {
+      for (const letter of "CDEFGHIJKLMNOPQRSTUVWXYZ") {
+        const drive = `${letter}:\\`;
+        try { if (fs.existsSync(drive)) candidates.push({ name: `${letter}: drive`, path: drive }); }
+        catch {}
+      }
+    } else {
+      candidates.push({ name: "Root", path: "/" });
+    }
+
+    const existing = candidates.filter((c) => {
+      try { return fs.existsSync(c.path); } catch { return false; }
+    });
+
+    return { home, separator: path.sep, entries: existing };
+  });
+
+  // ── GET /api/fs/list — list subdirectories at a path ──
+  ctx.get("/api/fs/list", async ({ query }) => {
+    const targetPath = query?.path;
+    if (!targetPath) throw new Error("path required");
+
+    const resolved = path.resolve(targetPath);
+    if (!fs.existsSync(resolved)) throw new Error("path does not exist");
+
+    const stat = fs.statSync(resolved);
+    if (!stat.isDirectory()) throw new Error("path is not a directory");
+
+    const folders: { name: string; path: string; hasPackageJson?: boolean }[] = [];
+    const entries = fs.readdirSync(resolved);
+
+    for (const entry of entries) {
+      if (entry.startsWith(".") && entry !== ".github") continue;
+      const full = path.join(resolved, entry);
+      let s: fs.Stats;
+      try { s = fs.statSync(full); } catch { continue; }
+      if (!s.isDirectory()) continue;
+      let hasPackageJson = false;
+      try { hasPackageJson = fs.existsSync(path.join(full, "package.json")); } catch {}
+      folders.push({ name: entry, path: full, hasPackageJson });
+    }
+
+    folders.sort((a, b) => {
+      if (a.hasPackageJson !== b.hasPackageJson) return a.hasPackageJson ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return { path: resolved, separator: path.sep, folders };
+  });
 }
 
 // ── Internal utility: kill stray processes referencing a folder (Windows) ───

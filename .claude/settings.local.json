@@ -182,7 +182,9 @@
       "Bash(cp package.json package.json.bak)",
       "Bash(cp index.html index.html.bak)",
       "Bash(cp renderer.js renderer.js.bak)",
-      "Bash(start \"\" npx electron-forge start)"
+      "Bash(start \"\" npx electron-forge start)",
+      "Bash(find node_modules/@anthropic-ai/claude-agent-sdk -name cli*)",
+      "Bash(find node_modules -path *claude-agent-sdk/cli*)"
     ]
   },
   "enableAllProjectMcpServers": true,

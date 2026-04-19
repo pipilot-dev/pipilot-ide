@@ -6,10 +6,24 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { execSync } from "child_process";
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { IpcContext } from "../ipc-api";
 import { resolveWorkspaceDir, WORKSPACE_BASE, CONFIG_DIR } from "./shared";
+
+// Resolve Claude CLI path for the Agent SDK (CJS bundles can't use import.meta.url)
+let claudeCliPath: string | undefined;
+try {
+  // Try global install
+  const which = process.platform === "win32" ? "where claude" : "which claude";
+  claudeCliPath = execSync(which, { encoding: "utf8" }).trim().split("\n")[0];
+} catch {}
+if (claudeCliPath) {
+  console.log("[agent] Claude CLI path:", claudeCliPath);
+} else {
+  console.warn("[agent] Claude CLI not found — agent may fail");
+}
 import {
   runAllChecks, runTypeScriptCheck, ensureNodeModules,
   runPythonCheck, runGoCheck, runRustCheck, runPhpCheck, runRubyCheck,
@@ -1170,6 +1184,7 @@ export function registerAgentHandlers(ctx: IpcContext) {
           includePartialMessages: true,
           continue: !isFirstMessage,
           abortController,
+          ...(claudeCliPath ? { pathToClaudeCodeExecutable: claudeCliPath } : {}),
           mcpServers: {
             pipilot: ideTools,
             context7: { type: "http" as any, url: "https://mcp.context7.com/mcp" },
