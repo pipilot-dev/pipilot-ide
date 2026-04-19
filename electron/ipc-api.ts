@@ -141,10 +141,14 @@ export function registerAllHandlers(
       win?.webContents.send(`api:stream:${streamId}`, { __done: true });
     };
 
-    streamHandler({ query: req.query }, send, done).catch((err) => {
-      console.error(`[ipc] stream ${key} error:`, err.message);
-      done();
-    });
+    // Delay stream start slightly so the renderer has time to register
+    // its listener for api:stream:${streamId} after receiving the streamId
+    setTimeout(() => {
+      streamHandler({ query: req.query }, send, done).catch((err) => {
+        console.error(`[ipc] stream ${key} error:`, err.message);
+        done();
+      });
+    }, 50);
 
     return streamId;
   });
