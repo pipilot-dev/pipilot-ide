@@ -136,6 +136,132 @@
   }
 
   // ── Open virtual tab ──
+  function exportGraph(format, graphArea) {
+    if (!graphArea) return;
+    var svg = graphArea.querySelector('svg');
+    var nodes = graphArea.querySelectorAll('.depgraph-node');
+    if (!svg && !nodes.length) {
+      bus.emit('toast:show', { message: 'No graph to export. Click Scan first.', type: 'warn' });
+      return;
+    }
+
+    var w = parseInt(graphArea.style.width) || graphArea.scrollWidth || 800;
+    var h = parseInt(graphArea.style.height) || graphArea.scrollHeight || 600;
+
+    if (format === 'svg') {
+      // Build a standalone SVG with embedded nodes
+      var svgClone = svg ? svg.cloneNode(true) : document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      svgClone.setAttribute('width', w);
+      svgClone.setAttribute('height', h);
+
+      // Render nodes as SVG foreignObject
+      for (var i = 0; i < nodes.length; i++) {
+        var nd = nodes[i];
+        var fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+        fo.setAttribute('x', parseInt(nd.style.left) || 0);
+        fo.setAttribute('y', parseInt(nd.style.top) || 0);
+        fo.setAttribute('width', parseInt(nd.style.width) || 150);
+        fo.setAttribute('height', 40);
+        var body = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+        body.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+        body.style.cssText = nd.style.cssText.replace(/position\s*:\s*absolute\s*;?/i, '');
+        body.textContent = nd.textContent;
+        fo.appendChild(body);
+        svgClone.appendChild(fo);
+      }
+
+      var svgData = new XMLSerializer().serializeToString(svgClone);
+      var blob = new Blob(['<?xml version="1.0" encoding="UTF-8"?>\n' + svgData], { type: 'image/svg+xml' });
+      downloadBlob(blob, 'dependency-graph.svg');
+      bus.emit('toast:show', { message: 'SVG exported', type: 'ok' });
+
+    } else if (format === 'png') {
+      // Render to canvas via html2canvas-like approach using SVG foreignObject
+      var canvas = document.createElement('canvas');
+      var scale = 2; // retina
+      canvas.width = w * scale;
+      canvas.height = h * scale;
+      var ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.fillStyle = '#16161a';
+      ctx.fillRect(0, 0, w, h);
+
+      // Draw edges from SVG
+      var lines = svg ? svg.querySelectorAll('line') : [];
+      for (var l = 0; l < lines.length; l++) {
+        var ln = lines[l];
+        ctx.beginPath();
+        ctx.moveTo(parseFloat(ln.getAttribute('x1')), parseFloat(ln.getAttribute('y1')));
+        ctx.lineTo(parseFloat(ln.getAttribute('x2')), parseFloat(ln.getAttribute('y2')));
+        ctx.strokeStyle = ln.getAttribute('stroke') || '#444';
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = parseFloat(ln.getAttribute('opacity') || '0.6');
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+
+        // Draw arrowhead
+        var ax = parseFloat(ln.getAttribute('x2'));
+        var ay = parseFloat(ln.getAttribute('y2'));
+        var fx = parseFloat(ln.getAttribute('x1'));
+        var fy = parseFloat(ln.getAttribute('y1'));
+        var angle = Math.atan2(ay - fy, ax - fx);
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(ax - 8 * Math.cos(angle - 0.4), ay - 8 * Math.sin(angle - 0.4));
+        ctx.lineTo(ax - 8 * Math.cos(angle + 0.4), ay - 8 * Math.sin(angle + 0.4));
+        ctx.closePath();
+        ctx.fillStyle = '#555';
+        ctx.fill();
+      }
+
+      // Draw nodes
+      ctx.font = '11px JetBrains Mono, monospace';
+      for (var n = 0; n < nodes.length; n++) {
+        var node = nodes[n];
+        var nx = parseInt(node.style.left) || 0;
+        var ny = parseInt(node.style.top) || 0;
+        var nw = parseInt(node.style.width) || 150;
+        var nh = 36;
+        var bg = node.style.borderColor || '#444';
+        var isOrphan = node.style.borderStyle === 'dashed';
+
+        // Node background
+        ctx.fillStyle = '#232329';
+        ctx.strokeStyle = bg;
+        ctx.lineWidth = isOrphan ? 1.5 : 1;
+        if (isOrphan) ctx.setLineDash([4, 3]); else ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.roundRect(nx, ny, nw, nh, 6);
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Node text
+        ctx.fillStyle = '#d9d9de';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(node.textContent.trim().slice(0, 22), nx + 8, ny + nh / 2);
+      }
+
+      canvas.toBlob(function (blob) {
+        if (blob) {
+          downloadBlob(blob, 'dependency-graph.png');
+          bus.emit('toast:show', { message: 'PNG exported (' + canvas.width + 'x' + canvas.height + ')', type: 'ok' });
+        }
+      }, 'image/png');
+    }
+  }
+
+  function downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 100);
+  }
+
   function openGraph() {
     if (!PiPilot.editor || !PiPilot.editor.openVirtualTab) return;
     PiPilot.editor.openVirtualTab({
@@ -151,7 +277,12 @@
           '<button id="depgraph-refresh" style="background:var(--accent,#6c8cff);color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;">Scan</button>' +
           '<span id="depgraph-status" style="color:var(--text-dim,#888);font-size:12px;"></span>' +
           '<label style="margin-left:auto;font-size:11px;color:var(--text-dim,#888);display:flex;align-items:center;gap:4px;">' +
-            '<input type="checkbox" id="depgraph-orphans" checked> Show orphans</label>';
+            '<input type="checkbox" id="depgraph-orphans" checked> Show orphans</label>' +
+          '<select id="depgraph-export" style="background:var(--surface-alt,#232329);color:var(--text,#ccc);border:1px solid var(--border,#333);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;">' +
+            '<option value="">Export...</option>' +
+            '<option value="png">PNG Image</option>' +
+            '<option value="svg">SVG File</option>' +
+          '</select>';
         container.appendChild(toolbar);
 
         var legend = document.createElement('div');
@@ -169,6 +300,14 @@
 
         var orphanCheck = toolbar.querySelector('#depgraph-orphans');
         if (orphanCheck) orphanCheck.addEventListener('change', function () { buildGraph(container); });
+
+        var exportSelect = toolbar.querySelector('#depgraph-export');
+        if (exportSelect) exportSelect.addEventListener('change', function () {
+          var format = exportSelect.value;
+          if (!format) return;
+          exportSelect.value = '';
+          exportGraph(format, graphArea);
+        });
 
         buildGraph(container);
       }
@@ -391,6 +530,7 @@
           var color = dirColorMap[dir] || '#8b949e';
 
           var nodeEl = document.createElement('div');
+          nodeEl.className = 'depgraph-node';
           nodeEl.style.cssText = 'position:absolute;left:' + pos.x + 'px;top:' + pos.y + 'px;' +
             'width:' + nodeW + 'px;height:' + nodeH + 'px;' +
             'background:var(--surface,#1e1e26);' +
