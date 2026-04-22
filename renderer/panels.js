@@ -1167,33 +1167,60 @@
       if (activeTab === 'extensions') {
         await renderExtensionsTab(container);
       } else if (activeTab === 'mcp') {
-        const sec = el('div', { class: 'p-section' });
-        sec.appendChild(el('button', { class: 'btn btn-secondary btn-small', style: { width: '100%', marginBottom: '8px' }, onClick: () => bus.emit('modal:add-mcp') }, '+ Add MCP Server'));
+        // Built-in MCP servers
+        const builtinSec = el('div', { class: 'p-section' });
+        builtinSec.appendChild(el('h4', null, 'Built-in'));
+        const BUILTIN_MCPS = [
+          { name: 'PiPilot', desc: 'IDE tools, search, diagnostics, run code', icon: '⚡' },
+          { name: 'Context7', desc: 'Documentation search', icon: '📚' },
+          { name: 'AppDeploy', desc: 'Deploy full-stack apps', icon: '🚀' },
+          { name: 'DeepWiki', desc: 'GitHub repo documentation', icon: '📖' },
+          { name: 'Sequential Thinking', desc: 'Structured reasoning', icon: '🧠' },
+          { name: 'Chrome DevTools', desc: 'Inspect & debug pages', icon: '🔧' },
+          { name: 'Playwright', desc: 'Browser automation', icon: '🎭' },
+        ];
+        BUILTIN_MCPS.forEach(m => {
+          builtinSec.appendChild(el('div', { class: 'connector-card', style: { opacity: '0.7' } },
+            el('div', { class: 'icon', style: { fontSize: '16px' } }, m.icon),
+            el('div', { class: 'info' },
+              el('div', { class: 'name' }, m.name),
+              el('div', { class: 'desc' }, m.desc)
+            )
+          ));
+        });
+        container.appendChild(builtinSec);
+
+        // User-configured MCP servers
+        const userSec = el('div', { class: 'p-section' });
+        userSec.appendChild(el('h4', null, 'Custom'));
+        userSec.appendChild(el('button', { class: 'btn btn-secondary btn-small', style: { width: '100%', marginBottom: '8px' }, onClick: () => bus.emit('modal:add-mcp') }, '+ Add MCP Server'));
         let resp;
         try { resp = await api.mcp.listServers(); } catch { resp = { servers: [] }; }
         const servers = (resp && resp.servers) || [];
         if (!servers.length) {
-          sec.appendChild(el('div', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, 'No MCP servers configured'));
+          userSec.appendChild(el('div', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, 'No custom MCP servers added'));
         }
         servers.forEach(s => {
           const isHttp = s.type === 'http';
-          const desc = isHttp ? s.url : `${s.command || ''} ${(s.args || []).join(' ')}`;
+          const desc = isHttp ? (s.url || '') : `${s.command || ''} ${(s.args || []).join(' ')}`;
           const badge = isHttp ? 'HTTP' : 'STDIO';
+          const hasAuth = isHttp && s.headers && Object.keys(s.headers).length > 0;
           const card = el('div', { class: 'connector-card' },
             el('div', { class: 'icon' }, '🧩'),
             el('div', { class: 'info' },
               el('div', { class: 'name', style: { display: 'flex', alignItems: 'center', gap: '6px' } },
                 s.name,
-                el('span', { style: { fontSize: '8px', padding: '1px 4px', borderRadius: '2px', background: isHttp ? 'rgba(108,182,255,0.15)' : 'rgba(86,211,100,0.15)', color: isHttp ? 'var(--info)' : 'var(--ok)', fontFamily: 'var(--font-mono)', fontWeight: '600' } }, badge)
+                el('span', { style: { fontSize: '8px', padding: '1px 4px', borderRadius: '2px', background: isHttp ? 'rgba(108,182,255,0.15)' : 'rgba(86,211,100,0.15)', color: isHttp ? 'var(--info)' : 'var(--ok)', fontFamily: 'var(--font-mono)', fontWeight: '600' } }, badge),
+                hasAuth ? el('span', { style: { fontSize: '8px', padding: '1px 4px', borderRadius: '2px', background: 'rgba(86,211,100,0.1)', color: 'var(--ok)', fontFamily: 'var(--font-mono)' } }, '🔑') : null
               ),
               el('div', { class: 'desc', style: { fontFamily: 'var(--font-mono)', fontSize: '10px' } }, desc)
             ),
             el('div', { class: 'toggle' + (s.enabled ? ' on' : ''), onClick: async () => { await api.mcp.toggleServer(s.id, !s.enabled); render(); } })
           );
           card.appendChild(el('button', { class: 'icon-btn', onClick: async () => { await api.mcp.removeServer(s.id); render(); } }, '×'));
-          sec.appendChild(card);
+          userSec.appendChild(card);
         });
-        container.appendChild(sec);
+        container.appendChild(userSec);
       } else {
         const sec = el('div', { class: 'p-section' });
         let resp;

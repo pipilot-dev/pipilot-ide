@@ -521,8 +521,11 @@
         <div class="modal-form-row"><label>Env (KEY=VALUE per line)</label><textarea id="mcp-env" rows="2" placeholder="API_KEY=abc"></textarea></div>
       </div>
       <div id="mcp-http-fields" style="display:none;">
-        <div class="modal-form-row"><label>URL</label><input type="text" id="mcp-url" placeholder="https://mcp.example.com/mcp" /></div>
-        <div class="modal-form-row"><label>Headers (KEY=VALUE per line)</label><textarea id="mcp-headers" rows="2" placeholder="Authorization=Bearer sk-...\nx-api-key=abc123"></textarea></div>
+        <div class="modal-form-row"><label>Server URL</label><input type="text" id="mcp-url" placeholder="https://mcp.example.com/mcp" /></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="modal-form-row"><label>Header Key <span style="color:var(--text-dim);font-size:10px;">(optional)</span></label><input type="text" id="mcp-header-key" placeholder="Authorization" /></div>
+          <div class="modal-form-row"><label>Header Value</label><input type="password" id="mcp-header-val" placeholder="Bearer sk-..." /></div>
+        </div>
       </div>
     `;
     // Toggle fields based on type
@@ -550,10 +553,10 @@
       if (mcpType === 'http') {
         const url = body.querySelector('#mcp-url').value.trim();
         if (!url) { bus.emit('toast:show', { message: 'URL is required', type: 'warn' }); return; }
-        const headerLines = body.querySelector('#mcp-headers').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-        const headers = {};
-        headerLines.forEach(line => { const eq = line.indexOf('='); if (eq > 0) headers[line.slice(0, eq).trim()] = line.slice(eq + 1).trim(); });
-        serverData = { name, type: 'http', url, headers: Object.keys(headers).length ? headers : undefined, enabled: true };
+        const hKey = body.querySelector('#mcp-header-key').value.trim();
+        const hVal = body.querySelector('#mcp-header-val').value.trim();
+        const headers = (hKey && hVal) ? { [hKey]: hVal } : undefined;
+        serverData = { name, type: 'http', url, headers, enabled: true };
       } else {
         const command = body.querySelector('#mcp-cmd').value.trim();
         if (!command) { bus.emit('toast:show', { message: 'Command is required', type: 'warn' }); return; }
