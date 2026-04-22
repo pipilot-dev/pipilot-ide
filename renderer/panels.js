@@ -37,10 +37,11 @@
 }
 .p-commit-actions { display: flex; gap: 6px; margin-top: 6px; }
 
-.p-tabs { display: flex; border-bottom: 1px solid var(--border); }
+.p-tabs { display: flex; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+.p-tabs::-webkit-scrollbar { display: none; }
 .p-tab {
-  flex: 1; padding: 8px; font-size: var(--fs-sm); color: var(--text-mid);
-  background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer;
+  flex-shrink: 0; padding: 8px 10px; font-size: var(--fs-sm); color: var(--text-mid);
+  background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap;
 }
 .p-tab.active { color: var(--text-strong); border-bottom-color: var(--accent); }
 
