@@ -1,0 +1,296 @@
+// PiPilot IDE — Preload script
+// Exposes a safe IPC bridge to the renderer via window.electronAPI.
+
+const { contextBridge, ipcRenderer, clipboard } = require('electron');
+
+// Track active streams so renderer can clean them up
+const streamListeners = new Map();
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  // ---------- Clipboard ----------
+  clipboard: {
+    readText: () => clipboard.readText(),
+    writeText: (text) => clipboard.writeText(String(text ?? '')),
+  },
+
+  // ---------- App ----------
+  pickFolder: () => ipcRenderer.invoke('app:pick-folder'),
+  pickFile: (opts) => ipcRenderer.invoke('app:pick-file', opts),
+  getPlatform: () => ipcRenderer.invoke('app:get-platform'),
+  getVersion: () => ipcRenderer.invoke('app:get-version'),
+  getHome: () => ipcRenderer.invoke('app:get-home'),
+  pickSavePath: (opts) => ipcRenderer.invoke('app:pick-save-path', opts),
+  window: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    maximize: () => ipcRenderer.invoke('window:maximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+  },
+  recentProjects: {
+    get: () => ipcRenderer.invoke('app:recent-projects:get'),
+    add: (p) => ipcRenderer.invoke('app:recent-projects:add', p),
+    remove: (p) => ipcRenderer.invoke('app:recent-projects:remove', p),
+  },
+
+  onMenu: (event, handler) => {
+    const ch = `menu:${event}`;
+    const fn = (_e, ...args) => handler(...args);
+    ipcRenderer.on(ch, fn);
+    return () => ipcRenderer.removeListener(ch, fn);
+  },
+
+  // ---------- Files ----------
+  files: {
+    tree: (projectPath) => ipcRenderer.invoke('files:tree', projectPath),
+    listDir: (dirPath) => ipcRenderer.invoke('files:list-dir', dirPath),
+    zip: (paths, projectPath, savePath) => ipcRenderer.invoke('files:zip', { paths, projectPath, savePath }),
+    saveTemp: (fileName, base64) => ipcRenderer.invoke('files:save-temp', { fileName, base64 }),
+    read: (filePath) => ipcRenderer.invoke('files:read', filePath),
+    write: (filePath, content) => ipcRenderer.invoke('files:write', { filePath, content }),
+    mkdir: (dirPath) => ipcRenderer.invoke('files:mkdir', dirPath),
+    delete: (targetPath) => ipcRenderer.invoke('files:delete', targetPath),
+    rename: (from, to) => ipcRenderer.invoke('files:rename', { from, to }),
+    stat: (p) => ipcRenderer.invoke('files:stat', p),
+    list: (dirPath) => ipcRenderer.invoke('files:list', dirPath),
+    search: (projectPath, query, opts) => ipcRenderer.invoke('files:search', { projectPath, query, opts }),
+    watch: (projectPath, onEvent) => {
+      const streamId = `watch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const ch = `files:watch:${streamId}`;
+      const fn = (_e, evt) => onEvent(evt);
+      ipcRenderer.on(ch, fn);
+      streamListeners.set(streamId, { ch, fn });
+      ipcRenderer.invoke('files:watch:start', { streamId, projectPath });
+      return () => {
+        ipcRenderer.invoke('files:watch:stop', streamId);
+        ipcRenderer.removeListener(ch, fn);
+        streamListeners.delete(streamId);
+      };
+    },
+  },
+
+  fs: {
+    home: () => ipcRenderer.invoke('fs:home'),
+    list: (dirPath) => ipcRenderer.invoke('fs:list', dirPath),
+  },
+
+  // ---------- Terminal ----------
+  terminal: {
+    profiles: () => ipcRenderer.invoke('terminal:profiles'),
+    create: (opts) => ipcRenderer.invoke('terminal:create', opts),
+    write: (id, data) => ipcRenderer.invoke('terminal:write', { id, data }),
+    resize: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
+    destroy: (id) => ipcRenderer.invoke('terminal:destroy', id),
+    onData: (id, handler) => {
+      const ch = `terminal:data:${id}`;
+      const fn = (_e, data) => handler(data);
+      ipcRenderer.on(ch, fn);
+      return () => ipcRenderer.removeListener(ch, fn);
+    },
+    onExit: (id, handler) => {
+      const ch = `terminal:exit:${id}`;
+      const fn = (_e, code) => handler(code);
+      ipcRenderer.on(ch, fn);
+      return () => ipcRenderer.removeListener(ch, fn);
+    },
+  },
+
+  // ---------- Agent (AI) ----------
+  agent: {
+    send: (payload, onEvent) => {
+      const streamId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const ch = `agent:event:${streamId}`;
+      const fn = (_e, evt) => onEvent(evt);
+      ipcRenderer.on(ch, fn);
+      streamListeners.set(streamId, { ch, fn });
+      ipcRenderer.invoke('agent:send', { streamId, ...payload });
+      return {
+        stop: () => ipcRenderer.invoke('agent:stop', streamId),
+        answer: (text) => ipcRenderer.invoke('agent:answer', { streamId, text }),
+        dispose: () => {
+          ipcRenderer.removeListener(ch, fn);
+          streamListeners.delete(streamId);
+        },
+      };
+    },
+    stop: (streamId) => ipcRenderer.invoke('agent:stop', streamId),
+    // AskUserQuestion (human-in-the-loop)
+    answerQuestion: (requestId, answers) => ipcRenderer.invoke('agent:answer-question', { requestId, answers }),
+    listSessions: (projectPath) => ipcRenderer.invoke('agent:list-sessions', projectPath),
+    loadSession: (projectPath, sessionId) => ipcRenderer.invoke('agent:load-session', { projectPath, sessionId }),
+    deleteSession: (projectPath, sessionId) => ipcRenderer.invoke('agent:delete-session', { projectPath, sessionId }),
+    newSession: (projectPath, title) => ipcRenderer.invoke('agent:new-session', { projectPath, title }),
+  },
+
+  // ---------- Git ----------
+  git: {
+    status: (p) => ipcRenderer.invoke('git:status', p),
+    log: (p, opts) => ipcRenderer.invoke('git:log', { projectPath: p, opts }),
+    diff: (p, file, staged) => ipcRenderer.invoke('git:diff', { projectPath: p, file, staged }),
+    add: (p, files) => ipcRenderer.invoke('git:add', { projectPath: p, files }),
+    commit: (p, msg) => ipcRenderer.invoke('git:commit', { projectPath: p, msg }),
+    push: (p, opts) => ipcRenderer.invoke('git:push', { projectPath: p, opts }),
+    pull: (p, opts) => ipcRenderer.invoke('git:pull', { projectPath: p, opts }),
+    fetch: (p, remote) => ipcRenderer.invoke('git:fetch', { projectPath: p, remote }),
+    branches: (p) => ipcRenderer.invoke('git:branches', p),
+    checkout: (p, branch) => ipcRenderer.invoke('git:checkout', { projectPath: p, branch }),
+    createBranch: (p, name) => ipcRenderer.invoke('git:create-branch', { projectPath: p, name }),
+    merge: (p, branch) => ipcRenderer.invoke('git:merge', { projectPath: p, branch }),
+    cherryPick: (p, oid) => ipcRenderer.invoke('git:cherry-pick', { projectPath: p, oid }),
+    deleteBranch: (p, name, force) => ipcRenderer.invoke('git:delete-branch', { projectPath: p, name, force }),
+    reset: (p, mode, ref) => ipcRenderer.invoke('git:reset', { projectPath: p, mode, ref }),
+    addRemote: (p, name, url) => ipcRenderer.invoke('git:add-remote', { projectPath: p, name, url }),
+    clone: (url, dir, onProgress) => {
+      const streamId = `clone-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const ch = `git:clone:progress:${streamId}`;
+      const fn = (_e, progress) => onProgress?.(progress);
+      ipcRenderer.on(ch, fn);
+      const done = ipcRenderer.invoke('git:clone', { streamId, url, dir });
+      done.finally(() => ipcRenderer.removeListener(ch, fn));
+      return done;
+    },
+    stash: (p, opts) => ipcRenderer.invoke('git:stash', { projectPath: p, opts }),
+    discard: (p, file) => ipcRenderer.invoke('git:discard', { projectPath: p, file }),
+    unstage: (p, files) => ipcRenderer.invoke('git:unstage', { projectPath: p, files }),
+    init: (p) => ipcRenderer.invoke('git:init', p),
+    show: (p, hash) => ipcRenderer.invoke('git:show', { projectPath: p, hash }),
+    fileVersions: (p, file, staged) => ipcRenderer.invoke('git:file-versions', { projectPath: p, file, staged }),
+  },
+
+  // ---------- Cloud connectors ----------
+  cloud: {
+    listConnectors: () => ipcRenderer.invoke('cloud:list'),
+    saveToken: (provider, token, meta) => ipcRenderer.invoke('cloud:save-token', { provider, token, meta }),
+    getToken: (provider) => ipcRenderer.invoke('cloud:get-token', provider),
+    deleteToken: (provider) => ipcRenderer.invoke('cloud:delete-token', provider),
+    testConnection: (provider) => ipcRenderer.invoke('cloud:test', provider),
+  },
+
+  mcp: {
+    listServers: () => ipcRenderer.invoke('mcp:list'),
+    addServer: (server) => ipcRenderer.invoke('mcp:add', server),
+    removeServer: (id) => ipcRenderer.invoke('mcp:remove', id),
+    toggleServer: (id, enabled) => ipcRenderer.invoke('mcp:toggle', { id, enabled }),
+  },
+
+  // ---------- Checkpoints ----------
+  checkpoints: {
+    list: (p) => ipcRenderer.invoke('checkpoints:list', p),
+    create: (p, label) => ipcRenderer.invoke('checkpoints:create', { projectPath: p, label }),
+    restore: (p, id) => ipcRenderer.invoke('checkpoints:restore', { projectPath: p, id }),
+    delete: (p, id) => ipcRenderer.invoke('checkpoints:delete', { projectPath: p, id }),
+  },
+
+  // ---------- Dev server / preview ----------
+  devServer: {
+    start: (p, cmd) => ipcRenderer.invoke('devserver:start', { projectPath: p, cmd }),
+    stop: (id) => ipcRenderer.invoke('devserver:stop', id),
+    status: (id) => ipcRenderer.invoke('devserver:status', id),
+    list: () => ipcRenderer.invoke('devserver:list'),
+    detectType: (p) => ipcRenderer.invoke('devserver:detect-type', { projectPath: p }),
+    startStatic: (p) => ipcRenderer.invoke('devserver:static', { projectPath: p }),
+    stopStatic: (p) => ipcRenderer.invoke('devserver:static-stop', { projectPath: p }),
+    onLog: (id, handler) => {
+      const ch = `devserver:log:${id}`;
+      const fn = (_e, line) => handler(line);
+      ipcRenderer.on(ch, fn);
+      return () => ipcRenderer.removeListener(ch, fn);
+    },
+  },
+
+  // ---------- Diagnostics (Problems) ----------
+  wiki: {
+    tree: (p) => ipcRenderer.invoke('wiki:tree', { projectPath: p }),
+    page: (p, pageId) => ipcRenderer.invoke('wiki:page', { projectPath: p, pageId }),
+    save: (p, pageId, content) => ipcRenderer.invoke('wiki:save', { projectPath: p, pageId, content }),
+    delete: (p, pageId) => ipcRenderer.invoke('wiki:delete', { projectPath: p, pageId }),
+    scan: (p) => ipcRenderer.invoke('wiki:scan', { projectPath: p }),
+  },
+
+  diagnostics: {
+    start: (projectPath) => ipcRenderer.invoke('diagnostics:start', { projectPath }),
+    stop: () => ipcRenderer.invoke('diagnostics:stop'),
+    run: (projectPath) => ipcRenderer.invoke('diagnostics:run', { projectPath }),
+    onUpdate: (handler) => {
+      const ch = 'diagnostics:updated';
+      const fn = (_e, payload) => handler(payload);
+      ipcRenderer.on(ch, fn);
+      return () => ipcRenderer.removeListener(ch, fn);
+    },
+  },
+
+  // ---------- Extensions ----------
+  extensions: {
+    registry: () => ipcRenderer.invoke('extensions:registry'),
+    installed: () => ipcRenderer.invoke('extensions:installed'),
+    install: (id, url, manifest) => ipcRenderer.invoke('extensions:install', { id, url, manifest }),
+    uninstall: (id) => ipcRenderer.invoke('extensions:uninstall', { id }),
+    toggle: (id, enabled) => ipcRenderer.invoke('extensions:toggle', { id, enabled }),
+    load: (id) => ipcRenderer.invoke('extensions:load', { id }),
+    loadAll: () => ipcRenderer.invoke('extensions:load-all'),
+  },
+
+  // ---------- Search Index ----------
+  searchIndex: {
+    start: (projectPath) => ipcRenderer.invoke('search-index:start', { projectPath }),
+    stats: (projectPath) => ipcRenderer.invoke('search-index:stats', { projectPath }),
+    fileChanged: (projectPath, evt) => ipcRenderer.invoke('search-index:file-changed', { projectPath, evt }),
+    onProgress: (handler) => {
+      const fn = (_e, payload) => handler(payload);
+      ipcRenderer.on('search-index:progress', fn);
+      return () => ipcRenderer.removeListener('search-index:progress', fn);
+    },
+  },
+
+  // ---------- Speech (voice input) ----------
+  speech: {
+    info: () => ipcRenderer.invoke('speech:info'),
+    transcribe: (audioBase64) => ipcRenderer.invoke('speech:transcribe', { audio: audioBase64 }),
+    startNative: () => ipcRenderer.invoke('speech:start-native'),
+    stopNative: () => ipcRenderer.invoke('speech:stop-native'),
+    onResult: (handler) => {
+      const fn = (_e, payload) => handler(payload);
+      ipcRenderer.on('speech:result', fn);
+      return () => ipcRenderer.removeListener('speech:result', fn);
+    },
+  },
+
+  // ---------- Codestral (FIM completions + inline chat) ----------
+  codestral: {
+    status: () => ipcRenderer.invoke('codestral:status'),
+    fim: (payload) => ipcRenderer.invoke('codestral:fim', payload),
+    cancel: (requestId) => ipcRenderer.invoke('codestral:cancel', requestId),
+    chat: (payload) => ipcRenderer.invoke('codestral:chat', payload),
+    commitMessage: (payload) => ipcRenderer.invoke('codestral:commit-message', payload),
+    chatStream: (payload, onEvent) => {
+      const streamId = `codestral-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const ch = `codestral:chat:${streamId}`;
+      const fn = (_e, evt) => onEvent(evt);
+      ipcRenderer.on(ch, fn);
+      const done = ipcRenderer.invoke('codestral:chat-stream', { streamId, ...payload });
+      return {
+        streamId,
+        done,
+        stop: () => ipcRenderer.invoke('codestral:cancel', streamId),
+        dispose: () => ipcRenderer.removeListener(ch, fn),
+      };
+    },
+  },
+
+  // ---------- Settings ----------
+  settings: {
+    get: (key) => ipcRenderer.invoke('settings:get', key),
+    set: (key, value) => ipcRenderer.invoke('settings:set', { key, value }),
+    all: () => ipcRenderer.invoke('settings:all'),
+  },
+
+  // ---------- Shell ----------
+  shell: {
+    openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+    showItemInFolder: (p) => ipcRenderer.invoke('shell:show-in-folder', p),
+  },
+});
+
+// Best-effort cleanup signal to main process.
+window.addEventListener('beforeunload', () => {
+  try { ipcRenderer.send('renderer:closed'); } catch {}
+});

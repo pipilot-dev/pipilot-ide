@@ -1,47 +1,11 @@
-# Dependencies
 node_modules/
-
-# Agent SDK workspaces
-workspaces/
-.pnp
-.pnp.js
-
-# Testing
-coverage/
-
-# Production
-build/
-dist/
-
-# Environment variables
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# IDE
+out/
+dist/
+.DS_Store
+*.log
 .vscode/
 .idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Electron
-out/
-dist-electron/
-release/
+.pipilot/checkpoints/
+.pipilot/search-index.json
+fiddle-pipilot-ide/
