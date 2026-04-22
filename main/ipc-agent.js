@@ -553,22 +553,31 @@ module.exports = function register(ipcMain, ctx) {
           abortController: abortCtrl,
           // MCP servers (matching Vite setup)
           mcpServers: {
-            // PiPilot IDE tools — diagnostics, project context, design guide, search, screenshot
+            // PiPilot IDE tools — diagnostics, project context, design guide, search, screenshot, run_code
             pipilot: ideMcp,
             // Context7 — documentation search for any library/framework
             context7: { type: 'http', url: 'https://mcp.context7.com/mcp' },
+            // AppDeploy — deploy full-stack web apps from chat
+            appdeploy: { type: 'http', url: 'https://api-v2.appdeploy.ai/mcp' },
             // DeepWiki — read wiki docs about any GitHub repo
             deepwiki: { type: 'http', url: 'https://mcp.deepwiki.com/mcp' },
-            // Sequential Thinking — structured reasoning
+            // Sequential Thinking — structured reasoning for complex tasks
             'sequential-thinking': { command: 'npx', args: ['-y', '@modelcontextprotocol/server-sequential-thinking'] },
+            // Chrome DevTools — inspect, debug, interact with running pages
+            'chrome-devtools': { command: 'npx', args: ['chrome-devtools-mcp@latest', '--autoConnect'] },
+            // Playwright — browser automation, navigate, click, fill forms, screenshots
+            playwright: { command: 'npx', args: ['-y', '@anthropic-ai/mcp-server-playwright@latest'] },
             // User-configured MCP servers
             ...userMcpServers,
           },
           allowedTools: [
             'mcp__pipilot__*',
             'mcp__context7__*',
+            'mcp__appdeploy__*',
             'mcp__deepwiki__*',
             'mcp__sequential-thinking__*',
+            'mcp__chrome-devtools__*',
+            'mcp__playwright__*',
             ...userMcpAllowedTools,
             'Agent',
           ],

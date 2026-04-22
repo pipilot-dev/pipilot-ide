@@ -15,7 +15,12 @@ const CONNECTORS = [
   { id: 'netlify', name: 'Netlify', desc: 'Deploy & host', icon: '◈', authUrl: 'https://app.netlify.com/user/applications#personal-access-tokens' },
   { id: 'cloudflare', name: 'Cloudflare', desc: 'CDN, Workers, Pages', icon: '☁', authUrl: 'https://dash.cloudflare.com/profile/api-tokens' },
   { id: 'supabase', name: 'Supabase', desc: 'DB & auth backend', icon: '⚡', authUrl: 'https://app.supabase.com/account/tokens' },
+  { id: 'railway', name: 'Railway', desc: 'Deploy apps & services', icon: '🚂', authUrl: 'https://railway.com/account/tokens' },
+  { id: 'neon', name: 'Neon', desc: 'Serverless Postgres', icon: '🐘', authUrl: 'https://console.neon.tech/app/settings/api-keys' },
+  { id: 'turso', name: 'Turso', desc: 'SQLite edge databases', icon: '🗄️', authUrl: 'https://turso.tech/dashboard' },
   { id: 'npm', name: 'npm', desc: 'Publish packages', icon: '📦', authUrl: 'https://www.npmjs.com/settings/' },
+  { id: 'stripe', name: 'Stripe', desc: 'Payments & subscriptions', icon: '💳', authUrl: 'https://dashboard.stripe.com/apikeys' },
+  { id: 'sentry', name: 'Sentry', desc: 'Error monitoring', icon: '🔍', authUrl: 'https://sentry.io/settings/auth-tokens/' },
 ];
 
 module.exports = function register(ipcMain, ctx) {
