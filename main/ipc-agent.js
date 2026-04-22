@@ -203,6 +203,7 @@ module.exports = function register(ipcMain, ctx) {
 
   // ── Connector env vars (match Vite app behavior) ──
   const CONNECTOR_ENV_MAP = {
+    github:     (t) => ({ GITHUB_TOKEN: t }),
     vercel:     (t) => ({ VERCEL_TOKEN: t }),
     netlify:    (t) => ({ NETLIFY_AUTH_TOKEN: t }),
     npm:        (t) => ({ NPM_TOKEN: t }),
@@ -212,6 +213,7 @@ module.exports = function register(ipcMain, ctx) {
     turso:      (t) => ({ TURSO_AUTH_TOKEN: t }),
     stripe:     (t) => ({ STRIPE_SECRET_KEY: t }),
     sentry:     (t) => ({ SENTRY_AUTH_TOKEN: t }),
+    supabase:   (t) => ({ SUPABASE_ACCESS_TOKEN: t }),
   };
 
   function loadJsonSafe(p) {
@@ -226,7 +228,7 @@ module.exports = function register(ipcMain, ctx) {
   function loadConnectorEnvVars(workDir) {
     const envs = {};
     try {
-      // Global connectors live under Electron userDataPath/config/connectors.json
+      // 1) Config-file connectors
       const globalPath = path.join(ctx.userDataPath, 'config', 'connectors.json');
       const globalConnectors = loadJsonSafe(globalPath).connectors || {};
       const projectConnectors = loadJsonSafe(path.join(workDir, '.pipilot', 'connectors.json')).connectors || {};
@@ -241,6 +243,15 @@ module.exports = function register(ipcMain, ctx) {
         } else if (c.envVar) {
           envs[c.envVar] = c.token;
         }
+      }
+
+      // 2) UI-saved cloud tokens (Extensions panel → Connectors tab)
+      const uiTokens = loadJsonSafe(path.join(ctx.userDataPath, 'cloud-tokens.json'));
+      for (const [id, tokenData] of Object.entries(uiTokens)) {
+        const token = typeof tokenData === 'string' ? tokenData : (tokenData && tokenData.token);
+        if (!token) continue;
+        const mapper = CONNECTOR_ENV_MAP[id];
+        if (mapper) Object.assign(envs, mapper(token));
       }
     } catch {}
     return envs;
@@ -469,18 +480,36 @@ module.exports = function register(ipcMain, ctx) {
 
     const agentSystemPrompt = mode === 'plan' ? planPrompt : buildPrompt;
 
-    // ── Load user MCP servers from .pipilot/mcp.json ──
+    // ── Load user MCP servers from .pipilot/mcp.json + UI-configured servers ──
     let userMcpServers = {};
     let userMcpAllowedTools = [];
+    // 1) Project-level MCP config (.pipilot/mcp.json)
     try {
       const mcpFile = path.join(pipilotDir, 'mcp.json');
       if (fs.existsSync(mcpFile)) {
         const mcpConfig = JSON.parse(fs.readFileSync(mcpFile, 'utf8'));
         if (mcpConfig.servers && typeof mcpConfig.servers === 'object') {
-          userMcpServers = mcpConfig.servers;
+          userMcpServers = { ...mcpConfig.servers };
           for (const name of Object.keys(mcpConfig.servers)) {
             userMcpAllowedTools.push(`mcp__${name}__*`);
           }
+        }
+      }
+    } catch {}
+    // 2) UI-configured MCP servers (Extensions panel → MCP Servers tab)
+    try {
+      const uiMcpFile = path.join(ctx.userDataPath, 'mcp-servers.json');
+      if (fs.existsSync(uiMcpFile)) {
+        const uiServers = JSON.parse(fs.readFileSync(uiMcpFile, 'utf8'));
+        for (const srv of (Array.isArray(uiServers) ? uiServers : [])) {
+          if (!srv.enabled || !srv.name || !srv.command) continue;
+          const srvName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+          userMcpServers[srvName] = {
+            command: srv.command,
+            args: srv.args || [],
+            env: srv.env || {},
+          };
+          userMcpAllowedTools.push(`mcp__${srvName}__*`);
         }
       }
     } catch {}

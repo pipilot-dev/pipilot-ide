@@ -1121,6 +1121,14 @@
         { label: 'Next Problem', hint: 'Alt+F8', run: () => editor.execCommand('nextProblem') },
       ];
 
+      // Allow extensions to inject context menu items
+      const extItems = [];
+      bus.emit('editor:context-menu', { items: extItems, hasSelection: hasSel, selectedText: selText, filePath: getActivePath() });
+      if (extItems.length) {
+        items.push('sep');
+        extItems.forEach(function (ei) { items.push(ei); });
+      }
+
       items.forEach(item => {
         if (item === 'sep') {
           const s = document.createElement('div');

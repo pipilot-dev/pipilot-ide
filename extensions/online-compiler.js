@@ -286,38 +286,13 @@
     PiPilot.shortcuts.register('ctrl+alt+r', function () { executeCurrentFile(false); });
   }
 
-  // ── Context menu ──
-  var editorHost = document.getElementById('monaco-host');
-  if (editorHost) {
-    editorHost.addEventListener('contextmenu', function (e) {
-      var ace = PiPilot.editor && PiPilot.editor.getAce ? PiPilot.editor.getAce() : null;
-      var hasSelection = ace && ace.getSelectedText();
-      var items = [
-        { label: '▶ Compile & Run', onClick: function () { executeCurrentFile(false); } },
-      ];
-      if (hasSelection) {
-        items.push({ label: '▶ Run Selection', onClick: function () { executeCurrentFile(true); } });
-      }
-      items.push({ type: 'separator' });
-      items.push({
-        label: '⚙ Set API Key', onClick: async function () {
-          var key = await PiPilot.modal.prompt({
-            title: 'OneCompiler API Key',
-            label: 'Enter your API key (get one at allthingsdev.co)',
-            placeholder: 'Your API key...',
-          });
-          if (key && key.trim()) {
-            await saveApiKey(key.trim());
-            bus.emit('toast:show', { message: 'API key saved', type: 'ok' });
-          }
-        }
-      });
-      // Append to existing context menu items if possible
-      setTimeout(function () {
-        bus.emit('contextmenu:show', { x: e.clientX, y: e.clientY, items: items });
-      }, 10);
-    });
-  }
+  // ── Inject into editor's context menu via bus hook ──
+  bus.on('editor:context-menu', function (ctx) {
+    ctx.items.push({ label: '▶ Compile & Run', hint: 'Ctrl+Alt+R', run: function () { executeCurrentFile(false); } });
+    if (ctx.hasSelection) {
+      ctx.items.push({ label: '▶ Run Selection', run: function () { executeCurrentFile(true); } });
+    }
+  });
 
   // ── Track usage ──
   if (db) {
