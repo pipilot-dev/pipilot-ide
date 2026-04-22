@@ -557,8 +557,11 @@ async function runCode(params) {
     });
 
     let result = null;
+    let lastError = '';
     for (const key of ONECOMPILER_KEYS) {
       try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
         const resp = await fetch(ONECOMPILER_URL, {
           method: 'POST',
           headers: {
@@ -568,15 +571,20 @@ async function runCode(params) {
             'x-apihub-endpoint': ONECOMPILER_ENDPOINT,
           },
           body,
+          signal: controller.signal,
         });
+        clearTimeout(timeout);
         if (resp.ok) {
           result = await resp.json();
           break;
         }
-      } catch (e) { /* try next key */ }
+        lastError = 'HTTP ' + resp.status;
+      } catch (e) {
+        lastError = e.name === 'AbortError' ? 'Request timed out (30s)' : e.message;
+      }
     }
 
-    if (!result) return { error: 'All API keys failed. Check your ONECOMPILER_API_KEY.' };
+    if (!result) return { error: 'Code execution failed: ' + lastError };
     let output = '';
     if (result.stdout) output += result.stdout;
     if (result.stderr) output += (output ? '\n--- stderr ---\n' : '') + result.stderr;
