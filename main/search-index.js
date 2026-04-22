@@ -354,7 +354,7 @@ class CodeSearchIndex {
       let matchedTerms = 0;
       const dl = doc.length;
       for (const term of queryTerms) {
-        const tf = doc.termFreqs.get(term) || 0;
+        const tf = (doc.termFreqs instanceof Map ? doc.termFreqs.get(term) : doc.termFreqs[term]) || 0;
         if (tf === 0) continue;
         const idf = this.idfCache.get(term) || 0;
         if (idf <= 0) continue;
@@ -365,7 +365,8 @@ class CodeSearchIndex {
       }
       if (score <= 0) continue;
       const coverage = matchedTerms / queryTerms.length;
-      if (queryTerms.length >= 3 && coverage < 0.3) continue;
+      // On small corpora (<200 docs), accept any match; on large ones, require 20% coverage
+      if (this.totalDocs >= 200 && queryTerms.length >= 4 && coverage < 0.2) continue;
       score *= (0.5 + 0.5 * coverage);
       scored.push({ docId, score, matchedTerms });
     }
