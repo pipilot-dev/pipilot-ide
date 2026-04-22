@@ -10,6 +10,16 @@
       "icon": "#",
       "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/word-count.js",
       "categories": ["editor", "status-bar"]
+    },
+    {
+      "id": "custom-ai-chat",
+      "name": "Custom AI Chat",
+      "description": "Full chat panel with pluggable AI provider (OpenAI, Groq, Ollama, etc.) and file system tool calling — read, write, search, edit files.",
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "icon": "🤖",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/custom-ai-chat.js",
+      "categories": ["ai", "sidebar", "editor"]
     }
   ]
 }
