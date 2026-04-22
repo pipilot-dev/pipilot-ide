@@ -8,7 +8,7 @@
       "version": "1.0.0",
       "author": "PiPilot",
       "icon": "#",
-      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-ide/main/extensions/word-count.js",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/native-ai-ide/main/extensions/word-count.js",
       "categories": ["editor", "status-bar"]
     }
   ]
