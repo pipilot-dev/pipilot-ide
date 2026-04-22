@@ -120,64 +120,94 @@
   // ── Inject CSS ──
   var style = document.createElement('style');
   style.textContent = '\
-.oc-output-panel { background: var(--surface); border-top: 1px solid var(--border); font-family: var(--font-mono); font-size: 12px; max-height: 300px; overflow: auto; }\
 .oc-output-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface-alt); }\
-.oc-output-title { font-size: 10px; font-weight: 600; color: var(--text-mid); text-transform: uppercase; letter-spacing: 0.05em; }\
 .oc-output-lang { font-size: 9px; color: var(--accent); background: rgba(255,107,53,0.1); padding: 1px 6px; border-radius: 3px; }\
-.oc-output-time { font-size: 9px; color: var(--text-dim); margin-left: auto; }\
-.oc-output-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; padding: 0 4px; }\
-.oc-output-close:hover { color: var(--text); }\
-.oc-output-body { padding: 8px 10px; white-space: pre-wrap; color: var(--text); line-height: 1.5; }\
-.oc-output-body.error { color: var(--error); }\
-.oc-output-body.success { color: var(--ok); }\
-.oc-stdin-row { display: flex; gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--border); align-items: center; }\
-.oc-stdin-input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 3px 6px; color: var(--text); font-family: var(--font-mono); font-size: 11px; outline: none; }\
-.oc-stdin-input:focus { border-color: var(--accent); }\
+.oc-output-meta { font-size: 9px; color: var(--text-dim); }\
+.oc-output-clear { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 10px; margin-left: auto; font-family: var(--font-mono); }\
+.oc-output-clear:hover { color: var(--text); }\
+.oc-output-body { padding: 8px 10px; white-space: pre-wrap; color: var(--text); line-height: 1.5; font-family: var(--font-mono); font-size: 12px; overflow: auto; height: 100%; }\
+.oc-output-body .oc-error { color: var(--error); }\
+.oc-output-body .oc-success { color: var(--ok); }\
 ';
   document.head.appendChild(style);
 
-  // ── Output panel (reusable) ──
-  var outputPanel = null;
+  // ── Add "Output" tab + pane to bottom panel ──
+  var tabsBar = document.querySelector('.bottom-tabs');
+  var bottomContent = document.querySelector('.bottom-content');
+  var outputTab = null;
+  var outputPane = null;
+
+  if (tabsBar && bottomContent) {
+    // Add tab button before the spacer
+    var spacer = tabsBar.querySelector('.bottom-tabs-spacer');
+    outputTab = document.createElement('button');
+    outputTab.className = 'bottom-tab';
+    outputTab.dataset.bottom = 'output';
+    outputTab.textContent = 'Output';
+    tabsBar.insertBefore(outputTab, spacer);
+
+    // Add pane
+    outputPane = document.createElement('div');
+    outputPane.id = 'output-pane';
+    outputPane.className = 'bottom-pane';
+    outputPane.innerHTML = '<div class="empty-state" style="color:var(--text-dim);font-size:11px;">Run code to see output here (Ctrl+Alt+R)</div>';
+    bottomContent.appendChild(outputPane);
+
+    // Wire tab click (integrate with existing tab system)
+    outputTab.addEventListener('click', function () {
+      // Deactivate all tabs and panes
+      var allTabs = tabsBar.querySelectorAll('.bottom-tab');
+      var allPanes = bottomContent.querySelectorAll('.bottom-pane');
+      for (var i = 0; i < allTabs.length; i++) allTabs[i].classList.remove('active');
+      for (var i = 0; i < allPanes.length; i++) allPanes[i].classList.remove('active');
+      // Activate output
+      outputTab.classList.add('active');
+      outputPane.classList.add('active');
+      // Make sure bottom panel is visible
+      var mainArea = document.getElementById('main-area');
+      if (mainArea) mainArea.classList.remove('bottom-collapsed');
+    });
+  }
+
+  function switchToOutputTab() {
+    if (outputTab) outputTab.click();
+  }
 
   function showOutput(language, result, elapsed) {
-    if (outputPanel) outputPanel.remove();
+    if (!outputPane) return;
 
-    outputPanel = document.createElement('div');
-    outputPanel.className = 'oc-output-panel';
-
-    var hasError = result.stderr && result.stderr.trim();
+    var hasError = (result.stderr && result.stderr.trim()) || result.exception;
     var output = '';
     if (result.stdout) output += result.stdout;
     if (result.stderr) output += (output ? '\n' : '') + result.stderr;
     if (result.exception) output += (output ? '\n' : '') + result.exception;
     if (!output.trim()) output = '(no output)';
 
-    outputPanel.innerHTML = '\
+    var meta = '';
+    if (result.compilationTime) meta += 'compile: ' + result.compilationTime + 'ms  ';
+    if (result.executionTime) meta += 'exec: ' + result.executionTime + 'ms  ';
+    if (result.memoryUsed) meta += 'mem: ' + Math.round(result.memoryUsed / 1024) + 'KB';
+
+    outputPane.innerHTML = '\
       <div class="oc-output-header">\
-        <span class="oc-output-title">Output</span>\
         <span class="oc-output-lang">' + language + '</span>\
-        <span class="oc-output-time">' + elapsed + 'ms</span>\
-        <button class="oc-output-close" title="Close">&times;</button>\
+        <span class="oc-output-meta">' + (meta || elapsed + 'ms') + '</span>\
+        <button class="oc-output-clear">Clear</button>\
       </div>\
-      <div class="oc-output-body ' + (hasError ? 'error' : 'success') + '"></div>\
+      <div class="oc-output-body"></div>\
     ';
 
-    outputPanel.querySelector('.oc-output-body').textContent = output;
-    outputPanel.querySelector('.oc-output-close').addEventListener('click', function () {
-      outputPanel.remove();
-      outputPanel = null;
+    var bodyEl = outputPane.querySelector('.oc-output-body');
+    var span = document.createElement('span');
+    span.className = hasError ? 'oc-error' : 'oc-success';
+    span.textContent = output;
+    bodyEl.appendChild(span);
+
+    outputPane.querySelector('.oc-output-clear').addEventListener('click', function () {
+      outputPane.innerHTML = '<div class="empty-state" style="color:var(--text-dim);font-size:11px;">Run code to see output here (Ctrl+Alt+R)</div>';
     });
 
-    // Insert above the bottom panel or at the bottom of main area
-    var mainArea = document.getElementById('main-area');
-    var bottomPanel = mainArea && mainArea.querySelector('.bottom-panel');
-    if (bottomPanel) {
-      mainArea.insertBefore(outputPanel, bottomPanel);
-    } else if (mainArea) {
-      mainArea.appendChild(outputPanel);
-    } else {
-      document.body.appendChild(outputPanel);
-    }
+    switchToOutputTab();
   }
 
   // ── Main run function ──
