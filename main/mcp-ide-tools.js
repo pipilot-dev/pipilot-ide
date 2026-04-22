@@ -522,6 +522,69 @@ async function generateImage(params) {
 }
 
 // Export tool definitions for MCP registration
+// ── run_code (OneCompiler API) ──
+const ONECOMPILER_URL = 'https://OneCompiler-APIs.proxy-production.allthingsdev.co/api/v1/run';
+const ONECOMPILER_KEY = process.env.ONECOMPILER_API_KEY || '4e3cf87d-56c0-4dc2-88b4-c63c0a3ac6df';
+const ONECOMPILER_HOST = 'OneCompiler-APIs.allthingsdev.co';
+const ONECOMPILER_ENDPOINT = '4e3cf87d-56c0-4dc2-88b4-c63c0a3ac6df';
+
+const LANG_FILE_NAMES = {
+  python: 'main.py', javascript: 'main.js', typescript: 'main.ts', java: 'Main.java',
+  c: 'main.c', cpp: 'main.cpp', csharp: 'Main.cs', go: 'main.go', rust: 'main.rs',
+  ruby: 'main.rb', php: 'main.php', kotlin: 'Main.kt', swift: 'main.swift',
+  dart: 'main.dart', haskell: 'Main.hs', scala: 'Main.scala', r: 'main.r',
+  lua: 'main.lua', perl: 'main.pl', bash: 'main.sh', groovy: 'main.groovy',
+  elixir: 'main.exs', erlang: 'main.erl', clojure: 'main.clj', nim: 'main.nim',
+  zig: 'main.zig', julia: 'main.jl', crystal: 'main.cr', ocaml: 'main.ml',
+  fortran: 'main.f90', cobol: 'main.cob', pascal: 'main.pas', prolog: 'main.pl',
+};
+
+async function runCode(params) {
+  const { language, code, stdin, fileName } = params;
+  if (!language || !code) return { error: 'language and code are required' };
+
+  const fname = fileName || LANG_FILE_NAMES[language.toLowerCase()] || 'main';
+
+  try {
+    const resp = await fetch(ONECOMPILER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-apihub-key': ONECOMPILER_KEY,
+        'x-apihub-host': ONECOMPILER_HOST,
+        'x-apihub-endpoint': ONECOMPILER_ENDPOINT,
+      },
+      body: JSON.stringify({
+        language: language.toLowerCase(),
+        stdin: stdin || '',
+        files: [{ name: fname, content: code }],
+      }),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      return { error: `OneCompiler API ${resp.status}: ${errText.slice(0, 300)}` };
+    }
+
+    const result = await resp.json();
+    let output = '';
+    if (result.stdout) output += result.stdout;
+    if (result.stderr) output += (output ? '\n--- stderr ---\n' : '') + result.stderr;
+    if (result.exception) output += (output ? '\n--- exception ---\n' : '') + result.exception;
+    if (!output.trim()) output = '(no output)';
+
+    return {
+      status: result.status || (result.exception ? 'error' : 'success'),
+      output: output,
+      compilationTime: result.compilationTime ? result.compilationTime + 'ms' : null,
+      executionTime: result.executionTime ? result.executionTime + 'ms' : null,
+      memoryUsed: result.memoryUsed ? Math.round(result.memoryUsed / 1024) + 'KB' : null,
+    };
+  } catch (err) {
+    return { error: 'run_code failed: ' + err.message };
+  }
+}
+
 function getToolDefinitions() {
   return [
     {
@@ -609,6 +672,21 @@ function getToolDefinitions() {
       },
       handler: generateImage,
     },
+    {
+      name: 'run_code',
+      description: 'Compile and run code in 60+ programming languages online using OneCompiler API. Use this to test code snippets, verify logic, run scripts in any language (Python, Java, C, C++, Go, Rust, JavaScript, TypeScript, Ruby, PHP, Haskell, Kotlin, Swift, Dart, and many more). Returns stdout, stderr, compilation time, execution time, and memory used.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          language: { type: 'string', description: 'Programming language ID (e.g. "python", "javascript", "java", "c", "cpp", "go", "rust", "typescript", "ruby", "php", "kotlin", "swift", "dart", "haskell", "scala", "r", "lua", "perl", "bash", "csharp", "assembly", "groovy", "prolog", "elixir", "erlang", "fortran", "cobol", "ocaml", "clojure", "nim", "zig", "julia", "crystal", "deno", "bun")' },
+          code: { type: 'string', description: 'Source code to compile and run' },
+          stdin: { type: 'string', description: 'Standard input to pass to the program (optional)' },
+          fileName: { type: 'string', description: 'File name (optional, auto-generated based on language)' },
+        },
+        required: ['language', 'code'],
+      },
+      handler: runCode,
+    },
   ];
 }
 
@@ -635,4 +713,4 @@ function handleFileChange(projectPath, evt) {
   }
 }
 
-module.exports = { setWorkDir, getToolDefinitions, getDiagnostics, getProjectContext, updateProjectContext, frontendDesignGuide, searchCodebase, screenshotPreview, generateImage, getSearchIndex, handleFileChange };
+module.exports = { setWorkDir, getToolDefinitions, getDiagnostics, getProjectContext, updateProjectContext, frontendDesignGuide, searchCodebase, screenshotPreview, generateImage, runCode, getSearchIndex, handleFileChange };
