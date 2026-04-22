@@ -151,7 +151,7 @@
     editor = monaco.editor.create(hostEl, {
       theme: 'midnight',
       automaticLayout: true,
-      fontFamily: '"Geist Mono", "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, monospace',
+      fontFamily: '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace',
       fontSize: state.settings.fontSize || 13,
       fontLigatures: true,
       lineHeight: 1.55,
@@ -686,7 +686,7 @@
               minimap: { enabled: false },
               scrollBeyondLastLine: false,
               fontSize: 13,
-              fontFamily: 'Geist Mono, monospace',
+              fontFamily: 'JetBrains Mono, Cascadia Code, monospace',
             });
             diffEditor.setModel({ original: originalModel, modified: modifiedModel });
           } catch (e) { console.error('diff editor', e); }

@@ -25,9 +25,9 @@
   --ok: #56d364;
   --info: #6cb6ff;
 
-  /* Fonts */
-  --font-sans: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "Geist Mono", "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, monospace;
+  /* Fonts — Plus Jakarta Sans (UI) + JetBrains Mono (code/terminal) */
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
 
   /* Sizes */
   --fs-xs: 11px;

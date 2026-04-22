@@ -227,7 +227,7 @@
 
     aceEditor = ace.edit(hostEl, {
       theme: 'ace/theme/midnight',
-      fontFamily: '"Geist Mono", "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, monospace',
+      fontFamily: '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace',
       fontSize: state.settings?.fontSize || 13,
       showPrintMargin: false,
       highlightActiveLine: true,
@@ -1084,7 +1084,7 @@
           showPrintMargin: false,
           highlightActiveLine: false,
           fontSize: 13,
-          fontFamily: '"Geist Mono", "Cascadia Code", "JetBrains Mono", monospace',
+          fontFamily: '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace',
           showGutter: true,
           scrollPastEnd: 0,
           useWrapMode: false,

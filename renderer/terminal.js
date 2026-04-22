@@ -274,7 +274,7 @@
     stackEl.appendChild(div);
 
     const term = new Terminal({
-      fontFamily: 'Geist Mono, monospace',
+      fontFamily: 'JetBrains Mono, Cascadia Code, monospace',
       fontSize: 13,
       theme: THEME,
       cursorBlink: true,

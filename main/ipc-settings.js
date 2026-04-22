@@ -6,7 +6,7 @@ const path = require('path');
 const DEFAULTS = {
   theme: 'midnight',
   fontSize: 13,
-  fontFamily: 'Geist Mono',
+  fontFamily: 'JetBrains Mono',
   cursorStyle: 'line',
   tabSize: 2,
   wordWrap: 'off',
