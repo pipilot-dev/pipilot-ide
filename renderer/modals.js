@@ -507,11 +507,29 @@
   bus.on('modal:add-mcp', () => {
     const body = document.createElement('div');
     body.innerHTML = `
+      <div class="modal-form-row">
+        <label>Type</label>
+        <select id="mcp-type" style="width:100%;padding:6px 8px;background:var(--surface-alt);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;">
+          <option value="stdio">Stdio (command-line)</option>
+          <option value="http">HTTP (remote URL)</option>
+        </select>
+      </div>
       <div class="modal-form-row"><label>Name</label><input type="text" id="mcp-name" placeholder="my-mcp-server" /></div>
-      <div class="modal-form-row"><label>Command</label><input type="text" id="mcp-cmd" placeholder="node" /></div>
-      <div class="modal-form-row"><label>Args (one per line)</label><textarea id="mcp-args" rows="3" placeholder="./server.js"></textarea></div>
-      <div class="modal-form-row"><label>Env (KEY=VALUE per line)</label><textarea id="mcp-env" rows="3" placeholder="API_KEY=abc"></textarea></div>
+      <div id="mcp-stdio-fields">
+        <div class="modal-form-row"><label>Command</label><input type="text" id="mcp-cmd" placeholder="npx" /></div>
+        <div class="modal-form-row"><label>Args (one per line)</label><textarea id="mcp-args" rows="3" placeholder="-y\n@modelcontextprotocol/server-name"></textarea></div>
+        <div class="modal-form-row"><label>Env (KEY=VALUE per line)</label><textarea id="mcp-env" rows="2" placeholder="API_KEY=abc"></textarea></div>
+      </div>
+      <div id="mcp-http-fields" style="display:none;">
+        <div class="modal-form-row"><label>URL</label><input type="text" id="mcp-url" placeholder="https://mcp.example.com/mcp" /></div>
+      </div>
     `;
+    // Toggle fields based on type
+    const typeSelect = body.querySelector('#mcp-type');
+    typeSelect.addEventListener('change', () => {
+      body.querySelector('#mcp-stdio-fields').style.display = typeSelect.value === 'stdio' ? '' : 'none';
+      body.querySelector('#mcp-http-fields').style.display = typeSelect.value === 'http' ? '' : 'none';
+    });
     const footer = document.createElement('div');
     const cancel = document.createElement('button');
     cancel.className = 'btn btn-secondary btn-small';
@@ -524,19 +542,26 @@
     const handle = show(body, { title: 'Add MCP Server', footer, width: 480 });
     cancel.addEventListener('click', () => handle.close());
     save.addEventListener('click', async () => {
+      const mcpType = body.querySelector('#mcp-type').value;
       const name = body.querySelector('#mcp-name').value.trim();
-      const command = body.querySelector('#mcp-cmd').value.trim();
-      const args = body.querySelector('#mcp-args').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const envLines = body.querySelector('#mcp-env').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const env = {};
-      envLines.forEach(line => {
-        const eq = line.indexOf('=');
-        if (eq > 0) env[line.slice(0, eq)] = line.slice(eq + 1);
-      });
-      if (!name || !command) { bus.emit('toast:show', { message: 'Name and command required', type: 'warn' }); return; }
-      const result = await api.mcp.addServer({ name, command, args, env, enabled: true });
+      if (!name) { bus.emit('toast:show', { message: 'Name is required', type: 'warn' }); return; }
+      let serverData;
+      if (mcpType === 'http') {
+        const url = body.querySelector('#mcp-url').value.trim();
+        if (!url) { bus.emit('toast:show', { message: 'URL is required', type: 'warn' }); return; }
+        serverData = { name, type: 'http', url, enabled: true };
+      } else {
+        const command = body.querySelector('#mcp-cmd').value.trim();
+        if (!command) { bus.emit('toast:show', { message: 'Command is required', type: 'warn' }); return; }
+        const args = body.querySelector('#mcp-args').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        const envLines = body.querySelector('#mcp-env').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        const env = {};
+        envLines.forEach(line => { const eq = line.indexOf('='); if (eq > 0) env[line.slice(0, eq)] = line.slice(eq + 1); });
+        serverData = { name, command, args, env, enabled: true };
+      }
+      await api.mcp.addServer(serverData);
       handle.close();
-      bus.emit('toast:show', { message: 'MCP server added', type: 'success' });
+      bus.emit('toast:show', { message: 'MCP server added', type: 'ok' });
       bus.emit('panels:refresh', 'extensions');
     });
   });

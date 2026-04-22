@@ -196,12 +196,17 @@ module.exports = function register(ipcMain, ctx) {
       const record = {
         id: server.id || newId(),
         name: server.name,
-        command: server.command || '',
-        args: Array.isArray(server.args) ? server.args : [],
-        env: server.env && typeof server.env === 'object' ? server.env : {},
+        type: server.type === 'http' ? 'http' : 'stdio',
         enabled: server.enabled !== false,
         createdAt: Date.now(),
       };
+      if (record.type === 'http') {
+        record.url = server.url || '';
+      } else {
+        record.command = server.command || '';
+        record.args = Array.isArray(server.args) ? server.args : [];
+        record.env = server.env && typeof server.env === 'object' ? server.env : {};
+      }
       data.servers = data.servers || [];
       data.servers.push(record);
       await writeMcpServers(data);

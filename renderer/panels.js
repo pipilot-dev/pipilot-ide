@@ -1176,11 +1176,17 @@
           sec.appendChild(el('div', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, 'No MCP servers configured'));
         }
         servers.forEach(s => {
+          const isHttp = s.type === 'http';
+          const desc = isHttp ? s.url : `${s.command || ''} ${(s.args || []).join(' ')}`;
+          const badge = isHttp ? 'HTTP' : 'STDIO';
           const card = el('div', { class: 'connector-card' },
             el('div', { class: 'icon' }, '🧩'),
             el('div', { class: 'info' },
-              el('div', { class: 'name' }, s.name),
-              el('div', { class: 'desc', style: { fontFamily: 'var(--font-mono)', fontSize: '10px' } }, `${s.command || ''} ${(s.args || []).join(' ')}`)
+              el('div', { class: 'name', style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                s.name,
+                el('span', { style: { fontSize: '8px', padding: '1px 4px', borderRadius: '2px', background: isHttp ? 'rgba(108,182,255,0.15)' : 'rgba(86,211,100,0.15)', color: isHttp ? 'var(--info)' : 'var(--ok)', fontFamily: 'var(--font-mono)', fontWeight: '600' } }, badge)
+              ),
+              el('div', { class: 'desc', style: { fontFamily: 'var(--font-mono)', fontSize: '10px' } }, desc)
             ),
             el('div', { class: 'toggle' + (s.enabled ? ' on' : ''), onClick: async () => { await api.mcp.toggleServer(s.id, !s.enabled); render(); } })
           );
