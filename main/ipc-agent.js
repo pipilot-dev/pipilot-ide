@@ -514,6 +514,7 @@ module.exports = function register(ipcMain, ctx) {
           allowDangerouslySkipPermissions: mode !== 'plan',
           includePartialMessages: true,
           abortController: abortCtrl,
+          maxToolExecutionTime: 120000, // 2 min timeout for tools (run_code, screenshot, etc.)
           // MCP servers (matching Vite setup)
           mcpServers: {
             // PiPilot IDE tools — diagnostics, project context, design guide, search, screenshot
