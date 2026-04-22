@@ -6,7 +6,9 @@
 (function (PiPilot, bus, api, state, db) {
 
   var DEFAULT_API_KEY = 'Mkv8n2ggXBuRSIyBCeqGPS43F55PHHrXax3qRrIGIKl4EoBLtW';
-  var API_URL = 'https://onecompiler-apis.p.allthingsdev.co/api/v1/run';
+  var API_URL = 'https://OneCompiler-APIs.proxy-production.allthingsdev.co/api/v1/run';
+  var API_HOST = 'OneCompiler-APIs.allthingsdev.co';
+  var API_ENDPOINT = '4e3cf87d-56c0-4dc2-88b4-c63c0a3ac6df';
 
   // Language map: file extension → OneCompiler language ID
   var LANG_MAP = {
@@ -94,7 +96,9 @@
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-atd-key': apiKey,
+        'x-apihub-key': apiKey,
+        'x-apihub-host': API_HOST,
+        'x-apihub-endpoint': API_ENDPOINT,
       },
       body: JSON.stringify(body),
     });
