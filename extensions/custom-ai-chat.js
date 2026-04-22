@@ -10,7 +10,7 @@
 //
 // Configuration: set your provider in the CONFIG object below.
 
-(function (PiPilot, bus, api, state) {
+(function (PiPilot, bus, api, state, db) {
 
   // ═══════════════════════════════════════════════════════════
   // CONFIGURATION — change these to use your preferred provider
@@ -199,11 +199,33 @@
   var messages = [];
   var isStreaming = false;
 
+  // Load chat history from SQLite
+  if (db) {
+    db.get('messages').then(function (saved) {
+      if (Array.isArray(saved)) messages = saved;
+    });
+  }
+
+  function saveMessages() {
+    if (db) db.set('messages', messages).catch(function () {});
+  }
+
+  var cachedApiKey = CONFIG.apiKey || '';
+
+  // Load API key from SQLite on init
+  if (db) {
+    db.get('apiKey').then(function (key) {
+      if (key && !cachedApiKey) cachedApiKey = key;
+    });
+  }
+
   function getApiKey() {
-    if (CONFIG.apiKey) return CONFIG.apiKey;
-    var stored = localStorage.getItem('ext:custom-ai-chat:apiKey');
-    if (stored) return stored;
-    return null;
+    return cachedApiKey || null;
+  }
+
+  async function saveApiKey(key) {
+    cachedApiKey = key;
+    if (db) await db.set('apiKey', key);
   }
 
   async function promptApiKey() {
@@ -212,9 +234,9 @@
       label: 'Enter your API key for ' + CONFIG.baseUrl,
       placeholder: 'sk-...',
     });
-    if (key) {
-      localStorage.setItem('ext:custom-ai-chat:apiKey', key);
-      return key;
+    if (key && key.trim()) {
+      await saveApiKey(key.trim());
+      return key.trim();
     }
     return null;
   }
@@ -327,6 +349,7 @@
       if (fullContent) {
         messages.push({ role: 'assistant', content: fullContent });
       }
+      saveMessages();
       onDone(null);
 
     } catch (err) {
@@ -506,6 +529,7 @@
       }
 
       messages.push({ role: 'user', content: text });
+      saveMessages();
       input.value = '';
       input.style.height = 'auto';
       renderMessages();
@@ -551,6 +575,7 @@
     var clearBtn = wrap.querySelector('#ext-chat-clear');
     if (clearBtn) clearBtn.addEventListener('click', function () {
       messages = [];
+      saveMessages();
       renderMessages();
     });
 
@@ -582,4 +607,4 @@
 
   console.log('[ext:custom-ai-chat] ' + CONFIG.name + ' extension loaded (' + CONFIG.model + ')');
 
-})(PiPilot, bus, api, state);
+})(PiPilot, bus, api, state, db);
