@@ -212,15 +212,13 @@
 
   var cachedApiKey = CONFIG.apiKey || '';
 
-  // Load API key from SQLite on init
-  if (db) {
-    db.get('apiKey').then(function (key) {
-      if (key && !cachedApiKey) cachedApiKey = key;
-    });
-  }
-
-  function getApiKey() {
-    return cachedApiKey || null;
+  async function getApiKey() {
+    if (cachedApiKey) return cachedApiKey;
+    if (db) {
+      var stored = await db.get('apiKey');
+      if (stored) { cachedApiKey = stored; return stored; }
+    }
+    return null;
   }
 
   async function saveApiKey(key) {
@@ -242,7 +240,7 @@
   }
 
   async function sendToApi(onChunk, onToolCall, onDone) {
-    var apiKey = getApiKey();
+    var apiKey = await getApiKey();
     if (!apiKey) {
       apiKey = await promptApiKey();
       if (!apiKey) { onDone('No API key provided'); return; }
