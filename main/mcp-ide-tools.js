@@ -544,6 +544,7 @@ const LANG_FILE_NAMES = {
 };
 
 async function runCode(params) {
+  console.log('[run_code] called:', params.language, 'code length:', (params.code || '').length);
   const { language, code, stdin, fileName } = params;
   if (!language || !code) return { error: 'language and code are required' };
 
@@ -584,7 +585,11 @@ async function runCode(params) {
       }
     }
 
-    if (!result) return { error: 'Code execution failed: ' + lastError };
+    if (!result) {
+      console.log('[run_code] all keys failed:', lastError);
+      return { error: 'Code execution failed: ' + lastError };
+    }
+    console.log('[run_code] success:', result.status, 'stdout length:', (result.stdout || '').length);
     let output = '';
     if (result.stdout) output += result.stdout;
     if (result.stderr) output += (output ? '\n--- stderr ---\n' : '') + result.stderr;
