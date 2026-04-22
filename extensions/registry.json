@@ -10,26 +10,6 @@
       "icon": "#",
       "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-ide/main/extensions/word-count.js",
       "categories": ["editor", "status-bar"]
-    },
-    {
-      "id": "color-picker",
-      "name": "Color Picker",
-      "description": "Detects CSS/hex color values in the editor and shows a color preview swatch. Click to open a color picker.",
-      "version": "1.0.0",
-      "author": "PiPilot",
-      "icon": "🎨",
-      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-ide/main/extensions/color-picker.js",
-      "categories": ["editor", "css"]
-    },
-    {
-      "id": "todo-highlighter",
-      "name": "TODO Highlighter",
-      "description": "Scans the project for TODO, FIXME, HACK comments and lists them in a sidebar panel with click-to-navigate.",
-      "version": "1.0.0",
-      "author": "PiPilot",
-      "icon": "📋",
-      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-ide/main/extensions/todo-highlighter.js",
-      "categories": ["productivity", "sidebar"]
     }
   ]
 }

@@ -1220,7 +1220,11 @@
 
     // ── Extensions tab: browse registry + manage installed ──
     async function renderExtensionsTab(container) {
-      const sec = el('div', { class: 'p-section' });
+      // Remove previous extensions section if re-rendering
+      const oldSec = container.querySelector('.ext-section');
+      if (oldSec) oldSec.remove();
+
+      const sec = el('div', { class: 'p-section ext-section' });
 
       // Fetch registry and installed in parallel
       const [registryResp, installedResp] = await Promise.all([

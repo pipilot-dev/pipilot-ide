@@ -7,7 +7,7 @@ const fsp = require('fs').promises;
 const path = require('path');
 
 // GitHub raw URL for the extension registry
-const REGISTRY_URL = 'https://raw.githubusercontent.com/pipilot-dev/pipilot-ide/main/extensions/registry.json';
+const REGISTRY_URL = 'https://raw.githubusercontent.com/pipilot-dev/native-ai-ide/main/extensions/registry.json';
 const EXTENSIONS_DIR_NAME = 'extensions';
 
 module.exports = function register(ipcMain, ctx) {
