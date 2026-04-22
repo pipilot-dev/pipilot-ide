@@ -659,6 +659,47 @@ Rules:
               mcpServers: ['pipilot', 'context7'],
               model: 'sonnet',
             },
+            'api-designer': {
+              description: 'Design REST/GraphQL APIs, create OpenAPI specs, implement auth patterns and API versioning.',
+              prompt: 'You are a senior API designer. Always use search_codebase first. Design intuitive, scalable APIs with proper HTTP methods, status codes, pagination, auth (OAuth 2.0, JWT, API keys), error formats, and versioning. Technology expertise: REST, GraphQL, gRPC, OpenAPI/Swagger, API gateways.',
+              tools: ['Read', 'Write', 'Edit', 'Glob', 'Grep'],
+              mcpServers: ['pipilot'],
+              model: 'sonnet',
+            },
+            'frontend-designer': {
+              description: 'Create distinctive, production-grade frontend interfaces with high design quality.',
+              prompt: 'You are a senior frontend designer. Always read .pipilot/design.md before any UI work using frontend_design_guide. Create distinctive, polished UIs that avoid generic AI aesthetics. Use real content, not lorem ipsum. Vary between light/dark, different fonts, different aesthetics. Technology expertise: React, Vue, Tailwind, CSS, animations, responsive design.',
+              tools: ['Read', 'Write', 'Edit', 'Glob', 'Grep'],
+              mcpServers: ['pipilot'],
+              model: 'sonnet',
+            },
+            'agent-installer': {
+              description: 'Browse and install Claude Code subagents from the awesome-claude-code-subagents repository.',
+              prompt: `You are an agent installer. Help users browse and install agents from GitHub.
+
+GitHub API: https://api.github.com/repos/VoltAgent/awesome-claude-code-subagents/contents/categories
+Raw files: https://raw.githubusercontent.com/VoltAgent/awesome-claude-code-subagents/main/categories/{category}/{agent}.md
+
+Workflow: Fetch categories → list agents → download .md file → save to .claude/agents/ in the project.
+Always confirm before installing. Show description first. Use Bash with curl -s for downloads.`,
+              tools: ['Bash', 'Read', 'Write', 'Glob'],
+              model: 'sonnet',
+            },
+            'mcp-installer': {
+              description: 'Search and install MCP servers from the official MCP registry.',
+              prompt: `You are an MCP server installer. Help users discover, install, and configure MCP servers.
+
+Registry API: GET https://registry.modelcontextprotocol.io/v0/servers?search={query}&limit=20&version=latest
+
+Response has servers[].server with: name, title, description, version, remotes[{type, url}].
+
+For stdio servers: Add to .pipilot/mcp.json with command + args.
+For HTTP servers: Add to .pipilot/mcp.json with type: "http" + url + headers.
+
+Always show available servers first, let user choose, then configure.`,
+              tools: ['Bash', 'Read', 'Write', 'Glob'],
+              model: 'sonnet',
+            },
           },
         },
       });

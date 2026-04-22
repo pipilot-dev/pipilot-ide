@@ -1157,8 +1157,8 @@
       container.appendChild(header);
 
       const tabs = el('div', { class: 'p-tabs' });
-      ['extensions', 'mcp', 'cloud'].forEach(t => {
-        const label = t === 'extensions' ? 'Extensions' : t === 'mcp' ? 'MCP Servers' : 'Connectors';
+      ['extensions', 'agents', 'mcp', 'cloud'].forEach(t => {
+        const label = t === 'extensions' ? 'Extensions' : t === 'agents' ? 'Agents' : t === 'mcp' ? 'MCP Servers' : 'Connectors';
         const b = el('button', { class: 'p-tab' + (activeTab === t ? ' active' : ''), onClick: () => { activeTab = t; render(); } }, label);
         tabs.appendChild(b);
       });
@@ -1166,6 +1166,38 @@
 
       if (activeTab === 'extensions') {
         await renderExtensionsTab(container);
+      } else if (activeTab === 'agents') {
+        const AGENTS = [
+          { id: 'fullstack-developer', name: 'Fullstack Developer', desc: 'End-to-end feature development — DB, API, frontend', icon: '🏗️', builtin: true },
+          { id: 'ai-engineer', name: 'AI Engineer', desc: 'AI/ML integration — LLM apps, RAG, prompt engineering', icon: '🤖', builtin: true },
+          { id: 'api-designer', name: 'API Designer', desc: 'REST/GraphQL API design, OpenAPI specs, auth patterns', icon: '🔌', builtin: true },
+          { id: 'security-engineer', name: 'Security Engineer', desc: 'Vulnerability assessment, OWASP, DevSecOps', icon: '🛡️', builtin: true },
+          { id: 'frontend-designer', name: 'Frontend Designer', desc: 'Distinctive UI design with design system persistence', icon: '🎨', builtin: true },
+          { id: 'wiki-generator', name: 'Wiki Generator', desc: 'Scan codebase and generate documentation', icon: '📖', builtin: true },
+          { id: 'agent-installer', name: 'Agent Installer', desc: 'Browse and install agents from VoltAgent repository', icon: '📥', builtin: true },
+          { id: 'mcp-installer', name: 'MCP Installer', desc: 'Search and install MCP servers from official registry', icon: '🧩', builtin: true },
+        ];
+        const sec = el('div', { class: 'p-section' });
+        sec.appendChild(el('h4', null, 'Sub-Agents'));
+        sec.appendChild(el('div', { style: { color: 'var(--text-dim)', fontSize: '10px', marginBottom: '8px' } }, 'The AI can delegate tasks to these specialized agents'));
+        AGENTS.forEach(a => {
+          var card = el('div', { class: 'connector-card' },
+            el('div', { class: 'icon', style: { fontSize: '18px' } }, a.icon),
+            el('div', { class: 'info' },
+              el('div', { class: 'name', style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                a.name,
+                a.builtin ? el('span', { style: { fontSize: '8px', padding: '1px 4px', borderRadius: '2px', background: 'rgba(86,211,100,0.1)', color: 'var(--ok)', fontFamily: 'var(--font-mono)', fontWeight: '600' } }, 'BUILT-IN') : null
+              ),
+              el('div', { class: 'desc' }, a.desc)
+            )
+          );
+          // Add "Use" button that sends the agent name to chat
+          card.appendChild(el('button', { class: 'btn btn-secondary btn-small', style: { fontSize: '9px', flexShrink: '0' }, onClick: () => {
+            bus.emit('chat:focus-with-prompt', 'Use the ' + a.id + ' sub-agent to ');
+          } }, 'Use'));
+          sec.appendChild(card);
+        });
+        container.appendChild(sec);
       } else if (activeTab === 'mcp') {
         // Built-in MCP servers
         const builtinSec = el('div', { class: 'p-section' });
