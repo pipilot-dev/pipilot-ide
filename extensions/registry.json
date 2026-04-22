@@ -403,6 +403,20 @@
       "version": "1.0.0",
       "author": "PiPilot",
       "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/code-runner.js"
+    },
+    {
+      "id": "online-compiler",
+      "name": "Online Compiler",
+      "description": "Compile & run 60+ languages online via OneCompiler API. Free 50 runs, then bring your own key.",
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "icon": "⚡",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/online-compiler.js",
+      "categories": [
+        "editor",
+        "terminal",
+        "productivity"
+      ]
     }
   ]
 }
