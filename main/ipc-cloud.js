@@ -207,6 +207,9 @@ module.exports = function register(ipcMain, ctx) {
       };
       if (record.type === 'http') {
         record.url = server.url || '';
+        if (server.headers && typeof server.headers === 'object' && Object.keys(server.headers).length) {
+          record.headers = server.headers;
+        }
       } else {
         record.command = server.command || '';
         record.args = Array.isArray(server.args) ? server.args : [];

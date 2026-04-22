@@ -522,6 +522,7 @@
       </div>
       <div id="mcp-http-fields" style="display:none;">
         <div class="modal-form-row"><label>URL</label><input type="text" id="mcp-url" placeholder="https://mcp.example.com/mcp" /></div>
+        <div class="modal-form-row"><label>Headers (KEY=VALUE per line)</label><textarea id="mcp-headers" rows="2" placeholder="Authorization=Bearer sk-...\nx-api-key=abc123"></textarea></div>
       </div>
     `;
     // Toggle fields based on type
@@ -549,7 +550,10 @@
       if (mcpType === 'http') {
         const url = body.querySelector('#mcp-url').value.trim();
         if (!url) { bus.emit('toast:show', { message: 'URL is required', type: 'warn' }); return; }
-        serverData = { name, type: 'http', url, enabled: true };
+        const headerLines = body.querySelector('#mcp-headers').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        const headers = {};
+        headerLines.forEach(line => { const eq = line.indexOf('='); if (eq > 0) headers[line.slice(0, eq).trim()] = line.slice(eq + 1).trim(); });
+        serverData = { name, type: 'http', url, headers: Object.keys(headers).length ? headers : undefined, enabled: true };
       } else {
         const command = body.querySelector('#mcp-cmd').value.trim();
         if (!command) { bus.emit('toast:show', { message: 'Command is required', type: 'warn' }); return; }

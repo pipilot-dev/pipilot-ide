@@ -505,8 +505,12 @@ module.exports = function register(ipcMain, ctx) {
           if (!srv.enabled || !srv.name) continue;
           const srvName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_');
           if (srv.type === 'http' && srv.url) {
-            // HTTP MCP server (remote)
-            userMcpServers[srvName] = { type: 'http', url: srv.url };
+            // HTTP MCP server (remote) — with optional auth headers
+            var httpConfig = { type: 'http', url: srv.url };
+            if (srv.headers && typeof srv.headers === 'object' && Object.keys(srv.headers).length) {
+              httpConfig.headers = srv.headers;
+            }
+            userMcpServers[srvName] = httpConfig;
           } else if (srv.command) {
             // Stdio MCP server (local command)
             userMcpServers[srvName] = {
