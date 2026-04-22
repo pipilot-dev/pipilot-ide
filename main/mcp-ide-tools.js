@@ -524,7 +524,11 @@ async function generateImage(params) {
 // Export tool definitions for MCP registration
 // ── run_code (OneCompiler API) ──
 const ONECOMPILER_URL = 'https://OneCompiler-APIs.proxy-production.allthingsdev.co/api/v1/run';
-const ONECOMPILER_KEY = process.env.ONECOMPILER_API_KEY || '4e3cf87d-56c0-4dc2-88b4-c63c0a3ac6df';
+const ONECOMPILER_KEYS = [
+  process.env.ONECOMPILER_API_KEY,
+  'Mkv8n2ggXBuRSIyBCeqGPS43F55PHHrXax3qRrIGIKl4EoBLtW',
+  '4e3cf87d-56c0-4dc2-88b4-c63c0a3ac6df',
+].filter(Boolean);
 const ONECOMPILER_HOST = 'OneCompiler-APIs.allthingsdev.co';
 const ONECOMPILER_ENDPOINT = '4e3cf87d-56c0-4dc2-88b4-c63c0a3ac6df';
 
@@ -546,27 +550,33 @@ async function runCode(params) {
   const fname = fileName || LANG_FILE_NAMES[language.toLowerCase()] || 'main';
 
   try {
-    const resp = await fetch(ONECOMPILER_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-apihub-key': ONECOMPILER_KEY,
-        'x-apihub-host': ONECOMPILER_HOST,
-        'x-apihub-endpoint': ONECOMPILER_ENDPOINT,
-      },
-      body: JSON.stringify({
-        language: language.toLowerCase(),
-        stdin: stdin || '',
-        files: [{ name: fname, content: code }],
-      }),
+    const body = JSON.stringify({
+      language: language.toLowerCase(),
+      stdin: stdin || '',
+      files: [{ name: fname, content: code }],
     });
 
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => '');
-      return { error: `OneCompiler API ${resp.status}: ${errText.slice(0, 300)}` };
+    let result = null;
+    for (const key of ONECOMPILER_KEYS) {
+      try {
+        const resp = await fetch(ONECOMPILER_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-apihub-key': key,
+            'x-apihub-host': ONECOMPILER_HOST,
+            'x-apihub-endpoint': ONECOMPILER_ENDPOINT,
+          },
+          body,
+        });
+        if (resp.ok) {
+          result = await resp.json();
+          break;
+        }
+      } catch (e) { /* try next key */ }
     }
 
-    const result = await resp.json();
+    if (!result) return { error: 'All API keys failed. Check your ONECOMPILER_API_KEY.' };
     let output = '';
     if (result.stdout) output += result.stdout;
     if (result.stderr) output += (output ? '\n--- stderr ---\n' : '') + result.stderr;
