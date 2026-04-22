@@ -146,6 +146,14 @@
   color: var(--text-dim);
   opacity: 0.75;
 }
+.problems-refresh {
+  height: 26px; width: 26px; border-radius: 7px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-mid); font-size: 14px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: color 0.15s;
+}
+.problems-refresh:hover { color: var(--accent); border-color: var(--accent-line, rgba(255,107,53,0.3)); }
 
 .problems-banner {
   margin: 10px 12px 0;

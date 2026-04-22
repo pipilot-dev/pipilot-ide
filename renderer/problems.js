@@ -84,9 +84,10 @@
       </div>
       <div class="problems-controls">
         <input class="problems-search" type="text" placeholder="Search problems" value="${escapeHtml(state.query)}" />
-        <button class="problems-toggle" data-sev="error" aria-pressed="${state.show.error}">${state.show.error ? 'Errors' : 'Errors'}</button>
-        <button class="problems-toggle" data-sev="warning" aria-pressed="${state.show.warning}">${state.show.warning ? 'Warnings' : 'Warnings'}</button>
-        <button class="problems-toggle" data-sev="info" aria-pressed="${state.show.info}">${state.show.info ? 'Info' : 'Info'}</button>
+        <button class="problems-toggle" data-sev="error" aria-pressed="${state.show.error}">Errors</button>
+        <button class="problems-toggle" data-sev="warning" aria-pressed="${state.show.warning}">Warnings</button>
+        <button class="problems-toggle" data-sev="info" aria-pressed="${state.show.info}">Info</button>
+        <button class="problems-refresh" title="Refresh diagnostics">↻</button>
       </div>
     `;
     pane.appendChild(header);
@@ -114,6 +115,16 @@
         setFilter(sev, !state.show[sev]);
       });
     });
+    const refreshBtn = header.querySelector('.problems-refresh');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => {
+        if (window.PiPilot?.state?.projectPath && window.electronAPI?.diagnostics?.run) {
+          refreshBtn.style.animation = 'tool-spin 0.7s linear';
+          window.electronAPI.diagnostics.run(window.PiPilot.state.projectPath);
+          setTimeout(() => { refreshBtn.style.animation = ''; }, 1500);
+        }
+      });
+    }
 
     if (errorText) {
       const banner = document.createElement('div');
