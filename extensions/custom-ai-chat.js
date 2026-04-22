@@ -211,36 +211,25 @@
   }
 
   var cachedApiKey = CONFIG.apiKey || '';
+  var apiKeyLoaded = false;
 
-  async function getApiKey() {
-    if (cachedApiKey) return cachedApiKey;
+  async function ensureApiKeyLoaded() {
+    if (apiKeyLoaded || cachedApiKey) return;
+    apiKeyLoaded = true;
     if (db) {
-      var stored = await db.get('apiKey');
-      if (stored) { cachedApiKey = stored; return stored; }
+      try {
+        var stored = await db.get('apiKey');
+        if (stored) cachedApiKey = stored;
+      } catch (e) {}
     }
-    return null;
   }
 
-  async function saveApiKey(key) {
-    cachedApiKey = key;
-    if (db) await db.set('apiKey', key);
-  }
-
-  async function promptApiKey() {
-    var key = await PiPilot.modal.prompt({
-      title: CONFIG.name + ' API Key',
-      label: 'Enter your API key for ' + CONFIG.baseUrl,
-      placeholder: 'sk-...',
-    });
-    if (key && key.trim()) {
-      await saveApiKey(key.trim());
-      return key.trim();
-    }
-    return null;
-  }
+  // Pre-load key immediately
+  ensureApiKeyLoaded();
 
   async function sendToApi(onChunk, onToolCall, onDone) {
-    var apiKey = await getApiKey();
+    await ensureApiKeyLoaded();
+    var apiKey = cachedApiKey;
     if (!apiKey) {
       apiKey = await promptApiKey();
       if (!apiKey) { onDone('No API key provided'); return; }

@@ -4,22 +4,405 @@
     {
       "id": "word-count",
       "name": "Word Count",
-      "description": "Shows word count, character count, and reading time in the status bar for the active file.",
+      "description": "Word count, line count, and reading time in the status bar.",
+      "icon": "#",
+      "categories": [
+        "editor",
+        "status-bar"
+      ],
       "version": "1.0.0",
       "author": "PiPilot",
-      "icon": "#",
-      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/word-count.js",
-      "categories": ["editor", "status-bar"]
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/word-count.js"
     },
     {
-      "id": "custom-ai-chat",
-      "name": "Custom AI Chat",
-      "description": "Full chat panel with pluggable AI provider (OpenAI, Groq, Ollama, etc.) and file system tool calling — read, write, search, edit files.",
+      "id": "json-formatter",
+      "name": "JSON Formatter",
+      "description": "Format, validate, and minify JSON with Mod+Shift+J / Mod+Shift+M.",
+      "icon": "{}",
+      "categories": [
+        "editor",
+        "formatter"
+      ],
       "version": "1.0.0",
       "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/json-formatter.js"
+    },
+    {
+      "id": "jsdoc-generator",
+      "name": "JSDoc Generator",
+      "description": "Generate JSDoc comments for functions with Mod+Shift+D.",
+      "icon": "/**",
+      "categories": [
+        "editor",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/jsdoc-generator.js"
+    },
+    {
+      "id": "color-preview",
+      "name": "Color Preview",
+      "description": "Inline color swatches in the gutter for hex/rgb/hsl values.",
+      "icon": "🎨",
+      "categories": [
+        "editor",
+        "css"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/color-preview.js"
+    },
+    {
+      "id": "bracket-colorizer",
+      "name": "Bracket Colorizer",
+      "description": "Colors matching brackets by nesting depth with 4-color cycling.",
+      "icon": "()",
+      "categories": [
+        "editor",
+        "visual"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/bracket-colorizer.js"
+    },
+    {
+      "id": "todo-explorer",
+      "name": "TODO Explorer",
+      "description": "Sidebar panel listing TODO/FIXME/HACK comments with click-to-navigate.",
+      "icon": "📋",
+      "categories": [
+        "sidebar",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/todo-explorer.js"
+    },
+    {
+      "id": "file-size-indicator",
+      "name": "File Size Indicator",
+      "description": "Status bar showing file size, line count, char count with large file warnings.",
+      "icon": "📊",
+      "categories": [
+        "status-bar",
+        "editor"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/file-size-indicator.js"
+    },
+    {
+      "id": "git-blame-inline",
+      "name": "Git Blame Inline",
+      "description": "Shows git blame annotation at end of current line with author and time.",
+      "icon": "👤",
+      "categories": [
+        "editor",
+        "git"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/git-blame-inline.js"
+    },
+    {
+      "id": "indent-rainbow",
+      "name": "Indent Rainbow",
+      "description": "Colors indentation levels with subtle background stripes.",
+      "icon": "🌈",
+      "categories": [
+        "editor",
+        "visual"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/indent-rainbow.js"
+    },
+    {
+      "id": "auto-close-tag",
+      "name": "Auto Close Tag",
+      "description": "Auto-completes closing HTML/JSX tags when typing.",
+      "icon": "🏷️",
+      "categories": [
+        "editor",
+        "html"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/auto-close-tag.js"
+    },
+    {
+      "id": "snippet-manager",
+      "name": "Snippet Manager",
+      "description": "Save, organize, and insert code snippets from a sidebar panel.",
+      "icon": "✂️",
+      "categories": [
+        "sidebar",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/snippet-manager.js"
+    },
+    {
+      "id": "minimap",
+      "name": "Minimap",
+      "description": "Zoomed-out code overview on the right edge of the editor. Click to jump.",
+      "icon": "🗺️",
+      "categories": [
+        "editor",
+        "visual"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/minimap.js"
+    },
+    {
+      "id": "lorem-ipsum",
+      "name": "Lorem Ipsum Generator",
+      "description": "Insert placeholder text via right-click menu or Mod+Shift+L.",
+      "icon": "📝",
+      "categories": [
+        "editor",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/lorem-ipsum.js"
+    },
+    {
+      "id": "css-unit-converter",
+      "name": "CSS Unit Converter",
+      "description": "Hover on px values to see rem/em/vw/% conversions. Click to replace.",
+      "icon": "📐",
+      "categories": [
+        "editor",
+        "css"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/css-unit-converter.js"
+    },
+    {
+      "id": "import-sorter",
+      "name": "Import Sorter",
+      "description": "Sort and group import statements with Mod+Shift+I.",
+      "icon": "🔤",
+      "categories": [
+        "editor",
+        "formatter"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/import-sorter.js"
+    },
+    {
+      "id": "regex-tester",
+      "name": "Regex Tester",
+      "description": "Sidebar panel with live regex testing, match highlighting, and capture groups.",
+      "icon": "🔍",
+      "categories": [
+        "sidebar",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/regex-tester.js"
+    },
+    {
+      "id": "character-counter",
+      "name": "Character Counter",
+      "description": "Status bar showing selection stats: chars, words, lines selected.",
+      "icon": "🔢",
+      "categories": [
+        "status-bar",
+        "editor"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/character-counter.js"
+    },
+    {
+      "id": "duplicate-finder",
+      "name": "Duplicate Line Finder",
+      "description": "Find and highlight duplicate lines with Mod+Shift+U.",
+      "icon": "🔁",
+      "categories": [
+        "editor",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/duplicate-finder.js"
+    },
+    {
+      "id": "env-syntax",
+      "name": "Env File Syntax",
+      "description": "Highlights .env files with masked secrets. Click to reveal.",
+      "icon": "🔒",
+      "categories": [
+        "editor",
+        "security"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/env-syntax.js"
+    },
+    {
+      "id": "timestamp-converter",
+      "name": "Timestamp Converter",
+      "description": "Inline Unix timestamp preview + right-click to insert timestamps.",
+      "icon": "🕐",
+      "categories": [
+        "editor",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/timestamp-converter.js"
+    },
+    {
+      "id": "project-stats",
+      "name": "Project Stats Dashboard",
+      "description": "Virtual tab showing files, lines, language breakdown, largest files, dependencies.",
+      "icon": "📊",
+      "categories": [
+        "sidebar",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/project-stats.js"
+    },
+    {
+      "id": "console-log-helper",
+      "name": "Console Log Helper",
+      "description": "Mod+Shift+C inserts console.log, Mod+Shift+X removes all console logs.",
+      "icon": "🖨️",
+      "categories": [
+        "editor",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/console-log-helper.js"
+    },
+    {
+      "id": "api-playground",
+      "name": "API Playground",
+      "description": "Built-in HTTP client — send requests, see responses, save history.",
+      "icon": "🌐",
+      "categories": [
+        "sidebar",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/api-playground.js"
+    },
+    {
+      "id": "diff-clipboard",
+      "name": "Diff Clipboard",
+      "description": "Compare clipboard content against current file with Mod+Shift+V.",
+      "icon": "📋",
+      "categories": [
+        "editor",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/diff-clipboard.js"
+    },
+    {
+      "id": "code-screenshot",
+      "name": "Code Screenshot",
+      "description": "Copy selected code as a styled PNG screenshot to clipboard.",
+      "icon": "📸",
+      "categories": [
+        "editor",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/code-screenshot.js"
+    },
+    {
+      "id": "dependency-graph",
+      "name": "Dependency Graph",
+      "description": "Interactive import/require dependency visualization in a virtual tab.",
+      "icon": "🕸️",
+      "categories": [
+        "sidebar",
+        "visual"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/dependency-graph.js"
+    },
+    {
+      "id": "terminal-commands",
+      "name": "Terminal Command Palette",
+      "description": "Quick-launch npm scripts and common commands with Mod+Shift+T.",
+      "icon": "⌨️",
+      "categories": [
+        "terminal",
+        "productivity"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/terminal-commands.js"
+    },
+    {
+      "id": "focus-mode",
+      "name": "Focus Mode & Pomodoro",
+      "description": "Distraction-free mode with built-in pomodoro timer. Mod+Shift+F.",
+      "icon": "🎯",
+      "categories": [
+        "productivity",
+        "editor"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/focus-mode.js"
+    },
+    {
+      "id": "ai-code-review",
+      "name": "AI Code Review",
+      "description": "Select code → AI reviews for bugs, performance, security issues.",
       "icon": "🤖",
-      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/custom-ai-chat.js",
-      "categories": ["ai", "sidebar", "editor"]
+      "categories": [
+        "ai",
+        "editor"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/ai-code-review.js"
+    },
+    {
+      "id": "multi-cursor-bookmarks",
+      "name": "Multi-Cursor Bookmarks",
+      "description": "Bookmark cursor positions across files. Sidebar panel + Mod+Shift+B.",
+      "icon": "🔖",
+      "categories": [
+        "sidebar",
+        "editor"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/multi-cursor-bookmarks.js"
+    },
+    {
+      "id": "code-runner",
+      "name": "Code Runner",
+      "description": "Run code files in 20+ languages with Ctrl+Alt+N. Auto-detect executor.",
+      "icon": "▶️",
+      "categories": [
+        "terminal",
+        "editor"
+      ],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "https://raw.githubusercontent.com/pipilot-dev/pipilot-extensions/main/extensions/code-runner.js"
     }
   ]
 }
