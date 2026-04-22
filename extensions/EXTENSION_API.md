@@ -6,10 +6,10 @@ Build extensions that add features to PiPilot IDE — status bar widgets, sideba
 
 ## Quick Start
 
-Extensions are single JavaScript files. They run in the renderer process and receive four arguments:
+Extensions are single JavaScript files. They run in the renderer process and receive five arguments:
 
 ```javascript
-(function (PiPilot, bus, api, state) {
+(function (PiPilot, bus, api, state, db) {
 
   // Add a status bar item
   var statusBar = document.querySelector('.status-right');
@@ -18,9 +18,12 @@ Extensions are single JavaScript files. They run in the renderer process and rec
   item.textContent = 'My Extension';
   statusBar.appendChild(item);
 
+  // Save data to your extension's own database
+  db.set('lastOpened', Date.now());
+
   console.log('[my-ext] loaded for project:', state.projectPath);
 
-})(PiPilot, bus, api, state);
+})(PiPilot, bus, api, state, db);
 ```
 
 | Argument | What it is | Use for |
@@ -29,6 +32,7 @@ Extensions are single JavaScript files. They run in the renderer process and rec
 | `bus` | Event bus | Listen/emit events across the IDE |
 | `api` | `window.electronAPI` | File system, git, terminal, diagnostics, IPC |
 | `state` | Shared app state | Read `projectPath`, `activeFile`, `settings` |
+| `db` | Scoped IndexedDB store | Persistent key-value storage isolated per extension |
 
 Extensions activate immediately on install. No restart required.
 
@@ -58,6 +62,51 @@ Extensions activate immediately on install. No restart required.
 ---
 
 ## API Reference
+
+### Extension Database — `db`
+
+Each extension gets its own isolated IndexedDB database. Data persists across sessions and is automatically cleaned up when the extension is uninstalled.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `db.get(key)` | `Promise<any>` | Get a value by key (returns `null` if not found) |
+| `db.set(key, value)` | `Promise<void>` | Store any JSON-serializable value |
+| `db.remove(key)` | `Promise<void>` | Delete a key |
+| `db.keys()` | `Promise<string[]>` | List all stored keys |
+| `db.getAll()` | `Promise<{key,value}[]>` | Get all entries |
+| `db.clear()` | `Promise<void>` | Delete all data |
+| `db.getOrDefault(key, default)` | `Promise<any>` | Get with fallback value |
+| `db.update(key, fn)` | `Promise<any>` | Read-modify-write in one call |
+
+```javascript
+// Store and retrieve settings
+await db.set('config', { theme: 'dark', fontSize: 14 });
+var config = await db.getOrDefault('config', { theme: 'light', fontSize: 12 });
+
+// Store a list
+await db.set('bookmarks', ['/src/index.ts', '/src/app.tsx']);
+var bookmarks = await db.get('bookmarks') || [];
+
+// Update a counter
+await db.update('runCount', function (current) { return (current || 0) + 1; });
+
+// List all keys
+var allKeys = await db.keys(); // ['config', 'bookmarks', 'runCount']
+
+// Get everything
+var allData = await db.getAll(); // [{ key: 'config', value: {...} }, ...]
+```
+
+**Storage is isolated** — each extension's data lives in its own IndexedDB database (`pipilot-ext-{extensionId}`). Extensions cannot read or write each other's data. When an extension is uninstalled, its database is automatically deleted.
+
+**IDE access** — The IDE can read extension data for management/backup:
+```javascript
+// From IDE code (not extension code):
+var extDb = PiPilot.extDB.forExtension('word-count');
+var data = await extDb.getAll();
+```
+
+---
 
 ### Editor — `PiPilot.editor`
 

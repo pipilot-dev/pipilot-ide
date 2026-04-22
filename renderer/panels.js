@@ -1284,19 +1284,21 @@
             onClick: async () => {
               await api.extensions.toggle(ext.id, !ext._enabled);
               bus.emit('toast:show', { type: 'ok', message: `${ext.name} ${ext._enabled ? 'disabled' : 'enabled'} — restart to apply` });
-              renderExtensionsTab(container);
+              render();
             },
           });
           actions.appendChild(toggleBtn);
 
           // Uninstall
-          actions.appendChild(el('button', { class: 'icon-btn', title: 'Uninstall', style: { fontSize: '12px' }, onClick: async () => {
-            if (await window.PiPilot.modal.confirm({ title: 'Uninstall extension?', message: ext.name || ext.id, danger: true })) {
-              await api.extensions.uninstall(ext.id);
-              bus.emit('toast:show', { type: 'ok', message: `${ext.name} uninstalled` });
-              renderExtensionsTab(container);
+          actions.appendChild(el('button', { class: 'btn btn-secondary btn-small', style: { color: 'var(--error)', fontSize: '9px' }, title: 'Uninstall', onClick: async () => {
+            await api.extensions.uninstall(ext.id);
+            // Clean up extension's IndexedDB database
+            if (window.PiPilot.extDB?.destroy) {
+              try { await window.PiPilot.extDB.destroy(ext.id); } catch (e) {}
             }
-          } }, '×'));
+            bus.emit('toast:show', { type: 'ok', message: `${ext.name} uninstalled` });
+            render();
+          } }, 'Uninstall'));
         } else {
           // Install
           actions.appendChild(el('button', { class: 'btn btn-primary btn-small', onClick: async () => {
@@ -1306,8 +1308,17 @@
               author: ext.author, icon: ext.icon,
             });
             if (result?.ok) {
-              bus.emit('toast:show', { type: 'ok', message: `${ext.name} installed — restart to activate` });
-              renderExtensionsTab(container);
+              // Load the extension immediately (no restart needed)
+              try {
+                const loaded = await api.extensions.load(ext.id);
+                if (loaded?.ok && loaded.code) {
+                  const db = window.PiPilot.extDB?.forExtension(ext.id) || null;
+                  const fn = new Function('PiPilot', 'bus', 'api', 'state', 'db', loaded.code);
+                  fn(window.PiPilot, window.PiPilot.bus, window.electronAPI, window.PiPilot.state, db);
+                }
+              } catch (e) { console.warn('[extensions] live-load failed:', e); }
+              bus.emit('toast:show', { type: 'ok', message: `${ext.name} installed and activated` });
+              render();
             } else {
               bus.emit('toast:show', { type: 'error', message: 'Install failed: ' + (result?.error || 'unknown') });
             }

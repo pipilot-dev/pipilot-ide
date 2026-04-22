@@ -753,9 +753,10 @@
       if (!result?.ok || !result.extensions?.length) return;
       for (const ext of result.extensions) {
         try {
-          // Execute extension JS in a function scope with access to PiPilot APIs
-          const fn = new Function('PiPilot', 'bus', 'api', 'state', ext.code);
-          fn(window.PiPilot, window.PiPilot.bus, window.electronAPI, window.PiPilot.state);
+          // Each extension gets its own scoped DB instance + all PiPilot APIs
+          const db = window.PiPilot.extDB?.forExtension(ext.id) || null;
+          const fn = new Function('PiPilot', 'bus', 'api', 'state', 'db', ext.code);
+          fn(window.PiPilot, window.PiPilot.bus, window.electronAPI, window.PiPilot.state, db);
           console.log(`[extensions] Loaded: ${ext.manifest?.name || ext.id}`);
         } catch (err) {
           console.error(`[extensions] Failed to load ${ext.id}:`, err);
