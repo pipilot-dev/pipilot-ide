@@ -13,7 +13,8 @@ const BM25_K1 = 1.5;
 const BM25_B = 0.75;
 const MAX_FILE_SIZE = 500 * 1024;
 const MAX_CHUNK_LINES = 50;
-const YIELD_EVERY = 20;
+const BATCH_SIZE = 5;       // Process 5 files per batch
+const BATCH_DELAY = 50;     // Sleep 50ms between batches (lets UI breathe)
 const INDEX_VERSION = 2;
 
 const SKIP_DIRS = new Set([
@@ -139,6 +140,8 @@ function shouldIndex(filePath) {
   return INDEXABLE_EXTENSIONS.has(ext);
 }
 
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
 async function walkDir(dir, basePath) {
   const files = [];
   let entries;
@@ -148,8 +151,8 @@ async function walkDir(dir, basePath) {
       if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
       const sub = await walkDir(path.join(dir, entry.name), basePath ? `${basePath}/${entry.name}` : entry.name);
       files.push(...sub);
-      // Yield every directory to prevent blocking
-      if (files.length % 30 === 0) await new Promise(r => setImmediate(r));
+      // Sleep between directories to keep main process responsive
+      if (files.length % 20 === 0) await sleep(10);
     } else if (entry.isFile()) {
       const rel = basePath ? `${basePath}/${entry.name}` : entry.name;
       if (shouldIndex(rel)) files.push(rel);
@@ -257,7 +260,7 @@ class CodeSearchIndex {
           termFreqs: new Map(Object.entries(doc.termFreqs)),
         });
         this.docLengths.set(id, doc.length);
-        if ((i + 1) % 500 === 0) await new Promise(r => setImmediate(r));
+        if ((i + 1) % 500 === 0) await sleep(10);
       }
 
       // Restore inverted index (yield every 1000 terms)
@@ -265,7 +268,7 @@ class CodeSearchIndex {
       for (let i = 0; i < termEntries.length; i++) {
         const [term, docIds] = termEntries[i];
         this.invertedIndex.set(term, new Set(docIds));
-        if ((i + 1) % 1000 === 0) await new Promise(r => setImmediate(r));
+        if ((i + 1) % 1000 === 0) await sleep(10);
       }
 
       // Restore file hashes and doc IDs
@@ -407,7 +410,7 @@ class CodeSearchIndex {
         }
       }
 
-      // Check for new/changed files (async stat, yield every 50)
+      // Check for new/changed files (lazy — batch + sleep)
       const toReindex = [];
       for (let i = 0; i < allFiles.length; i++) {
         const rel = allFiles[i];
@@ -417,7 +420,7 @@ class CodeSearchIndex {
         if (currentHash !== storedHash) {
           toReindex.push(rel);
         }
-        if ((i + 1) % 50 === 0) await new Promise(r => setImmediate(r));
+        if ((i + 1) % BATCH_SIZE === 0) await sleep(BATCH_DELAY);
       }
 
       if (toReindex.length > 0 || removed > 0) {
@@ -426,7 +429,7 @@ class CodeSearchIndex {
           const rel = toReindex[i];
           const abs = path.join(this.workDir, rel);
           const isNew = !this.fileHashes.has(rel);
-          this.removeFile(rel); // clear old data
+          this.removeFile(rel);
           this._processFile(rel, abs);
           this.fileHashes.set(rel, await fileHash(abs));
           if (isNew) added++; else changed++;
@@ -434,7 +437,7 @@ class CodeSearchIndex {
           if (this._onProgress) {
             this._onProgress({ phase: 'updating', filesTotal: total, filesProcessed: i + 1, pct: Math.round(((i + 1) / total) * 100) });
           }
-          if ((i + 1) % YIELD_EVERY === 0) await new Promise(r => setImmediate(r));
+          if ((i + 1) % BATCH_SIZE === 0) await sleep(BATCH_DELAY);
         }
         await this._recomputeIdf();
         console.log(`[search-index] Incremental update: +${added} ~${changed} -${removed} files`);
@@ -460,10 +463,11 @@ class CodeSearchIndex {
       this._processFile(relPath, absPath);
       this.fileHashes.set(relPath, await fileHash(absPath));
 
-      if (this._onProgress && (i + 1) % 10 === 0) {
+      if (this._onProgress && (i + 1) % BATCH_SIZE === 0) {
         this._onProgress({ phase: 'indexing', filesTotal: total, filesProcessed: i + 1, pct: Math.round(((i + 1) / total) * 100) });
       }
-      if ((i + 1) % YIELD_EVERY === 0) await new Promise(r => setImmediate(r));
+      // Sleep between batches — keeps app responsive during full index
+      if ((i + 1) % BATCH_SIZE === 0) await sleep(BATCH_DELAY);
     }
     await this._recomputeIdf();
     this._ready = true;
@@ -516,7 +520,7 @@ class CodeSearchIndex {
       const df = postings.size;
       this.idfCache.set(term, Math.log((N - df + 0.5) / (df + 0.5) + 1));
       count++;
-      if (count % 2000 === 0) await new Promise(r => setImmediate(r));
+      if (count % 2000 === 0) await sleep(10);
     }
   }
 

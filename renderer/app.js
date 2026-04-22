@@ -661,10 +661,10 @@
 
     bus.on('project:opened', () => {
       if (!state.projectPath || !api.searchIndex) return;
-      // Delay search indexing so tree + UI loads first (2s stagger)
+      // Delay search indexing so tree + UI + terminal loads first
       setTimeout(() => {
         if (state.projectPath) api.searchIndex.start(state.projectPath);
-      }, 2000);
+      }, 5000);
 
       if (removeIndexProgress) removeIndexProgress();
       if (indexStatusEl) {
