@@ -123,9 +123,10 @@
 .oc-output-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface-alt); }\
 .oc-output-lang { font-size: 9px; color: var(--accent); background: rgba(255,107,53,0.1); padding: 1px 6px; border-radius: 3px; }\
 .oc-output-meta { font-size: 9px; color: var(--text-dim); }\
-.oc-output-clear { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 10px; margin-left: auto; font-family: var(--font-mono); }\
-.oc-output-clear:hover { color: var(--text); }\
-.oc-output-body { padding: 8px 10px; white-space: pre-wrap; color: var(--text); line-height: 1.5; font-family: var(--font-mono); font-size: 12px; overflow: auto; height: 100%; }\
+.oc-output-actions { margin-left: auto; display: flex; gap: 4px; }\
+.oc-output-btn { background: none; border: 1px solid var(--border); color: var(--text-dim); cursor: pointer; font-size: 10px; font-family: var(--font-mono); padding: 1px 6px; border-radius: 3px; }\
+.oc-output-btn:hover { color: var(--text); border-color: var(--text-dim); }\
+.oc-output-body { padding: 8px 10px; white-space: pre-wrap; color: var(--text); line-height: 1.5; font-family: var(--font-mono); font-size: 12px; overflow: auto; height: 100%; user-select: text; }\
 .oc-output-body .oc-error { color: var(--error); }\
 .oc-output-body .oc-success { color: var(--ok); }\
 ';
@@ -192,7 +193,10 @@
       <div class="oc-output-header">\
         <span class="oc-output-lang">' + language + '</span>\
         <span class="oc-output-meta">' + (meta || elapsed + 'ms') + '</span>\
-        <button class="oc-output-clear">Clear</button>\
+        <div class="oc-output-actions">\
+          <button class="oc-output-btn" id="oc-copy" title="Copy output">Copy</button>\
+          <button class="oc-output-btn" id="oc-clear" title="Clear output">Clear</button>\
+        </div>\
       </div>\
       <div class="oc-output-body"></div>\
     ';
@@ -203,7 +207,13 @@
     span.textContent = output;
     bodyEl.appendChild(span);
 
-    outputPane.querySelector('.oc-output-clear').addEventListener('click', function () {
+    outputPane.querySelector('#oc-copy').addEventListener('click', function () {
+      navigator.clipboard.writeText(output).then(function () {
+        bus.emit('toast:show', { message: 'Output copied', type: 'ok' });
+      });
+    });
+
+    outputPane.querySelector('#oc-clear').addEventListener('click', function () {
       outputPane.innerHTML = '<div class="empty-state" style="color:var(--text-dim);font-size:11px;">Run code to see output here (Ctrl+Alt+R)</div>';
     });
 
