@@ -394,90 +394,64 @@ class CodeSearchIndex {
   // ── Internal ──
 
   async _doIndex() {
-    // Phase 1: Try loading persisted index
-    const loaded = await this.load();
-    if (loaded) {
-      // Phase 3: Incremental update — only re-index changed/new files
-      const allFiles = await walkDir(this.workDir, '');
-      const currentFiles = new Set(allFiles);
-      let changed = 0, added = 0, removed = 0;
+    const { fork } = require('child_process');
+    const workerPath = path.join(__dirname, 'search-worker.js');
+    const self = this;
 
-      // Remove files that no longer exist
-      for (const rel of [...this.fileHashes.keys()]) {
-        if (!currentFiles.has(rel)) {
-          this.removeFile(rel);
-          removed++;
+    return new Promise((resolve) => {
+      console.log('[search-index] Spawning background worker for:', self.workDir);
+      const worker = fork(workerPath, [], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
+
+      worker.on('message', async (msg) => {
+        if (msg.type === 'ready') {
+          worker.send({ type: 'index', workDir: self.workDir });
+        } else if (msg.type === 'progress') {
+          if (self._onProgress) self._onProgress(msg);
+        } else if (msg.type === 'done') {
+          // Worker finished — load the saved index from disk (fast, just JSON parse)
+          console.log('[search-index] Worker done:', msg.message);
+          await self.load();
+          self._ready = true;
+          self._indexing = null;
+          if (self._onProgress) self._onProgress({ phase: 'ready', filesTotal: msg.stats.filesIndexed, filesProcessed: msg.stats.filesIndexed, pct: 100 });
+          resolve();
+        } else if (msg.type === 'error') {
+          console.error('[search-index] Worker error:', msg.message);
+          // Fallback: try loading existing index from disk even if worker failed
+          await self.load();
+          self._ready = true;
+          self._indexing = null;
+          resolve();
         }
-      }
+      });
 
-      // Check for new/changed files (lazy — batch + sleep)
-      const toReindex = [];
-      for (let i = 0; i < allFiles.length; i++) {
-        const rel = allFiles[i];
-        const abs = path.join(this.workDir, rel);
-        const currentHash = await fileHash(abs);
-        const storedHash = this.fileHashes.get(rel);
-        if (currentHash !== storedHash) {
-          toReindex.push(rel);
+      worker.on('error', (err) => {
+        console.error('[search-index] Worker spawn error:', err.message);
+        self._ready = true;
+        self._indexing = null;
+        resolve();
+      });
+
+      worker.on('exit', (code) => {
+        if (code !== 0 && !self._ready) {
+          console.warn('[search-index] Worker exited with code:', code);
+          self._ready = true;
+          self._indexing = null;
+          resolve();
         }
-        if ((i + 1) % BATCH_SIZE === 0) await sleep(BATCH_DELAY);
-      }
+      });
 
-      if (toReindex.length > 0 || removed > 0) {
-        const total = toReindex.length;
-        for (let i = 0; i < toReindex.length; i++) {
-          const rel = toReindex[i];
-          const abs = path.join(this.workDir, rel);
-          const isNew = !this.fileHashes.has(rel);
-          this.removeFile(rel);
-          this._processFile(rel, abs);
-          this.fileHashes.set(rel, await fileHash(abs));
-          if (isNew) added++; else changed++;
-
-          if (this._onProgress) {
-            this._onProgress({ phase: 'updating', filesTotal: total, filesProcessed: i + 1, pct: Math.round(((i + 1) / total) * 100) });
-          }
-          if ((i + 1) % BATCH_SIZE === 0) await sleep(BATCH_DELAY);
+      // Kill worker if it takes more than 5 minutes
+      setTimeout(() => {
+        if (!self._ready) {
+          console.warn('[search-index] Worker timed out, killing');
+          try { worker.kill(); } catch {}
+          self._ready = true;
+          self._indexing = null;
+          resolve();
         }
-        await this._recomputeIdf();
-        console.log(`[search-index] Incremental update: +${added} ~${changed} -${removed} files`);
-        await this.save();
-      } else {
-        console.log('[search-index] Index is up to date, no changes');
-      }
-
-      this._ready = true;
-      this._indexing = null;
-      if (this._onProgress) this._onProgress({ phase: 'ready', filesTotal: this.fileToDocIds.size, filesProcessed: this.fileToDocIds.size, pct: 100 });
-      return;
-    }
-
-    // No saved index — full build with progress
-    const files = await walkDir(this.workDir, '');
-    const total = files.length;
-    if (this._onProgress) this._onProgress({ phase: 'indexing', filesTotal: total, filesProcessed: 0, pct: 0 });
-
-    for (let i = 0; i < files.length; i++) {
-      const relPath = files[i];
-      const absPath = path.join(this.workDir, relPath);
-      this._processFile(relPath, absPath);
-      this.fileHashes.set(relPath, await fileHash(absPath));
-
-      if (this._onProgress && (i + 1) % BATCH_SIZE === 0) {
-        this._onProgress({ phase: 'indexing', filesTotal: total, filesProcessed: i + 1, pct: Math.round(((i + 1) / total) * 100) });
-      }
-      // Sleep between batches — keeps app responsive during full index
-      if ((i + 1) % BATCH_SIZE === 0) await sleep(BATCH_DELAY);
-    }
-    await this._recomputeIdf();
-    this._ready = true;
-    this._indexing = null;
-
-    console.log(`[search-index] Full index: ${this.fileToDocIds.size} files, ${this.documents.size} chunks, ${this.invertedIndex.size} terms`);
-    if (this._onProgress) this._onProgress({ phase: 'ready', filesTotal: total, filesProcessed: total, pct: 100 });
-
-    // Save to disk for next launch
-    await this.save();
+      }, 300000);
+    });
   }
 
   _processFile(relPath, absPath) {
