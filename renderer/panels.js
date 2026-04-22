@@ -37,8 +37,10 @@
 }
 .p-commit-actions { display: flex; gap: 6px; margin-top: 6px; }
 
-.p-tabs { display: flex; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
-.p-tabs::-webkit-scrollbar { display: none; }
+.p-tabs { display: flex; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.p-tabs::-webkit-scrollbar { height: 3px; }
+.p-tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.p-tabs::-webkit-scrollbar-track { background: transparent; }
 .p-tab {
   flex-shrink: 0; padding: 8px 10px; font-size: var(--fs-sm); color: var(--text-mid);
   background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap;
