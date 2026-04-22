@@ -22,6 +22,7 @@ const registerWikiHandlers = require('./main/ipc-wiki');
 const registerSpeechHandlers = require('./main/ipc-speech');
 const registerSearchIndexHandlers = require('./main/ipc-search-index');
 const registerExtensionHandlers = require('./main/ipc-extensions');
+const registerExtDBHandlers = require('./main/ipc-ext-db');
 
 let mainWindow = null;
 
@@ -219,6 +220,7 @@ app.whenReady().then(() => {
   registerSpeechHandlers(ipcMain, ctx);
   registerSearchIndexHandlers(ipcMain, ctx);
   registerExtensionHandlers(ipcMain, ctx);
+  registerExtDBHandlers(ipcMain, ctx);
 
   createWindow();
 

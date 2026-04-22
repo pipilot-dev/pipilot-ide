@@ -229,6 +229,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     loadAll: () => ipcRenderer.invoke('extensions:load-all'),
   },
 
+  // ---------- Extension Database (SQLite) ----------
+  extDB: {
+    get: (extId, key) => ipcRenderer.invoke('ext-db:get', { extId, key }),
+    set: (extId, key, value) => ipcRenderer.invoke('ext-db:set', { extId, key, value }),
+    remove: (extId, key) => ipcRenderer.invoke('ext-db:remove', { extId, key }),
+    keys: (extId) => ipcRenderer.invoke('ext-db:keys', { extId }),
+    getAll: (extId) => ipcRenderer.invoke('ext-db:get-all', { extId }),
+    clear: (extId) => ipcRenderer.invoke('ext-db:clear', { extId }),
+    destroy: (extId) => ipcRenderer.invoke('ext-db:destroy', { extId }),
+    persist: (extId) => ipcRenderer.invoke('ext-db:persist', { extId }),
+    // Collections (structured data)
+    collection: {
+      insert: (extId, collection, id, data) => ipcRenderer.invoke('ext-db:collection-insert', { extId, collection, id, data }),
+      get: (extId, collection, id) => ipcRenderer.invoke('ext-db:collection-get', { extId, collection, id }),
+      list: (extId, collection) => ipcRenderer.invoke('ext-db:collection-list', { extId, collection }),
+      delete: (extId, collection, id) => ipcRenderer.invoke('ext-db:collection-delete', { extId, collection, id }),
+      clear: (extId, collection) => ipcRenderer.invoke('ext-db:collection-clear', { extId, collection }),
+    },
+    // Raw SQL (advanced)
+    exec: (extId, sql, params) => ipcRenderer.invoke('ext-db:exec', { extId, sql, params }),
+    query: (extId, sql, params) => ipcRenderer.invoke('ext-db:query', { extId, sql, params }),
+  },
+
   // ---------- Search Index ----------
   searchIndex: {
     start: (projectPath) => ipcRenderer.invoke('search-index:start', { projectPath }),
