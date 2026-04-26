@@ -643,9 +643,13 @@
         </div>
         <div class="pp-me-help" id="pp-me-cloud-help">${patIsSet ? 'Pick from your repos. Branches load when you select a repo.' : '⚠ Connect GitHub before saving a cloud mission.'}</div>`;
     }
+    const lp = m.target?.projectPath || state?.projectPath || '';
     return `
-      <input class="pp-me-input" id="pp-me-projectpath" placeholder="C:/path/to/project" value="${escapeHtml(m.target?.projectPath || state?.projectPath || '')}" />
-      <div class="pp-me-help">Defaults to your currently open project.</div>`;
+      <div class="pp-combo">
+        <input class="pp-me-input pp-combo-input" id="pp-me-projectpath" placeholder="Pick a project folder" value="${escapeHtml(lp)}" autocomplete="off" />
+        <div class="pp-combo-list" id="pp-me-projectpath-list" hidden></div>
+      </div>
+      <div class="pp-me-help">Click the field to pick from recently-opened projects, or type a path.</div>`;
   }
 
   function renderTriggerBody(m) {
@@ -728,6 +732,107 @@
     });
     wireCronTabs(body, m);
     if (m.target?.kind === 'cloud') wireCloudPicker(body, m);
+    else wireLocalPicker(body, m);
+  }
+
+  // Local picker: combobox of recently-opened projects + a "Select
+  // folder from disk…" item that opens the OS folder picker. Typing
+  // a path manually still works.
+  function wireLocalPicker(body, m) {
+    const input = body.querySelector('#pp-me-projectpath');
+    const list = body.querySelector('#pp-me-projectpath-list');
+    if (!input || !list) return;
+
+    let recents = [];
+    let activeIdx = -1;
+
+    function shortPath(p) {
+      const s = String(p || '').replace(/[\\/]+$/, '');
+      const parts = s.split(/[\\/]/g);
+      return parts.length > 2 ? '…/' + parts.slice(-2).join('/') : s;
+    }
+
+    async function loadRecents() {
+      try {
+        recents = (await api.recentProjects.get()) || [];
+        // Sort most-recent first if API doesn't already.
+        recents.sort((a, b) => (b.lastOpened || b.openedAt || 0) - (a.lastOpened || a.openedAt || 0));
+      } catch { recents = []; }
+    }
+
+    function filtered(query) {
+      const q = (query || '').trim().toLowerCase();
+      if (!q) return recents.slice(0, 30);
+      return recents.filter(r =>
+        (r.path || '').toLowerCase().includes(q) ||
+        (r.name || '').toLowerCase().includes(q)
+      ).slice(0, 30);
+    }
+
+    function renderList(query) {
+      activeIdx = -1;
+      const items = filtered(query);
+      const pickerRow = `
+        <button type="button" class="pp-combo-item" data-pick="folder">
+          <span class="pp-combo-name">📂 Select folder from disk…</span>
+        </button>`;
+      const recentsHtml = items.length
+        ? items.map(r => `
+            <button type="button" class="pp-combo-item" data-path="${escapeHtml(r.path)}">
+              <span class="pp-combo-name">${escapeHtml(r.name || shortPath(r.path))}</span>
+              <span class="pp-combo-meta">${escapeHtml(shortPath(r.path))}</span>
+            </button>`).join('')
+        : `<div class="pp-combo-empty">No recent projects yet</div>`;
+      list.innerHTML = pickerRow + recentsHtml;
+      list.hidden = false;
+      list.querySelector('[data-pick="folder"]')?.addEventListener('mousedown', async (e) => {
+        e.preventDefault();
+        list.hidden = true;
+        try {
+          const picked = await api.pickFolder();
+          if (picked) {
+            input.value = picked;
+            m.target.projectPath = picked;
+          }
+        } catch {}
+      });
+      list.querySelectorAll('[data-path]').forEach(btn => {
+        btn.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          const p = btn.dataset.path;
+          input.value = p;
+          m.target.projectPath = p;
+          list.hidden = true;
+        });
+      });
+    }
+
+    input.addEventListener('input', () => {
+      m.target.projectPath = input.value.trim();
+      renderList(input.value);
+    });
+    input.addEventListener('focus', async () => {
+      if (!recents.length) await loadRecents();
+      renderList(input.value);
+    });
+    input.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
+    input.addEventListener('keydown', (e) => {
+      const items = Array.from(list.querySelectorAll('.pp-combo-item'));
+      if (!items.length) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, items.length - 1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); }
+      else if (e.key === 'Enter' && activeIdx >= 0) {
+        e.preventDefault();
+        items[activeIdx].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        return;
+      } else if (e.key === 'Escape') { list.hidden = true; return; }
+      else return;
+      items.forEach((it, i) => it.classList.toggle('active', i === activeIdx));
+      items[activeIdx]?.scrollIntoView({ block: 'nearest' });
+    });
+
+    // Warm the cache so the first focus is instant.
+    loadRecents();
   }
 
   // Cloud picker: combobox of user's repos + branch dropdown that
