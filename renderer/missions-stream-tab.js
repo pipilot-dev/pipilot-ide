@@ -184,8 +184,13 @@
     tickDuration();
 
     function setStatus(state, label) {
-      statusEl.classList.remove('running', 'success', 'error', 'timeout');
-      statusEl.classList.add(state);
+      statusEl.classList.remove('running', 'success', 'error', 'timeout', 'stopped', 'skipped');
+      // Map outcome status names to visual classes (success/error/etc).
+      const visualClass = state === 'success' ? 'success'
+        : state === 'running' ? 'running'
+        : state === 'timeout' ? 'timeout'
+        : 'error';
+      statusEl.classList.add(visualClass);
       const icon = state === 'running' ? SVG.spin : (state === 'success' ? SVG.ok : SVG.err);
       statusEl.innerHTML = `${icon} <span data-role="status-label">${escapeHtml(label || state)}</span>`;
       stopBtn.disabled = state !== 'running';
@@ -264,7 +269,7 @@
     if (buf) {
       for (const evt of buf.events) applyEvent(evt);
       if (buf.status && buf.status !== 'running') {
-        setStatus(buf.status === 'success' ? 'success' : (buf.status === 'timeout' ? 'timeout' : 'error'), buf.status);
+        setStatus(buf.status, buf.status);
         clearInterval(durationTimer);
       }
     }
@@ -276,7 +281,7 @@
     });
     const offEnd = bus.on('mission:end', (payload) => {
       if (payload?.missionId !== mission.id) return;
-      setStatus(payload.status === 'success' ? 'success' : (payload.status === 'timeout' ? 'timeout' : 'error'), payload.status);
+      setStatus(payload.status, payload.status);
       clearInterval(durationTimer);
       if (payload.durationMs) durEl.textContent = (payload.durationMs / 1000).toFixed(1) + 's';
     });

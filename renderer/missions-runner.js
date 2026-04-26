@@ -48,12 +48,13 @@
     let stream = null;
 
     // Initialise buffer + announce start so any open tab can attach.
-    buffers.set(mission.id, { mission, events: [], status: 'running', startedAt, endedAt: 0, stream: null });
+    buffers.set(mission.id, { mission, events: [], status: 'running', startedAt, endedAt: 0, stream: null, stopped: false });
     bus.emit('mission:start', { mission, startedAt });
     let finalText = '';
     let toolCallCount = 0;
     let timedOut = false;
     let resultEvt = null;
+    let finalized = false;       // single-shot guard so stop + result can't both finalize
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -85,8 +86,10 @@
 
     console.log('[missions-runner] starting', mission.id, mission.name);
 
+    let resolveRun;
     try {
       await new Promise((resolve) => {
+        resolveRun = resolve;
         stream = api.agent.send({
           sessionId,
           projectPath: targetWorkDir,
@@ -107,11 +110,22 @@
           pushEvent(mission.id, evt);
           if (evt.type === 'result' || evt.type === 'error') {
             resultEvt = evt;
-            resolve();
+            if (!finalized) { finalized = true; resolve(); }
           }
         });
         const buf = buffers.get(mission.id);
-        if (buf) buf.stream = stream;
+        if (buf) {
+          buf.stream = stream;
+          // Allow stopMission() to force-resolve this promise if the
+          // SDK's abort doesn't surface a result/error event in time.
+          buf._forceFinalize = (reason) => {
+            if (finalized) return;
+            finalized = true;
+            buf.stopped = true;
+            resultEvt = { type: 'error', message: reason || 'Stopped by user', subtype: 'aborted' };
+            resolve();
+          };
+        }
       });
     } catch (err) {
       console.warn('[missions-runner] failed:', err);
@@ -121,9 +135,11 @@
 
     const cleanFinal = finalText.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim();
     const tail = cleanFinal.split('\n').slice(-5).join(' ');
+    const buf = buffers.get(mission.id);
     let status = 'success';
     let summary = tail.slice(0, 280);
-    if (timedOut) { status = 'timeout'; summary = 'agent ran past timeout'; }
+    if (buf?.stopped || resultEvt?.subtype === 'aborted') { status = 'stopped'; summary = 'Stopped by user'; }
+    else if (timedOut) { status = 'timeout'; summary = 'agent ran past timeout'; }
     else if (resultEvt?.type === 'error') { status = 'error'; summary = resultEvt.message || 'agent error'; }
     else if (resultEvt?.subtype === 'error' || resultEvt?.is_error) { status = 'error'; summary = summary || 'agent reported failure'; }
     else if (/^skipped:/i.test(tail)) { status = 'skipped'; }
@@ -133,7 +149,6 @@
     inFlight.delete(mission.id);
 
     // Update buffer + announce end so open tabs can switch to "done" UI.
-    const buf = buffers.get(mission.id);
     if (buf) { buf.status = status; buf.endedAt = Date.now(); }
     bus.emit('mission:end', { missionId: mission.id, status, summary, durationMs, finalText: cleanFinal });
 
@@ -235,9 +250,23 @@
   // event with subtype:'aborted').
   function stopMission(missionId) {
     const buf = buffers.get(missionId);
-    if (!buf || !buf.stream) return false;
-    try { buf.stream.stop?.(); } catch {}
+    if (!buf) return false;
+    if (buf.status !== 'running') return false;
+    buf.stopped = true;
+    // Tell the SDK to abort. The agent's main loop will (usually)
+    // surface an 'error' or 'result' event we can finalize on.
+    try { buf.stream?.stop?.(); } catch {}
     bus.emit('toast:show', { type: 'info', message: 'Mission stop requested' });
+    // Belt-and-suspenders: if the abort doesn't reach us within 4s
+    // (network delay, SDK eating the error, whatever), force-finalize
+    // locally so the UI doesn't sit at "running" forever.
+    setTimeout(() => {
+      const b = buffers.get(missionId);
+      if (b && b.status === 'running' && typeof b._forceFinalize === 'function') {
+        console.warn('[missions-runner] forcing finalize after stop —', missionId);
+        b._forceFinalize('Stopped by user');
+      }
+    }, 4000);
     return true;
   }
 
