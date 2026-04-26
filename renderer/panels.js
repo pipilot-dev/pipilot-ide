@@ -1860,7 +1860,11 @@
               const div = document.createElement('div');
               div.style.cssText = 'margin:12px 0;text-align:center;overflow-x:auto;';
               pre.replaceWith(div);
-              window.PiPilot.mermaidSafe.renderInto(div, src, 'wiki-mmd').then(node => {
+              const wikiPagePath = projectPath + '/.pipilot/wikis/' + pageId + '.md';
+              window.PiPilot.mermaidSafe.renderInto(div, src, 'wiki-mmd', {
+                filePath: wikiPagePath,
+                label: `Wiki page "${title}", diagram #${idx + 1}`,
+              }).then(node => {
                 if (node && node.tagName === 'svg' && window.PiPilot?.diagramExport?.attachExportMenu) {
                   window.PiPilot.diagramExport.attachExportMenu(node, `${pageId}-diagram-${idx + 1}`);
                 }
