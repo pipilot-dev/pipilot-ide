@@ -111,8 +111,20 @@
     }
     const tabId = tabIdFor(mission.id);
 
-    // If a tab is already mounted, just focus it.
-    if (openTabs.has(mission.id)) {
+    // openTabs may be stale: the user can close the editor tab without
+    // our subscriptions being disposed (closeFile only fires unmount,
+    // not a delete on our Map). Reconcile against the editor's source
+    // of truth before short-circuiting.
+    const liveInEditor = editor.isVirtualTab && editor.isVirtualTab(tabId);
+    if (openTabs.has(mission.id) && !liveInEditor) {
+      // Stale entry — clean it up so the next openVirtualTab actually
+      // mounts a fresh view.
+      try { openTabs.get(mission.id).dispose?.(); } catch {}
+      openTabs.delete(mission.id);
+    }
+    if (openTabs.has(mission.id) && liveInEditor) {
+      // Genuinely already open — pass a no-op mount so editor just
+      // switches focus to it.
       editor.openVirtualTab({ id: tabId, name: 'Mission · ' + mission.name, mount: () => {} });
       return;
     }
