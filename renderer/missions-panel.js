@@ -82,8 +82,15 @@
 .pp-missions-head { padding:10px 12px 8px; border-bottom:1px solid var(--border); display:flex; flex-direction:column; gap:8px; }
 .pp-missions-title-row { display:flex; align-items:center; gap:8px; justify-content:space-between; }
 .pp-missions-title { font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:var(--text-mid); font-family:var(--font-mono); }
-.pp-missions-newbtn { background:var(--accent); color:#fff; border:none; padding:5px 10px; border-radius:6px; font-size:11.5px; font-weight:500; cursor:pointer; display:flex; align-items:center; gap:5px; transition:background 0.15s; }
+.pp-missions-newwrap { display:flex; align-items:stretch; }
+.pp-missions-newbtn { background:var(--accent); color:#fff; border:none; padding:5px 10px; font-size:11.5px; font-weight:500; cursor:pointer; display:flex; align-items:center; gap:5px; transition:background 0.15s; }
+.pp-missions-newbtn:first-child { border-radius:6px 0 0 6px; }
+.pp-missions-newbtn:last-child { border-radius:0 6px 6px 0; padding:5px 8px; border-left:1px solid rgba(255,255,255,0.15); }
+.pp-missions-newwrap > .pp-missions-newbtn:only-child { border-radius:6px; }
 .pp-missions-newbtn:hover { background:var(--accent-hover); }
+.pp-preset-menu { position:fixed; z-index:9100; min-width:230px; background:var(--surface,#1c1c21); border:1px solid var(--border); border-radius:8px; padding:4px; box-shadow:0 12px 32px rgba(0,0,0,0.45); display:flex; flex-direction:column; gap:2px; }
+.pp-preset-item { background:transparent; border:none; color:var(--text); padding:7px 10px; border-radius:5px; text-align:left; font-size:12.5px; cursor:pointer; font-family:var(--font-sans); transition:background 0.12s; }
+.pp-preset-item:hover { background:rgba(255,107,53,0.12); color:var(--accent-light,#ffb38a); }
 .pp-missions-pat-pill { display:flex; align-items:center; gap:6px; padding:5px 9px; border-radius:14px; font-size:11px; cursor:pointer; transition:background 0.15s; }
 .pp-missions-pat-pill.set { background:rgba(86,212,221,0.1); border:1px solid rgba(86,212,221,0.3); color:#56d4dd; }
 .pp-missions-pat-pill.unset { background:rgba(255,107,53,0.08); border:1px solid rgba(255,107,53,0.3); color:var(--accent-light, #ffb38a); }
@@ -172,6 +179,62 @@
     document.head.appendChild(s);
   }
 
+  // ---------- Presets ----------
+  // Templates to seed common mission shapes. The user can edit any field
+  // after picking one — presets only fill the form.
+  const PRESETS = {
+    blank: { label: 'Blank' },
+    bugbot: {
+      label: 'BugBot — review code on commit',
+      tags: ['bugbot'],
+      seed: () => ({
+        name: 'BugBot',
+        prompt: [
+          'You are a code-review bot. Review the most recent local changes (uncommitted diff first, otherwise the last commit) for bugs, regressions, and suspicious patterns.',
+          '',
+          'For EACH finding, append one line to `.pipilot/bug-findings.jsonl` (NOT a JSON array — one JSON object per line). Schema:',
+          '  { "path": "<absolute or project-relative path>", "line": <1-based number>, "severity": "error"|"warning"|"info", "message": "<one-sentence description>", "code": "BugBot" }',
+          '',
+          'Rules:',
+          '- DO NOT fix anything. Only report.',
+          '- Skip stylistic nits and naming preferences. Focus on real bugs: null deref, off-by-one, wrong async patterns, missing error handling, security issues, regressions.',
+          '- If there are zero findings worth surfacing, write nothing to the file and end with `Skipped: no bugs detected`.',
+          '- Overwrite the file at the start of the run so old findings don\'t persist (use Write with empty content first if the file exists).',
+        ].join('\n'),
+        target: { kind: 'local', projectPath: state?.projectPath || '' },
+        trigger: { kind: 'manual' },
+        permissions: { preset: 'fs-only' },
+        effort: 'medium',
+        notify: { onSuccess: true, onError: true, onSkip: false },
+        tags: ['bugbot'],
+      }),
+    },
+    daily_summary: {
+      label: 'Daily summary at 9am',
+      seed: () => ({
+        name: 'Daily summary',
+        prompt: 'Summarise what changed in the project since the last summary. List notable commits, new files, and removed files. Append a dated section to `.pipilot/daily-summary.md`.',
+        target: { kind: 'local', projectPath: state?.projectPath || '' },
+        trigger: { kind: 'cron', spec: { hour: 9, minute: 0, weekdays: [1,2,3,4,5] } },
+        permissions: { preset: 'fs-plus-bash' },
+        effort: 'low',
+        notify: { onSuccess: false, onError: true, onSkip: false },
+      }),
+    },
+    cloud_pr_review: {
+      label: 'Cloud PR review',
+      seed: () => ({
+        name: 'Open PRs review',
+        prompt: 'List open pull requests on the configured repo. For each, fetch the diff, write a 3-bullet review to a comment on the PR via mcp__github__create_issue_comment.',
+        target: { kind: 'cloud', repo: '', branch: 'main' },
+        trigger: { kind: 'manual' },
+        permissions: { preset: 'cloud' },
+        effort: 'medium',
+        notify: { onSuccess: true, onError: true, onSkip: false },
+      }),
+    },
+  };
+
   // ---------- State ----------
   let panelContainer = null;
   let cachedMissions = [];
@@ -220,7 +283,10 @@
       <div class="pp-missions-head">
         <div class="pp-missions-title-row">
           <span class="pp-missions-title">Missions</span>
-          <button class="pp-missions-newbtn" data-act="new">+ New Mission</button>
+          <div class="pp-missions-newwrap">
+            <button class="pp-missions-newbtn" data-act="new">+ New Mission</button>
+            <button class="pp-missions-newbtn pp-missions-newcaret" data-act="new-menu" title="Pick a preset">▾</button>
+          </div>
         </div>
         <button class="pp-missions-pat-pill ${patIsSet ? 'set' : 'unset'}" data-act="pat">
           <span class="pp-pat-dot"></span>
@@ -231,6 +297,7 @@
     `;
     container.appendChild(root);
     root.querySelector('[data-act="new"]').addEventListener('click', () => openEditor(null));
+    root.querySelector('[data-act="new-menu"]').addEventListener('click', (e) => openPresetMenu(e.currentTarget));
     root.querySelector('[data-act="pat"]').addEventListener('click', openPatModal);
     renderList();
   }
@@ -308,6 +375,40 @@
   async function refresh() {
     await loadMissions();
     renderList();
+  }
+
+  // ---------- Preset menu ----------
+  function openPresetMenu(anchor) {
+    const existing = document.getElementById('pp-preset-menu');
+    if (existing) { existing.remove(); return; }
+    const rect = anchor.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.id = 'pp-preset-menu';
+    menu.className = 'pp-preset-menu';
+    menu.style.top = (rect.bottom + 4) + 'px';
+    menu.style.right = (window.innerWidth - rect.right) + 'px';
+    menu.innerHTML = Object.entries(PRESETS).map(([k, p]) =>
+      `<button class="pp-preset-item" data-preset="${k}">${escapeHtml(p.label)}</button>`
+    ).join('');
+    document.body.appendChild(menu);
+    const close = () => menu.remove();
+    setTimeout(() => {
+      document.addEventListener('click', function once(e) {
+        if (!menu.contains(e.target) && e.target !== anchor) {
+          close();
+          document.removeEventListener('click', once);
+        }
+      });
+    }, 0);
+    menu.querySelectorAll('[data-preset]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        close();
+        const key = btn.dataset.preset;
+        const preset = PRESETS[key];
+        if (!preset?.seed) { openEditor(null); return; }
+        openEditor(preset.seed());
+      });
+    });
   }
 
   // ---------- PAT modal ----------

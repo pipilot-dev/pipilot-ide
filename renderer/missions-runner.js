@@ -123,6 +123,11 @@
       console.warn('[missions-runner] reportRun failed:', err);
     }
 
+    // BugBot: read findings file and surface in Problems panel.
+    if (Array.isArray(mission.tags) && mission.tags.includes('bugbot') && mission.target?.kind === 'local' && status !== 'error') {
+      try { await processBugBotFindings(mission); } catch (err) { console.warn('[missions-runner] bugbot post-process failed', err); }
+    }
+
     // User-facing toast based on the mission's notify prefs.
     const notify = mission.notify || {};
     const allow =
@@ -137,6 +142,61 @@
     // Let any open Missions panel re-render with fresh stats.
     bus.emit('missions:refresh');
   });
+
+  // ── BugBot → Problems panel ─────────────────────────────────────
+  // The BugBot prompt instructs the agent to write findings as JSON
+  // Lines (one object per line) to <projectPath>/.pipilot/bug-findings.jsonl.
+  // We read it after the run, normalize each entry, and emit a
+  // problems:updated event so the Problems panel surfaces them.
+  async function processBugBotFindings(mission) {
+    const projectPath = mission.target.projectPath;
+    if (!projectPath) return;
+    const sep = projectPath.includes('\\') ? '\\' : '/';
+    const findingsPath = projectPath + sep + '.pipilot' + sep + 'bug-findings.jsonl';
+
+    let raw = '';
+    try {
+      const r = await api.files.read(findingsPath);
+      raw = r?.content || (typeof r === 'string' ? r : '');
+    } catch {
+      return;   // file probably absent — agent reported no bugs
+    }
+    if (!raw.trim()) return;
+
+    const items = [];
+    for (const line of raw.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        const obj = JSON.parse(t);
+        if (!obj || !obj.path || !obj.message) continue;
+        items.push({
+          path: obj.path,
+          line: typeof obj.line === 'number' ? obj.line : 1,
+          column: typeof obj.column === 'number' ? obj.column : 1,
+          severity: obj.severity || 'warning',
+          message: String(obj.message).slice(0, 400),
+          code: obj.code || 'BugBot',
+          source: 'BugBot',
+        });
+      } catch {}
+    }
+    if (!items.length) return;
+
+    const counts = {
+      errors: items.filter(i => i.severity === 'error').length,
+      warnings: items.filter(i => i.severity === 'warning').length,
+      info: items.filter(i => i.severity === 'info').length,
+      total: items.length,
+    };
+    const byFile = items.reduce((acc, it) => {
+      (acc[it.path] = acc[it.path] || []).push(it);
+      return acc;
+    }, {});
+    bus.emit('problems:updated', { items, counts, byFile, error: null });
+    bus.emit('bottom:show', 'problems');
+    bus.emit('toast:show', { type: 'info', message: `BugBot: ${items.length} finding${items.length === 1 ? '' : 's'}` });
+  }
 
   window.PiPilot = window.PiPilot || {};
   window.PiPilot.missions = window.PiPilot.missions || {};
