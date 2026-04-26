@@ -212,16 +212,57 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       const ghLine = ghInfo.installed
         ? `- The \`gh\` CLI is installed (${ghInfo.version || 'available'}) and pre-authenticated for this run via the GH_TOKEN env var. Run any \`gh ...\` command via Bash — it will use the user's PAT automatically. Do NOT run \`gh auth login\` (it would write to the user's global config; the env-var path is intentionally process-scoped).`
         : `- The \`gh\` CLI is NOT installed on this machine (auto-install was attempted: ${ghInfo.installMessage || 'unsupported platform'}). Stick to the github MCP tools.`;
-      const prGuidance = mission.cloudPr
-        ? `- Mutating ops: create a working branch first (mcp__github__create_branch), apply file edits via mcp__github__create_or_update_file, then open a PR with mcp__github__create_pull_request. Title format: "[PiPilot Mission] <name>". Body should describe what changed and why. NEVER push directly to ${mission.target.branch || 'main'}.`
-        : `- Mutating ops: edit files directly on branch ${mission.target.branch || 'main'} via mcp__github__create_or_update_file. The user has explicitly opted into direct commits for this mission.`;
+      const baseBranch = mission.target.branch || 'main';
+      const branchOrDirect = mission.cloudPr
+        ? `a NEW working branch off of ${baseBranch} (use mcp__github__create_branch). NEVER push directly to ${baseBranch}.`
+        : `the existing branch ${baseBranch}. The user has explicitly opted into direct commits.`;
+      const atomicEditFlow = [
+        `**HARD RULE — atomic commits only.** Never use mcp__github__create_or_update_file. That tool makes one commit per file and pollutes the PR history. Instead, batch ALL file changes from the mission into a SINGLE commit via the Git Data API:`,
+        ``,
+        `Step 1 — Resolve the branch tip:`,
+        `  a) mcp__github__get_ref { ref: "heads/<branch>" } → returns commit sha`,
+        `  b) mcp__github__get_commit { commit_sha } → returns its tree sha (call this BASE_TREE)`,
+        ``,
+        `Step 2 — For each changed file, upload the new content as a blob:`,
+        `  mcp__github__create_blob { content: "<full new file body>", encoding: "utf-8" } → blob sha`,
+        `  (Read the existing file first with mcp__github__get_file_contents so you have the full current body to transform.)`,
+        ``,
+        `Step 3 — Build a single tree containing ALL the changes:`,
+        `  mcp__github__create_tree {`,
+        `    base_tree: BASE_TREE,`,
+        `    tree: [`,
+        `      { path: "src/foo.ts",     mode: "100644", type: "blob", sha: "<new blob sha>" },`,
+        `      { path: "src/bar.ts",     mode: "100644", type: "blob", sha: "<new blob sha>" },`,
+        `      { path: "src/legacy.ts",  mode: "100644", type: "blob", sha: null }   // null deletes`,
+        `    ]`,
+        `  } → new tree sha`,
+        ``,
+        `Step 4 — Make ONE commit with all changes:`,
+        `  mcp__github__create_commit { message: "<descriptive>", tree: <new tree sha>, parents: [<branch tip sha>] } → new commit sha`,
+        ``,
+        `Step 5 — Move the branch ref forward:`,
+        `  mcp__github__update_ref { ref: "heads/<branch>", sha: <new commit sha> }`,
+        ``,
+        `Even for a one-file edit, follow this flow — one commit per mission keeps the PR clean and reviewable. Commit message format: imperative, present tense, max 72 chars on the first line, with a blank line + paragraph body explaining WHY for non-trivial changes.`,
+      ].join('\n');
+      const escapeHatch = `If the change requires running tests or is genuinely large (10+ files / thousands of lines), fall back to: \`gh repo clone\` into the cwd, edit with Read/Edit/Write/MultiEdit, \`git add -A && git commit -m "..." && git push -u origin <branch>\`. ${ghInfo.installed ? '' : '(gh CLI is not installed on this machine — try MCP path first.)'}`;
+      const prStep = mission.cloudPr
+        ? `Step 6 — Open the Pull Request: mcp__github__create_pull_request { title: "[PiPilot Mission] <name>", body: "...", head: "<working branch>", base: "${baseBranch}" }. Title ≤72 chars. Body should explain what changed and why. If the PR already exists from a prior run on the same branch, skip this step.`
+        : `(No PR step — this mission commits directly to ${baseBranch}.)`;
       toolGuide = [
         `You have TWO complementary GitHub interfaces:`,
-        `1. **HTTP MCP** at api.githubcopilot.com/mcp — surfaces tools as \`mcp__github__*\`. Use these for structured operations (read repo files, list/search issues + PRs, create branches, create PRs, post comments).`,
-        `2. **\`gh\` CLI via Bash** — convenient for ad-hoc shell ops, status checks, and chaining commands.`,
-        ghLine,
-        prGuidance,
-        `- You do NOT have local filesystem access for this mission. Read and write only via mcp__github__* or via gh CLI commands that operate on the remote.`,
+        `1. **HTTP MCP** at api.githubcopilot.com/mcp — surfaces tools as \`mcp__github__*\`. PREFERRED for all structured ops (reads, branch creation, blob/tree/commit/ref calls, PR open, comments, search).`,
+        `2. **\`gh\` CLI via Bash** — convenient for ad-hoc shell ops, multi-step pipelines, and the rare case where you need a real working tree. ${ghLine.replace(/^- /, '')}`,
+        ``,
+        `Working branch: this mission writes to ${branchOrDirect}`,
+        ``,
+        atomicEditFlow,
+        ``,
+        prStep,
+        ``,
+        `Escape hatch: ${escapeHatch}`,
+        ``,
+        `You do NOT have local filesystem access by default. Read and write the remote via mcp__github__* tools. Cloning is allowed (escape hatch above) but most missions don't need it.`,
       ].join('\n');
     } else {
       const ghLine = ghInfo.hasToken
