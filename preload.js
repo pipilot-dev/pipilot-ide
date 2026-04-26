@@ -26,6 +26,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     close: () => ipcRenderer.invoke('window:close'),
     isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   },
+  // Background mode + power management. Renderer signals when the agent
+  // is active so the main process can hold a powerSaveBlocker, and
+  // listens for power events so the UI can show "paused on suspend".
+  background: {
+    setAgentActive: (active) => ipcRenderer.invoke('background:agent-active', !!active),
+    status: () => ipcRenderer.invoke('background:status'),
+    setPrefs: (prefs) => ipcRenderer.invoke('background:set-prefs', prefs),
+    onSuspend: (cb) => { const fn = (_e, p) => cb(p); ipcRenderer.on('power:suspend', fn); return () => ipcRenderer.removeListener('power:suspend', fn); },
+    onResume:  (cb) => { const fn = (_e, p) => cb(p); ipcRenderer.on('power:resume',  fn); return () => ipcRenderer.removeListener('power:resume',  fn); },
+    onLock:    (cb) => { const fn = ()      => cb();  ipcRenderer.on('power:lock',    fn); return () => ipcRenderer.removeListener('power:lock',    fn); },
+    onUnlock:  (cb) => { const fn = ()      => cb();  ipcRenderer.on('power:unlock',  fn); return () => ipcRenderer.removeListener('power:unlock',  fn); },
+  },
+  // Resumption diary — last-session breadcrumbs persisted under
+  // `<projectPath>/.pipilot/diary.md`. Powers the Yesterday Card and
+  // the Dormant Project Whisper on the welcome tab.
+  diary: {
+    write: (projectPath, entry) => ipcRenderer.invoke('diary:write', { projectPath, entry }),
+    read: (projectPath, limit) => ipcRenderer.invoke('diary:read', { projectPath, limit }),
+  },
   recentProjects: {
     get: () => ipcRenderer.invoke('app:recent-projects:get'),
     add: (p) => ipcRenderer.invoke('app:recent-projects:add', p),
@@ -184,6 +203,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   devServer: {
     start: (p, cmd) => ipcRenderer.invoke('devserver:start', { projectPath: p, cmd }),
     stop: (id) => ipcRenderer.invoke('devserver:stop', id),
+    stopAll: () => ipcRenderer.invoke('devserver:stop-all'),
     status: (id) => ipcRenderer.invoke('devserver:status', id),
     list: () => ipcRenderer.invoke('devserver:list'),
     detectType: (p) => ipcRenderer.invoke('devserver:detect-type', { projectPath: p }),
@@ -227,6 +247,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     toggle: (id, enabled) => ipcRenderer.invoke('extensions:toggle', { id, enabled }),
     load: (id) => ipcRenderer.invoke('extensions:load', { id }),
     loadAll: () => ipcRenderer.invoke('extensions:load-all'),
+    listBuiltins: () => ipcRenderer.invoke('extensions:list-builtins'),
+    loadBuiltins: (enabledIds) => ipcRenderer.invoke('extensions:load-builtins', { enabledIds }),
   },
 
   // ---------- Extension Database (SQLite) ----------
@@ -304,6 +326,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     get: (key) => ipcRenderer.invoke('settings:get', key),
     set: (key, value) => ipcRenderer.invoke('settings:set', { key, value }),
     all: () => ipcRenderer.invoke('settings:all'),
+    onChanged: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('settings:changed', fn);
+      return () => ipcRenderer.removeListener('settings:changed', fn);
+    },
   },
 
   // ---------- Shell ----------

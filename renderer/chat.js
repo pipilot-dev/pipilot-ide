@@ -836,15 +836,25 @@
   background: rgba(138,138,148,0.04);
 }
 .thinking-seq-head:hover { background: rgba(138,138,148,0.08); }
-.thinking-seq-icon { font-size: 14px; }
+.thinking-seq-icon { display: inline-flex; color: var(--accent); }
 .thinking-seq-label { font-family: var(--font-mono); font-size: 10px; font-weight: 500; }
 .thinking-seq-chevron { margin-left: auto; font-size: 10px; color: var(--text-faint); transition: transform 0.15s; }
 .thinking-seq-card.expanded .thinking-seq-chevron { transform: rotate(90deg); }
 .thinking-seq-body {
   padding: 8px 12px; border-top: 1px solid var(--border);
-  font-size: 12px; color: var(--text-mid); white-space: pre-wrap;
-  max-height: 200px; overflow-y: auto; display: none;
+  font-size: 12px; color: var(--text-mid);
+  max-height: 300px; overflow-y: auto; display: none;
+  line-height: 1.5;
 }
+.thinking-seq-body p { margin: 4px 0; }
+.thinking-seq-body ul, .thinking-seq-body ol { margin: 4px 0; padding-left: 20px; }
+.thinking-seq-body li { margin: 2px 0; }
+.thinking-seq-body code { background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+.thinking-seq-body pre { background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; overflow-x: auto; margin: 6px 0; }
+.thinking-seq-body pre code { background: none; padding: 0; }
+.thinking-seq-body strong { color: var(--text); }
+.thinking-seq-body h1, .thinking-seq-body h2, .thinking-seq-body h3 { font-size: 12px; font-weight: 600; color: var(--text); margin: 6px 0 2px; }
+.thinking-seq-body blockquote { border-left: 2px solid var(--accent); padding-left: 8px; margin: 4px 0; color: var(--text-dim); }
 .thinking-seq-card.expanded .thinking-seq-body { display: block; }
 
 /* ── Terminal Command Card ───────────────────────────────────────────── */
@@ -1178,6 +1188,9 @@
   const modeBtn = document.getElementById('chat-mode-btn');
   const modeLabelEl = document.getElementById('chat-mode-label');
   const modeDropdown = document.getElementById('chat-mode-dropdown');
+  const effortBtn = document.getElementById('chat-effort-btn');
+  const effortLabelEl = document.getElementById('chat-effort-label');
+  const effortDropdown = document.getElementById('chat-effort-dropdown');
   const clearBtn = document.getElementById('chat-clear');
   const scrollFab = document.getElementById('chat-scroll-fab');
   const compactIndicator = document.getElementById('chat-compact-indicator');
@@ -1301,7 +1314,7 @@
 
   // Render Mermaid diagrams in code blocks
   function renderMermaidBlocks(root) {
-    if (!window.mermaid) return;
+    if (!window.mermaid || !window.PiPilot?.mermaidSafe) return;
     root.querySelectorAll('pre code.language-mermaid, pre code.language-mmd').forEach(code => {
       const pre = code.closest('pre');
       if (!pre || pre.dataset.mermaidRendered) return;
@@ -1310,13 +1323,14 @@
       if (!src.trim()) return;
       const container = document.createElement('div');
       container.className = 'mermaid-container';
-      const id = 'mmd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-      try {
-        window.mermaid.render(id, src).then(({ svg }) => {
-          container.innerHTML = svg;
-          pre.replaceWith(container);
-        }).catch(() => { /* leave as code block */ });
-      } catch { /* leave as code block */ }
+      pre.replaceWith(container);
+      // Defensive renderer — invalid mermaid never paints into the doc;
+      // we get back either an SVG element or a styled error note.
+      window.PiPilot.mermaidSafe.renderInto(container, src, 'chat-mmd').then(node => {
+        if (node && node.tagName === 'svg' && window.PiPilot?.diagramExport?.attachExportMenu) {
+          window.PiPilot.diagramExport.attachExportMenu(node, 'chat-diagram');
+        }
+      });
     });
   }
 
@@ -1503,13 +1517,40 @@
       const resendBtn = document.createElement('button');
       resendBtn.className = 'msg-edit-send';
       resendBtn.textContent = 'Resend';
-      resendBtn.addEventListener('click', (e) => {
+      resendBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const newText = editArea.value.trim();
         if (!newText) return;
-        // Dim this message
-        wrap.style.opacity = '0.4';
-        // Send as new message
+
+        // Abort any in-flight agent run that was responding to the old prompt,
+        // otherwise sendMessage() would just queue the new text.
+        if (activeStream && activeStream.stop) {
+          try { activeStream.stop(); } catch {}
+        }
+        isSending = false;
+        setSending(false);
+        bus.emit('agent:status', 'ready');
+
+        // Drop the edited message + everything after it from IndexedDB. The DB
+        // helper uses strictly-greater comparison, so subtract 1ms to include
+        // the edited message itself.
+        const ts = Number(wrap.dataset.timestamp);
+        if (ts && chatDB && currentSessionId) {
+          try { await chatDB.deleteMessagesAfter(currentSessionId, ts - 1); } catch {}
+        }
+
+        // Remove the edited message + every DOM node after it (including any
+        // partially-streamed assistant reply to the old prompt).
+        const allMsgs = Array.from(messagesEl.children);
+        let hit = false;
+        for (const node of allMsgs) {
+          if (node === wrap) hit = true;
+          if (hit) node.remove();
+        }
+        currentAssistantEl = null;
+        currentAssistantBlocks = [];
+
+        // Send the edited text as a fresh message.
         inputEl.value = newText;
         sendMessage();
       });
@@ -1686,16 +1727,55 @@
 
   function appendAssistantText(text) {
     const wrap = ensureAssistantMessage();
+    // Strip <reasoning>...</reasoning> regions and stream them into the CoT
+    // panel; only the surrounding non-reasoning prose hits the markdown body.
+    const cleanText = feedReasoningParser(wrap, text);
+    if (cleanText) writeCleanTextToBody(wrap, cleanText);
+    scrollToBottom();
+  }
+
+  function writeCleanTextToBody(wrap, cleanText) {
+    if (!cleanText) return;
     const body = getActiveBody(wrap);
-    body.dataset.text = (body.dataset.text || '') + text;
+    body.dataset.text = (body.dataset.text || '') + cleanText;
     body.innerHTML = renderMarkdown(body.dataset.text);
     attachCopyButtons(body);
     attachFileDeepLinks(body);
     wrapOverflowingContent(body);
     renderMermaidBlocks(body);
-    // Accumulate block for IndexedDB
-    currentAssistantBlocks.push({ type: 'text', text: text });
-    scrollToBottom();
+    currentAssistantBlocks.push({ type: 'text', text: cleanText });
+  }
+
+  // Drain any chars the reasoning parser has been holding back (waiting on
+  // a possible partial tag) into the visible message body. Called when a
+  // non-text event arrives so trailing text doesn't get stuck mid-word.
+  function flushBufferedTextToBody() {
+    if (!currentAssistantEl) return;
+    const leftover = flushReasoningParser(currentAssistantEl);
+    if (leftover) writeCleanTextToBody(currentAssistantEl, leftover);
+  }
+
+  // Stream-end safeguard. If the model wrapped its ENTIRE response inside
+  // <reasoning> and never closed it (or closed it but emitted no other
+  // text), the chat body would be empty — leaving the user staring at
+  // just a "Reasoning" card and a DONE badge with no actual answer.
+  // Detect that case here and rescue the response: close the reasoning
+  // step and copy its accumulated content into the visible message body.
+  function rescueUnclosedReasoning() {
+    const wrap = currentAssistantEl;
+    if (!wrap) return;
+    const stillInReasoning = !!wrap._inReasoning;
+    const accum = (wrap._reasoningAccum || '').trim();
+    // Close any dangling reasoning step first.
+    if (stillInReasoning) finalizeReasoningStep(wrap);
+    // If the visible body has any meaningful text already, we're fine.
+    const body = wrap.querySelector('.md-body');
+    const bodyText = (body && body.dataset && body.dataset.text || '').trim();
+    if (bodyText.length >= 5) return;
+    // No visible response but we DO have reasoning content — promote it.
+    if (accum) {
+      writeCleanTextToBody(wrap, accum);
+    }
   }
 
   // ---------- Tool metadata: icon + preview extractor per canonical SDK tool name ----------
@@ -1751,7 +1831,8 @@
     get_diagnostics: 'Diagnostics', project_context: 'Project Context',
     update_project_context: 'Update Context', frontend_design_guide: 'Design Guide',
     search_codebase: 'Search Codebase', screenshot_preview: 'Screenshot',
-    generate_image: 'Generate Image',
+    generate_image: 'Generate Image', project_memory: 'Memory',
+    edit_file_patch: 'Patch File', fetch_url: 'Fetch URL', run_code: 'Run Code',
   };
 
   // Accent colors per tool (matching Vite)
@@ -1759,7 +1840,8 @@
     get_diagnostics: 'var(--error)', project_context: 'var(--info)',
     update_project_context: 'var(--info)', frontend_design_guide: '#b392f0',
     search_codebase: 'var(--accent)', screenshot_preview: '#56d4dd',
-    generate_image: '#56d4dd',
+    generate_image: '#56d4dd', project_memory: '#ffd787',
+    edit_file_patch: 'var(--accent)', fetch_url: 'var(--info)', run_code: 'var(--ok)',
     Read: 'var(--info)', Glob: 'var(--info)', Grep: 'var(--info)', WebSearch: 'var(--info)',
     Write: 'var(--ok)', Edit: 'var(--accent)', MultiEdit: 'var(--accent)',
     Bash: 'var(--text-mid)', run_in_terminal: 'var(--text-mid)',
@@ -1792,19 +1874,21 @@
   // ── Path sanitization (matches Vite) ──
   function sanitizePath(p) {
     if (!p || typeof p !== 'string') return '';
-    // Normalize separators
-    let s = p.replace(/\\/g, '/');
+    // Normalize: backslashes → forward, collapse double/triple slashes, trim
+    let s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/').trim();
+    // Strip drive letter duplications like C:/C:/ or /C:/
+    s = s.replace(/^\/?[A-Za-z]:\/[A-Za-z]:\//, m => m.slice(m.indexOf(':') + 1));
     // Strip project path prefix to show relative paths
-    const pp = (window.PiPilot?.state?.projectPath || '').replace(/\\/g, '/');
+    const pp = (window.PiPilot?.state?.projectPath || '').replace(/\\/g, '/').replace(/\/{2,}/g, '/');
     if (pp && s.startsWith(pp + '/')) s = s.slice(pp.length + 1);
-    if (pp && s.startsWith(pp)) s = s.slice(pp.length);
-    // Remove leading ./
-    s = s.replace(/^\.\//, '');
+    else if (pp && s.startsWith(pp)) s = s.slice(pp.length);
+    // Remove leading / or ./
+    s = s.replace(/^\.?\//, '');
     return s;
   }
 
   // File tool detection (for clickable deep links)
-  const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'read_file', 'edit_file', 'create_file', 'write_file', 'delete_file']);
+  const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'read_file', 'edit_file', 'create_file', 'write_file', 'delete_file', 'edit_file_patch']);
 
   // File path detection in text (for deep linking in markdown)
   const FILE_PATH_RE = /^(?:\.?\/?)?(?:[\w@.-]+\/)*[\w@.-]+\.\w{1,10}$/;
@@ -1832,7 +1916,7 @@
   function previewFor(name, input) {
     if (!input || typeof input !== 'object') return '';
     const n = normalizeToolName(name);
-    const filePath = input.file_path || input.path;
+    const filePath = input.file_path || input.filepath || input.path;
     // File tools — show sanitized path
     if (FILE_TOOLS.has(n) || FILE_TOOLS.has(name)) {
       if (filePath) return sanitizePath(filePath);
@@ -1840,10 +1924,14 @@
     // PiPilot custom tools — show meaningful previews
     if (n === 'get_diagnostics') return input.source ? `source: ${input.source}` : 'all checks';
     if (n === 'search_codebase') return input.query ? `"${input.query}"` : '';
-    if (n === 'frontend_design_guide') return input.action || 'read';
+    if (n === 'frontend_design_guide') return input.action || 'scan';
     if (n === 'screenshot_preview') return input.url || '';
     if (n === 'generate_image') return input.description ? input.description.slice(0, 50) : '';
     if (n === 'project_context' || n === 'update_project_context') return 'scan project';
+    if (n === 'project_memory') return input.action === 'save' ? `save: ${input.key || ''}` : (input.action || 'read');
+    if (n === 'edit_file_patch') return input.filepath ? sanitizePath(input.filepath) : '';
+    if (n === 'fetch_url') return input.url ? input.url.replace(/^https?:\/\//, '').slice(0, 60) : '';
+    if (n === 'run_code') return input.language ? `${input.language}` : '';
     // Bash — show $ command (Vite style)
     if (name === 'Bash' || name === 'BashOutput') {
       const cmd = input.command || input.bash_id || '';
@@ -1873,7 +1961,7 @@
   function getDeepLinkPath(name, input) {
     if (!input) return null;
     const n = normalizeToolName(name);
-    const filePath = input.file_path || input.path;
+    const filePath = input.file_path || input.filepath || input.path;
     if ((FILE_TOOLS.has(n) || FILE_TOOLS.has(name)) && filePath) return filePath;
     return null;
   }
@@ -2055,9 +2143,16 @@
     return frag;
   }
 
+  // Strip ANSI escape codes from terminal output
+  function stripAnsi(str) {
+    return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\].*?\x07/g, '').replace(/[\x00-\x08\x0e-\x1f]/g, '');
+  }
+
   function renderToolOutput(name, content, isError) {
     const frag = document.createDocumentFragment();
-    const text = typeof content === 'string' ? content : (content == null ? '' : JSON.stringify(content));
+    let text = typeof content === 'string' ? content : (content == null ? '' : JSON.stringify(content));
+    // Clean ANSI codes from all tool output
+    text = stripAnsi(text);
 
     if (isError) {
       const sec = document.createElement('div');
@@ -2222,34 +2317,18 @@
     const isSeqThinking = isSequentialThinking(call.name);
     const isTerminal = call.name === 'run_in_terminal';
 
-    // Feature #10: Sequential thinking cards
+    // Sequential-thinking tool → add as a step in the ChainOfThought block
     if (isSeqThinking) {
       sequentialThinkingCount++;
-      const card = document.createElement('div');
-      card.className = 'thinking-seq-card';
-      card.dataset.toolId = call.id;
       const totalSteps = (call.input && call.input.totalThoughts) || '?';
       const stepNum = (call.input && call.input.thoughtNumber) || sequentialThinkingCount;
-      const head = document.createElement('div');
-      head.className = 'thinking-seq-head';
-      head.innerHTML = `
-        <span class="thinking-seq-icon">&#128173;</span>
-        <span class="thinking-seq-label">Thinking ${stepNum}/${totalSteps}</span>
-        <span class="thinking-seq-chevron">&#9656;</span>
-      `;
-      const body = document.createElement('div');
-      body.className = 'thinking-seq-body';
-      body.textContent = (call.input && call.input.thought) || '';
-      card.appendChild(head);
-      card.appendChild(body);
-      head.addEventListener('click', () => {
-        card.classList.toggle('expanded');
+      const thoughtText = (call.input && call.input.thought) || '';
+      addCotStep(wrap, {
+        iconName: 'brain',
+        label: `Thinking ${stepNum}/${totalSteps}`,
+        descriptionHTML: renderMarkdown(thoughtText),
+        toolId: call.id,
       });
-      const bw = getBodyWrap(wrap);
-      const streamEl = bw.querySelector('.msg-streaming-indicator');
-      if (streamEl) bw.insertBefore(card, streamEl);
-      else bw.appendChild(card);
-      // Accumulate block
       currentAssistantBlocks.push({ type: 'tool_call', id: call.id, name: call.name, input: call.input });
       scrollToBottom();
       return;
@@ -2481,10 +2560,10 @@
   function markToolResult(toolUseId, content, isError) {
     if (!currentAssistantEl) return;
 
-    // Handle sequential thinking cards
-    const seqCard = currentAssistantEl.querySelector(`.thinking-seq-card[data-tool-id="${CSS.escape(toolUseId)}"]`);
-    if (seqCard) {
-      // Just mark it done, no special output needed
+    // Handle sequential thinking — now rendered as a CoT step
+    const seqStep = currentAssistantEl.querySelector(`.cot-step[data-tool-id="${CSS.escape(toolUseId)}"]`);
+    if (seqStep) {
+      seqStep.dataset.status = isError ? 'pending' : 'complete';
       currentAssistantBlocks.push({ type: 'tool_result', toolUseId, content, isError });
       return;
     }
@@ -2600,15 +2679,206 @@
     } catch {}
   }
 
-  function appendThinking(text) {
-    const wrap = ensureAssistantMessage();
+  // ── ChainOfThought helpers ───────────────────────────────────────
+  // One CoT block per assistant turn; each thinking/sequential-thinking
+  // event becomes a step inside it. Prior step is flipped to "complete"
+  // when the next step arrives.
+  // Each reasoning event gets its OWN inline CoT card — same flow as tool
+  // pills. We never reuse a single big card across an assistant turn, so
+  // multi-stage reasoning reads as a sequence of compact pills in the
+  // message stream rather than one giant grouped panel.
+  function createCotCard(wrap, headerLabel) {
+    if (!window.ChainOfThought) return null;
     const bw = getBodyWrap(wrap);
     const streamEl = bw.querySelector('.msg-streaming-indicator');
-    const card = document.createElement('div');
-    card.className = 'thinking-card';
-    card.textContent = text;
-    if (streamEl) bw.insertBefore(card, streamEl);
-    else bw.appendChild(card);
+    const root = ChainOfThought.create({ open: false });
+    ChainOfThought.header(root, headerLabel || 'Reasoning');
+    const content = ChainOfThought.content(root);
+    // Per-card user-toggle flag — auto-open/close on stream boundaries
+    // respects this card's manual state without affecting sibling cards.
+    root.addEventListener('cot:toggle', () => { root.dataset.userToggled = 'true'; });
+    if (streamEl) bw.insertBefore(root, streamEl);
+    else bw.appendChild(root);
+    return { root, content };
+  }
+
+  // ── <reasoning> inline-tag streaming parser ──────────────────────
+  // The agent can wrap reasoning in <reasoning>...</reasoning>. We slice
+  // those regions out of the streamed text and route them into a single
+  // live Chain-of-Thought step that updates token-by-token. Edge cases
+  // handled: tags split across chunks (we hold a small tail buffer),
+  // multiple reasoning blocks per response, missing close tag (left
+  // open until next start or message end). Code-fence detection is
+  // intentionally skipped — a literal "<reasoning>" inside a fenced
+  // code block will trigger; tell the agent to escape it if needed.
+  const REAS_OPEN = '<reasoning>';
+  const REAS_CLOSE = '</reasoning>';
+
+  function setCardOpen(root, open) {
+    if (!root || root.dataset.userToggled === 'true') return;
+    root.dataset.open = String(open);
+    const btn = root.querySelector('.cot-header');
+    if (btn) btn.setAttribute('aria-expanded', String(open));
+  }
+
+  function startReasoningStep(wrap) {
+    wrap._inReasoning = true;
+    wrap._reasoningAccum = '';
+    // Empty step label — the card header already says "Reasoning" with a
+    // brain icon, so an inner label would just duplicate it visually.
+    const step = addCotStep(wrap, { iconName: 'brain', label: '', cardLabel: 'Reasoning' });
+    if (!step) return;
+    wrap._reasoningStep = step;
+    wrap._reasoningRoot = step._cardRoot || null;
+    // Reuse / create the description element so live chunks land in one place.
+    let descEl = step.body.querySelector('.cot-step-description');
+    if (!descEl) {
+      descEl = document.createElement('div');
+      descEl.className = 'cot-step-description';
+      step.body.appendChild(descEl);
+    }
+    descEl.classList.add('md-body');
+    wrap._reasoningDescEl = descEl;
+    setCardOpen(wrap._reasoningRoot, true);
+  }
+
+  function appendReasoningChunk(wrap, text) {
+    if (!text) return;
+    wrap._reasoningAccum = (wrap._reasoningAccum || '') + text;
+    if (!wrap._reasoningDescEl) return;
+    // Render reasoning as markdown so headings, bullets, tables, code blocks,
+    // and inline code light up exactly like assistant text. Re-rendering on
+    // every chunk is fine — partial markdown (mid-fence, mid-list) is what
+    // the main message body does too, and it self-corrects as more text
+    // arrives. Mark this region so attached helpers (copy buttons, mermaid)
+    // can run on the same nodes the main body uses.
+    wrap._reasoningDescEl.classList.add('md-body');
+    wrap._reasoningDescEl.dataset.text = wrap._reasoningAccum;
+    wrap._reasoningDescEl.innerHTML = renderMarkdown(wrap._reasoningAccum);
+    try {
+      attachCopyButtons(wrap._reasoningDescEl);
+      wrapOverflowingContent(wrap._reasoningDescEl);
+    } catch {}
+  }
+
+  function finalizeReasoningStep(wrap) {
+    wrap._inReasoning = false;
+    if (wrap._reasoningStep && wrap._reasoningStep.setStatus) {
+      wrap._reasoningStep.setStatus('complete');
+    }
+    // Persist as a thinking block so history reload renders it via the
+    // existing thinking-block code path (no special-case needed there).
+    const acc = (wrap._reasoningAccum || '').trim();
+    if (acc) currentAssistantBlocks.push({ type: 'thinking', text: acc });
+    setCardOpen(wrap._reasoningRoot, false);
+    wrap._reasoningStep = null;
+    wrap._reasoningRoot = null;
+    wrap._reasoningDescEl = null;
+    wrap._reasoningAccum = '';
+  }
+
+  // Feed one streamed text chunk through the parser. Returns the portion
+  // of the chunk that's outside any <reasoning> region — caller renders
+  // that as normal markdown.
+  // Compute how many trailing chars of `buf` could be the start of `tag`.
+  // Returns 0 unless the tail matches a prefix of `tag`. This prevents
+  // ordinary text ending in characters like "wor" from being held hostage
+  // for the next chunk — only true partial-tag tails are buffered.
+  function tailMatchLen(buf, tag) {
+    const max = Math.min(tag.length - 1, buf.length);
+    for (let n = max; n > 0; n--) {
+      if (buf.endsWith(tag.slice(0, n))) return n;
+    }
+    return 0;
+  }
+
+  function feedReasoningParser(wrap, chunk) {
+    let buf = (wrap._reasonBuf || '') + (chunk || '');
+    let cleanOut = '';
+    while (buf.length > 0) {
+      if (wrap._inReasoning) {
+        const idx = buf.indexOf(REAS_CLOSE);
+        if (idx >= 0) {
+          appendReasoningChunk(wrap, buf.slice(0, idx));
+          finalizeReasoningStep(wrap);
+          buf = buf.slice(idx + REAS_CLOSE.length);
+          continue;
+        }
+        const hold = tailMatchLen(buf, REAS_CLOSE);
+        const safe = buf.length - hold;
+        if (safe > 0) {
+          appendReasoningChunk(wrap, buf.slice(0, safe));
+          buf = buf.slice(safe);
+        }
+        break;
+      } else {
+        const idx = buf.indexOf(REAS_OPEN);
+        if (idx >= 0) {
+          cleanOut += buf.slice(0, idx);
+          buf = buf.slice(idx + REAS_OPEN.length);
+          startReasoningStep(wrap);
+          continue;
+        }
+        const hold = tailMatchLen(buf, REAS_OPEN);
+        const safe = buf.length - hold;
+        if (safe > 0) {
+          cleanOut += buf.slice(0, safe);
+          buf = buf.slice(safe);
+        }
+        break;
+      }
+    }
+    wrap._reasonBuf = buf;
+    return cleanOut;
+  }
+
+  // Flush any held-back tail to the appropriate destination. Call this
+  // when a non-text event arrives (tool call, completion, error) so the
+  // text that was waiting on a possible partial tag actually displays.
+  function flushReasoningParser(wrap) {
+    const buf = wrap._reasonBuf;
+    if (!buf) return '';
+    wrap._reasonBuf = '';
+    if (wrap._inReasoning) {
+      // Inside a reasoning block — push the leftover to the live step.
+      appendReasoningChunk(wrap, buf);
+      return '';
+    }
+    return buf;
+  }
+
+  function addCotStep(wrap, opts) {
+    // One inline card per call (matches tool-pill cadence).
+    const card = createCotCard(wrap, opts.cardLabel || 'Reasoning');
+    if (!card) return null;
+    const s = ChainOfThought.step(card.content, {
+      iconName: opts.iconName || 'brain',
+      label: opts.label || '',
+      status: 'active',
+    });
+    if (opts.descriptionHTML) {
+      const md = document.createElement('div');
+      md.className = 'cot-step-description md-body';
+      md.innerHTML = opts.descriptionHTML;
+      s.body.appendChild(md);
+    } else if (opts.descriptionText) {
+      const pre = document.createElement('div');
+      pre.className = 'cot-step-description';
+      pre.textContent = opts.descriptionText;
+      s.body.appendChild(pre);
+    }
+    if (opts.toolId) s.element.dataset.toolId = opts.toolId;
+    s._cardRoot = card.root;
+    return s;
+  }
+
+  function appendThinking(text) {
+    const wrap = ensureAssistantMessage();
+    addCotStep(wrap, {
+      iconName: 'brain',
+      label: 'Reasoning',
+      descriptionText: text,
+    });
     currentAssistantBlocks.push({ type: 'thinking', text });
     scrollToBottom();
   }
@@ -2641,11 +2911,13 @@
   }
 
   function appendHistoryThinking(wrap, text) {
-    const bw = wrap.querySelector('.msg-body-wrap') || wrap;
-    const card = document.createElement('div');
-    card.className = 'thinking-card';
-    card.textContent = text || '';
-    bw.appendChild(card);
+    // Reuse the same CoT helpers as live rendering so history looks identical.
+    const step = addCotStep(wrap, {
+      iconName: 'brain',
+      label: 'Reasoning',
+      descriptionText: text || '',
+    });
+    if (step && step.setStatus) step.setStatus('complete');
   }
 
   function appendHistoryToolCall(wrap, call) {
@@ -2655,28 +2927,19 @@
     const input = call?.input;
     const parentToolUseId = call?.parentToolUseId || call?.parent_tool_use_id || call?.parent || null;
 
-    // Sequential thinking tool calls (render as collapsible card)
+    // Sequential-thinking tool calls → add as a step in the CoT block
     if (isSequentialThinking(name)) {
       sequentialThinkingCount++;
-      const card = document.createElement('div');
-      card.className = 'thinking-seq-card expanded';
-      card.dataset.toolId = id;
       const totalSteps = (input && input.totalThoughts) || '?';
       const stepNum = (input && input.thoughtNumber) || sequentialThinkingCount;
-      const head = document.createElement('div');
-      head.className = 'thinking-seq-head';
-      head.innerHTML = `
-        <span class="thinking-seq-icon">&#128173;</span>
-        <span class="thinking-seq-label">Thinking ${stepNum}/${totalSteps}</span>
-        <span class="thinking-seq-chevron">&#9656;</span>
-      `;
-      const body = document.createElement('div');
-      body.className = 'thinking-seq-body';
-      body.textContent = (input && (input.thought || input.text)) || '';
-      card.appendChild(head);
-      card.appendChild(body);
-      head.addEventListener('click', () => card.classList.toggle('expanded'));
-      bw.appendChild(card);
+      const histThought = (input && (input.thought || input.text)) || '';
+      const step = addCotStep(wrap, {
+        iconName: 'brain',
+        label: `Thinking ${stepNum}/${totalSteps}`,
+        descriptionHTML: renderMarkdown(histThought),
+        toolId: id,
+      });
+      if (step && step.setStatus) step.setStatus('complete');
       return;
     }
 
@@ -3079,6 +3342,7 @@
         metadata: {
           attachments: sentAttachments || [],
           mode: state.agentMode,
+          effort: state.reasoningEffort || 'medium',
         },
       });
       await chatDB.updateSession(currentSessionId, {});
@@ -3538,11 +3802,69 @@
       const isOpen = !modeDropdown.classList.contains('hidden');
       // Close session dropdown
       if (sessionDropdown) sessionDropdown.classList.add('hidden');
+      if (effortDropdown) effortDropdown.classList.add('hidden');
       modeDropdown.classList.toggle('hidden', isOpen);
       if (!isOpen) renderModeDropdown();
     });
   }
   setMode('agent');
+
+  // ---------- Reasoning effort selector ----------
+  // Five levels — none < low < medium (default) < high < xhigh.
+  // Sent with each agent run; main process injects effort-specific prompt.
+  const EFFORT_LEVELS = [
+    { id: 'none',   label: 'None',    blurb: 'Just act. No thinking.' },
+    { id: 'low',    label: 'Low',     blurb: 'Brief reasoning on hard choices only.' },
+    { id: 'medium', label: 'Medium',  blurb: 'Reason on complex problems. (default)' },
+    { id: 'high',   label: 'High',    blurb: 'Reason before most non-trivial actions.' },
+    { id: 'xhigh',  label: 'X-High',  blurb: 'Deep structured reasoning on every task.' },
+  ];
+  const EFFORT_KEY = 'pipilot:reasoning-effort';
+
+  function setEffort(id) {
+    const lvl = EFFORT_LEVELS.find(l => l.id === id) || EFFORT_LEVELS[2];
+    state.reasoningEffort = lvl.id;
+    if (effortLabelEl) effortLabelEl.textContent = lvl.label;
+    // Visual cue: high+ get the accent color so the user sees they've opted into heavier thinking.
+    if (effortBtn) {
+      effortBtn.classList.toggle('effort-elevated', lvl.id === 'high' || lvl.id === 'xhigh');
+      effortBtn.classList.toggle('effort-muted', lvl.id === 'none');
+    }
+    try { localStorage.setItem(EFFORT_KEY, lvl.id); } catch {}
+  }
+
+  function renderEffortDropdown() {
+    if (!effortDropdown) return;
+    effortDropdown.innerHTML = EFFORT_LEVELS.map(l => `
+      <div class="dropdown-item ${state.reasoningEffort === l.id ? 'active' : ''}" data-effort="${l.id}">
+        <div>
+          <div style="font-weight:600;font-size:11px;">${l.label}</div>
+          <div style="font-size:9px;color:var(--text-dim);">${l.blurb}</div>
+        </div>
+      </div>
+    `).join('');
+    effortDropdown.querySelectorAll('.dropdown-item[data-effort]').forEach(item => {
+      item.addEventListener('click', () => {
+        setEffort(item.dataset.effort);
+        effortDropdown.classList.add('hidden');
+        renderEffortDropdown();
+      });
+    });
+  }
+
+  if (effortBtn) {
+    effortBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = !effortDropdown.classList.contains('hidden');
+      if (sessionDropdown) sessionDropdown.classList.add('hidden');
+      if (modeDropdown) modeDropdown.classList.add('hidden');
+      effortDropdown.classList.toggle('hidden', isOpen);
+      if (!isOpen) renderEffortDropdown();
+    });
+  }
+  // Restore last selection or default to medium.
+  try { setEffort(localStorage.getItem(EFFORT_KEY) || 'medium'); }
+  catch { setEffort('medium'); }
 
   // ---------- Sessions (Feature #1) ----------
   async function renderSessionDropdown() {
@@ -3657,6 +3979,10 @@
         !modeDropdown.contains(e.target) && e.target !== modeBtn && !modeBtn?.contains(e.target)) {
       modeDropdown.classList.add('hidden');
     }
+    if (effortDropdown && !effortDropdown.classList.contains('hidden') &&
+        !effortDropdown.contains(e.target) && e.target !== effortBtn && !effortBtn?.contains(e.target)) {
+      effortDropdown.classList.add('hidden');
+    }
   });
 
   async function newSession() {
@@ -3759,7 +4085,12 @@
   function addHistoryActions(container, textGetter, opts = {}) {
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
-    const wrap = container.closest('.msg');
+    // Look up the .msg ancestor LAZILY — at call sites the container is
+    // sometimes not yet attached to its parent, so doing this eagerly
+    // returns null and every click handler silently no-ops. Resolving on
+    // each click guarantees we get the real ancestor by the time the user
+    // can actually click anything.
+    const getWrap = () => container.closest('.msg');
 
     // Copy
     const copyBtn = document.createElement('button');
@@ -3777,7 +4108,10 @@
     });
     actions.appendChild(copyBtn);
 
-    // Edit & resend (user messages only)
+    // Edit & resend (user messages only) — opens the same inline editor
+    // live messages get, with Cancel/Resend. On Resend we drop this user
+    // message + everything after it from IDB and the DOM, then send the
+    // edited text. Mirrors the live-message dblclick flow.
     if (opts.isUser) {
       const editBtn = document.createElement('button');
       editBtn.className = 'msg-action-btn';
@@ -3785,9 +4119,67 @@
       editBtn.innerHTML = H_EDIT;
       editBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        const wrap = getWrap();
+        if (!wrap) return;
+        const bubble = wrap.querySelector('.msg-bubble');
+        if (!bubble || bubble.querySelector('.msg-edit-area')) return;
         const text = textGetter();
-        const input = document.getElementById('chat-input');
-        if (input) { input.value = text; input.focus(); }
+        bubble.innerHTML = '';
+        const editArea = document.createElement('textarea');
+        editArea.className = 'msg-edit-area';
+        editArea.value = text;
+        editArea.rows = Math.min(Math.max(text.split('\n').length, 2), 8);
+        bubble.appendChild(editArea);
+        const editBar = document.createElement('div');
+        editBar.className = 'msg-edit-bar';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'msg-edit-cancel';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          bubble.innerHTML = '';
+          bubble.textContent = text;
+        });
+        const resendBtn = document.createElement('button');
+        resendBtn.className = 'msg-edit-send';
+        resendBtn.textContent = 'Resend';
+        resendBtn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          const newText = editArea.value.trim();
+          if (!newText) return;
+          // Stop any in-flight stream so sendMessage doesn't queue.
+          if (activeStream && activeStream.stop) {
+            try { activeStream.stop(); } catch {}
+          }
+          isSending = false;
+          setSending(false);
+          bus.emit('agent:status', 'ready');
+          // Drop this message + everything after it from IDB.
+          const ts = Number(wrap.dataset.timestamp);
+          if (ts && chatDB && currentSessionId) {
+            try { await chatDB.deleteMessagesAfter(currentSessionId, ts - 1); } catch {}
+          }
+          // Remove this + all later DOM nodes.
+          const allMsgs = Array.from(messagesEl.children);
+          let hit = false;
+          for (const node of allMsgs) {
+            if (node === wrap) hit = true;
+            if (hit) node.remove();
+          }
+          currentAssistantEl = null;
+          currentAssistantBlocks = [];
+          // Send the edited text fresh.
+          if (inputEl) inputEl.value = newText;
+          sendMessage();
+        });
+        editBar.appendChild(cancelBtn);
+        editBar.appendChild(resendBtn);
+        bubble.appendChild(editBar);
+        editArea.focus();
+        editArea.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); resendBtn.click(); }
+          if (ev.key === 'Escape') cancelBtn.click();
+        });
       });
       actions.appendChild(editBtn);
     }
@@ -3801,6 +4193,7 @@
       revertBtn.innerHTML = H_REVERT;
       revertBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
+        const wrap = getWrap();
         if (!wrap) return;
 
         // Find the checkpoint ID stamped on this user message
@@ -3854,9 +4247,25 @@
     deleteBtn.className = 'msg-action-btn msg-action-delete';
     deleteBtn.title = 'Delete message';
     deleteBtn.innerHTML = H_DELETE;
-    deleteBtn.addEventListener('click', (e) => {
+    deleteBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      if (wrap) { wrap.style.transition = 'opacity 0.2s'; wrap.style.opacity = '0'; setTimeout(() => wrap.remove(), 200); }
+      const wrap = getWrap();
+      if (!wrap) return;
+      // Persist the deletion — IndexedDB is the source of truth on session
+      // reload. Without this, deleting a message just hides it for this
+      // tab and it reappears next time the session loads. chatDB.deleteMessage
+      // takes the message id, not (session,timestamp) — so look it up by ts.
+      const ts = Number(wrap.dataset.timestamp);
+      if (ts && chatDB && currentSessionId) {
+        try {
+          const msgs = await chatDB.getMessages(currentSessionId);
+          const target = msgs.find(m => Number(m.timestamp) === ts);
+          if (target && target.id) await chatDB.deleteMessage(target.id);
+        } catch {}
+      }
+      wrap.style.transition = 'opacity 0.2s';
+      wrap.style.opacity = '0';
+      setTimeout(() => wrap.remove(), 200);
     });
     actions.appendChild(deleteBtn);
 
@@ -4037,6 +4446,9 @@
     if (sendBtn) sendBtn.classList.toggle('hidden', sending);
     if (stopBtn) stopBtn.classList.toggle('hidden', !sending);
     bus.emit('agent:status', sending ? 'thinking' : 'ready');
+    // Tell the main process so it can hold/release the powerSaveBlocker
+    // and update the tray indicator.
+    try { api.background?.setAgentActive?.(sending); } catch {}
     const dot = document.getElementById('compose-dot');
     const label = document.getElementById('compose-label');
     const sendHint = document.getElementById('compose-send-hint');
@@ -4539,19 +4951,8 @@
       }).catch(() => {});
     }
 
-    // Get history context from IndexedDB to inject into prompt
-    let historyContext = '';
-    try {
-      if (chatDB && currentSessionId) {
-        historyContext = await chatDB.getHistoryContext(currentSessionId, 3, 400);
-      }
-    } catch {}
-
-    // Build the message to send — include history context + file attachment instructions
+    // History context is injected server-side by ipc-agent.js from _pipilot_history.json
     let messageToSend = text;
-    if (historyContext) {
-      messageToSend = `[Previous conversation context]\n${historyContext}\n\n[Current message]\n${text}`;
-    }
     // If files are attached, append read instructions so the agent knows to look at them
     if (sentAttachments.length > 0) {
       const fileLines = sentAttachments.map(a => {
@@ -4568,9 +4969,68 @@
       projectPath: state.projectPath,
       message: messageToSend,
       mode: state.agentMode,
+      effort: state.reasoningEffort || 'medium',
       attachments: sentAttachments,
     }, (evt) => {
       handleAgentEvent(evt);
+    });
+  }
+
+  // Detect file-mutating tool calls in the just-finished turn. We only
+  // trigger the wiki updater for source-file writes — skip lockfiles,
+  // tests, generated assets, and anything inside .pipilot/wikis/ (the
+  // wiki agent's own writes must not re-trigger itself).
+  const WIKI_WRITE_TOOLS = new Set([
+    'Write', 'Edit', 'MultiEdit', 'create_file',
+    'mcp__pipilot__edit_file_patch',
+    'mcp__pipilot__write_file',
+  ]);
+  const WIKI_SKIP_RE = /(\.test\.|\.spec\.|__tests__|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|\.min\.|node_modules|\.pipilot[\\/](wikis|sessions|memory)|\.git[\\/])/i;
+
+  function collectChangedFiles(blocks) {
+    const files = new Set();
+    for (const b of blocks || []) {
+      if (b?.type !== 'tool_call') continue;
+      const baseName = (b.name || '').replace(/^mcp__pipilot__/, '');
+      if (!WIKI_WRITE_TOOLS.has(b.name) && !WIKI_WRITE_TOOLS.has(baseName)) continue;
+      const inp = b.input || {};
+      const candidate = inp.file_path || inp.path || inp.target_file || inp.filePath;
+      if (typeof candidate === 'string' && candidate && !WIKI_SKIP_RE.test(candidate)) {
+        files.add(candidate);
+      }
+      // MultiEdit: { file_path, edits: [...] }
+      if (Array.isArray(inp.files)) {
+        for (const f of inp.files) {
+          const p = typeof f === 'string' ? f : (f?.path || f?.file_path);
+          if (typeof p === 'string' && p && !WIKI_SKIP_RE.test(p)) files.add(p);
+        }
+      }
+    }
+    return Array.from(files);
+  }
+
+  function lastAssistantTextSummary(blocks) {
+    for (let i = (blocks?.length || 0) - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+        return b.text.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim().slice(0, 1200);
+      }
+    }
+    return '';
+  }
+
+  function maybeQueueWikiUpdate(resultEvt) {
+    if (!resultEvt || resultEvt.subtype === 'aborted' || resultEvt.subtype === 'error') return;
+    if (state.agentMode === 'plan') return;
+    if (!state.projectPath) return;
+    const changed = collectChangedFiles(currentAssistantBlocks);
+    if (!changed.length) return;
+    const summary = lastAssistantTextSummary(currentAssistantBlocks);
+    bus.emit('wiki:auto-update', {
+      projectPath: state.projectPath,
+      changedFiles: changed,
+      summary,
+      timestamp: Date.now(),
     });
   }
 
@@ -4599,6 +5059,9 @@
       case 'tool_progress':
         updateToolProgress(evt.toolUseId, evt.elapsedSeconds);
         break;
+      case 'wiki_generating':
+        bus.emit('wiki:generating', evt.generating);
+        break;
       case 'text':
         appendAssistantText(evt.text || '');
         break;
@@ -4611,7 +5074,10 @@
       case 'thinking_delta':
         break;
       case 'tool_call':
-        // Handle special tool calls
+        // Flush any text held back by the <reasoning> parser before drawing
+        // the tool pill — otherwise the trailing chars of the prior text
+        // chunk (e.g. "wor" from "working") stay buffered and never display.
+        flushBufferedTextToBody();
         if (evt.name === 'TodoWrite') {
           try {
             const input = evt.input || {};
@@ -4658,6 +5124,7 @@
         appendThinking(evt.text || '');
         break;
       case 'error':
+        flushBufferedTextToBody();
         appendError(evt.message || 'Unknown error');
         isSending = false;
         setSending(false);
@@ -4672,7 +5139,10 @@
         setTimeout(drainQueue, 500);
         break;
       case 'result':
+        flushBufferedTextToBody();
+        rescueUnclosedReasoning();
         finalizeResult(evt);
+        bus.emit('wiki:generating', false); // clear wiki generating state
         isSending = false;
         setSending(false);
         if (activeStream && activeStream.dispose) activeStream.dispose();
@@ -4680,6 +5150,9 @@
         hideAskDialog();
         saveConversation();
         currentAssistantEl = null;
+        // Trigger background wiki auto-update if the agent made meaningful
+        // file changes this turn. Skipped for plan mode and aborted runs.
+        try { maybeQueueWikiUpdate(evt); } catch (e) { console.warn('[wiki-auto] queue failed', e); }
         // Auto-drain queue
         setTimeout(drainQueue, 500);
         break;
@@ -5089,7 +5562,123 @@
     await newSession();
   });
 
-  bus.on('project:closed', () => {
+  // Generate a creative "what we did today" diary summary via the a0 LLM.
+  // Context budget: ~30k chars input (≈ 7-8k tokens, well under the 10k
+  // context window). Output capped to 1000 tokens via maxTokens. Falls
+  // back to a deterministic concatenation if the API call fails.
+  const A0_DIARY_URL = 'https://api.a0.dev/ai/llm';
+  async function generateDiarySummary(msgs) {
+    if (!Array.isArray(msgs) || !msgs.length) return null;
+    // Pull a compact transcript: user intents + assistant outcomes only,
+    // skipping tool noise. Keep most recent 14 turns.
+    const transcript = msgs
+      .filter(m => (m.role === 'user' || m.role === 'assistant') && (m.content || '').trim())
+      .slice(-14)
+      .map(m => {
+        const role = m.role === 'user' ? 'User' : 'Agent';
+        const text = String(m.content).replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim();
+        return `${role}: ${text}`;
+      })
+      .join('\n\n')
+      .slice(0, 30000);
+    if (!transcript.trim()) return null;
+    const system = `You are a developer's session journaler. From a chat transcript, write a SHORT, vivid 2-3 sentence diary entry capturing:
+- what was worked on (which file/feature)
+- what was achieved or attempted
+- where the user left off (next step or blocker)
+
+Voice: first person plural ("we tried…"), warm but precise. No fluff, no greetings, no markdown headers, no bullet points — just plain prose. Max 3 sentences. Don't quote the user verbatim — paraphrase.`;
+    try {
+      const res = await fetch(A0_DIARY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: transcript },
+          ],
+          maxTokens: 1000,
+          max_tokens: 1000,
+          temperature: 0.7,
+        }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const out = (data?.completion || data?.content || data?.text || '').trim();
+      // Strip surrounding quotes / fences if the model adds them.
+      return out.replace(/^["'`]+|["'`]+$/g, '').replace(/^```[a-z]*\s*|\s*```$/g, '').trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function fallbackDiarySummary(msgs) {
+    const lastUser = msgs.slice().reverse().find(m => m.role === 'user');
+    const lastAsst = msgs.slice().reverse().find(m => m.role === 'assistant' && m.content);
+    const prompt = lastUser?.content?.trim().slice(0, 160) || '';
+    const summary = lastAsst?.content?.trim().slice(0, 220) || '';
+    const lines = [];
+    if (prompt) lines.push('Last prompt: ' + prompt.replace(/\n+/g, ' '));
+    if (summary) lines.push('Agent summary: ' + summary.replace(/\n+/g, ' '));
+    return lines.join(' ') || 'Project closed.';
+  }
+
+  bus.on('project:closed', (payload) => {
+    // Resumption diary: write a brief "what we did" entry before the
+    // project unloads, so the next time it's opened the welcome tab can
+    // show a Yesterday Card. The summary itself is generated by the a0
+    // creative LLM (10k context, 1k tokens out), with a deterministic
+    // local fallback when the network is unavailable.
+    //
+    // Source of truth: chatDB (persisted IndexedDB rows) for the active
+    // session — the previous version read a stale `messages` variable
+    // that was never populated, so the diary never wrote anything.
+    const projectPath = payload?.path || state.projectPath;
+    const sessionId = currentSessionId;
+    if (projectPath && api.diary?.write && chatDB?.getMessages && sessionId) {
+      // Fire-and-forget — must run BEFORE we clear sessionId below.
+      (async () => {
+        let rows = [];
+        try { rows = await chatDB.getMessages(sessionId) || []; } catch {}
+        // Reduce to a clean role/content shape the generator + fallback expect.
+        const snapshot = rows
+          .filter(r => r && (r.role === 'user' || r.role === 'assistant'))
+          .map(r => {
+            let content = r.content || '';
+            // Reconstruct content from blocks if the row only stored blocks.
+            if (!content && Array.isArray(r.blocks)) {
+              content = r.blocks
+                .filter(b => b && b.type === 'text' && b.text)
+                .map(b => b.text)
+                .join('\n')
+                .trim();
+            }
+            return { role: r.role, content, ts: r.timestamp };
+          })
+          .filter(m => m.content && m.content.trim());
+        if (!snapshot.length) {
+          console.log('[diary] skipped — no messages in session', sessionId);
+          return;
+        }
+        const aiSummary = await generateDiarySummary(snapshot);
+        const summary = aiSummary || fallbackDiarySummary(snapshot);
+        try {
+          const r = await api.diary.write(projectPath, {
+            summary,
+            at: Date.now(),
+            meta: { turns: snapshot.length, session: sessionId, source: aiSummary ? 'a0' : 'local' },
+          });
+          console.log('[diary] wrote entry', r);
+        } catch (err) {
+          console.warn('[diary] write failed:', err);
+        }
+      })();
+    } else {
+      console.log('[diary] skipped — missing prerequisites', {
+        hasProject: !!projectPath, hasApi: !!api.diary?.write, hasDB: !!chatDB?.getMessages, hasSession: !!sessionId,
+      });
+    }
+
     if (activeStream && activeStream.stop) activeStream.stop();
     activeStream = null;
     currentSessionId = null;
@@ -5206,6 +5795,227 @@
     if (chatCtxMenu) { chatCtxMenu.remove(); chatCtxMenu = null; }
   }
 
+  // ─── Session transcript builder ─────────────────────────────────────
+  // Walks the messages container in DOM order and produces a portable
+  // markdown document that mirrors what the user sees in the chat panel:
+  // text + tool pills (with paths/args/descriptions) + reasoning blocks
+  // + sub-agent cards + result footers, all interleaved in original
+  // order. Anyone can read this and reconstruct exactly what happened.
+
+  function _trimMultiline(s, maxLines, maxChars) {
+    if (!s) return '';
+    let out = String(s);
+    if (out.length > maxChars) out = out.slice(0, maxChars) + ' …(truncated)';
+    const lines = out.split('\n');
+    if (lines.length > maxLines) out = lines.slice(0, maxLines).join('\n') + `\n…(${lines.length - maxLines} more lines)`;
+    return out;
+  }
+
+  function _detectFenceLang(toolName) {
+    const t = String(toolName || '').toLowerCase();
+    if (t === 'bash' || t === 'run_in_terminal') return 'bash';
+    if (t.includes('json')) return 'json';
+    return '';
+  }
+
+  function _formatToolPill(pill) {
+    const name = pill.dataset.toolName || pill.querySelector('.tool-pill-label')?.textContent?.trim() || 'Tool';
+    const summary = pill.querySelector('.tool-pill-summary')?.textContent?.trim() || '';
+    const bashDesc = pill.querySelector('.tool-pill-bash-desc')?.textContent?.trim() || '';
+    const argsStr = pill.querySelector('.tool-pill-pre')?.textContent?.trim() || '';
+    const isError = pill.classList.contains('error');
+    const isMcp = pill.classList.contains('kind-mcp');
+    const status = isError ? '🔴' : (isMcp ? '🔌' : '🔧');
+
+    // Try to parse args JSON so we can pretty-render specific fields.
+    let args = null;
+    if (argsStr && argsStr !== '{}') {
+      try { args = JSON.parse(argsStr); } catch {}
+    }
+
+    const parts = [];
+    // Header line — prioritises the most meaningful preview per tool.
+    if (bashDesc) {
+      parts.push(`**${status} ${name}** — ${bashDesc}`);
+    } else if (summary) {
+      parts.push(`**${status} ${name}** \`${summary}\``);
+    } else {
+      parts.push(`**${status} ${name}**`);
+    }
+
+    // Body — choose what to inline based on tool kind.
+    if (args) {
+      const lname = name.toLowerCase();
+      // Bash command: show full command on its own line
+      if (lname === 'bash' || lname === 'run_in_terminal') {
+        if (args.command) {
+          parts.push('```bash\n$ ' + _trimMultiline(args.command, 12, 1200) + '\n```');
+        }
+      }
+      // File ops: show path + relevant content
+      else if (lname === 'read' || lname === 'view' || lname === 'glob' || lname === 'grep') {
+        if (args.file_path && !summary.includes(args.file_path)) parts.push('Path: `' + args.file_path + '`');
+        if (args.pattern) parts.push('Pattern: `' + args.pattern + '`');
+        if (args.path && !args.file_path) parts.push('Path: `' + args.path + '`');
+      }
+      else if (lname === 'write') {
+        if (args.file_path) parts.push('Wrote: `' + args.file_path + '`');
+        if (args.content) {
+          const fence = (args.file_path || '').split('.').pop();
+          parts.push('```' + (fence || '') + '\n' + _trimMultiline(args.content, 30, 2400) + '\n```');
+        }
+      }
+      else if (lname === 'edit' || lname === 'multiedit' || lname === 'edit_file_patch') {
+        if (args.file_path) parts.push('Edited: `' + args.file_path + '`');
+        if (args.old_string && args.new_string) {
+          parts.push('```diff\n- ' + _trimMultiline(args.old_string, 12, 600).split('\n').join('\n- ')
+                   + '\n+ ' + _trimMultiline(args.new_string, 12, 600).split('\n').join('\n+ ') + '\n```');
+        } else if (args.searchReplaceBlock) {
+          parts.push('```\n' + _trimMultiline(args.searchReplaceBlock, 24, 1600) + '\n```');
+        }
+      }
+      else if (lname === 'websearch' || lname === 'web_search') {
+        if (args.query) parts.push('Query: `' + args.query + '`');
+      }
+      else if (lname === 'webfetch' || lname === 'fetch_url') {
+        if (args.url) parts.push('URL: ' + args.url);
+      }
+      else if (lname === 'todowrite') {
+        if (Array.isArray(args.todos)) {
+          for (const t of args.todos) {
+            const mark = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]';
+            parts.push(`- ${mark} ${t.content || t.description || ''}`);
+          }
+        }
+      }
+      // Generic fallback: dump the args as compact JSON (small ones only)
+      else if (Object.keys(args).length && JSON.stringify(args).length < 400) {
+        const lang = _detectFenceLang(name);
+        parts.push('```' + (lang || 'json') + '\n' + JSON.stringify(args, null, 2) + '\n```');
+      }
+    }
+    return parts.join('\n');
+  }
+
+  function _formatSubagent(card) {
+    const name = card.dataset.toolName || card.querySelector('.subagent-desc')?.textContent?.trim() || 'subagent';
+    const status = card.querySelector('.subagent-status-text')?.textContent?.trim() || '';
+    const desc = card.querySelector('.subagent-desc')?.textContent?.trim() || '';
+    const lines = [`**🤖 Sub-agent** \`${name}\``];
+    if (desc && desc !== name) lines.push('Task: ' + desc);
+    if (status) lines.push('Status: ' + status);
+    return lines.join('\n');
+  }
+
+  function _formatReasoning(node) {
+    // Support both legacy (.thinking-card / .thinking-seq-card) and the
+    // new chain-of-thought UI (.cot with one or more .cot-step).
+    if (node.classList.contains('cot')) {
+      const steps = node.querySelectorAll('.cot-step');
+      if (!steps.length) return '';
+      const blocks = [];
+      steps.forEach((step) => {
+        const label = step.querySelector('.cot-step-label')?.textContent?.trim() || '';
+        const desc = step.querySelector('.cot-step-description')?.innerText?.trim() || '';
+        const text = [label, desc].filter(Boolean).join(' — ');
+        if (text) blocks.push(text);
+      });
+      if (!blocks.length) return '';
+      return '<details>\n<summary>🧠 Reasoning</summary>\n\n' + blocks.join('\n\n') + '\n\n</details>';
+    }
+    const text = (node.querySelector('.thinking-seq-body')?.innerText
+              || node.innerText || '').trim();
+    if (!text) return '';
+    return '<details>\n<summary>🧠 Thinking</summary>\n\n' + text + '\n\n</details>';
+  }
+
+  function _formatFooter(footer) {
+    const txt = footer.innerText.replace(/\s+/g, ' ').trim();
+    return txt ? '*' + txt + '*' : '';
+  }
+
+  function _formatAssistantMessage(wrap) {
+    const bodyWrap = wrap.querySelector('.msg-body-wrap') || wrap;
+    const out = [];
+    for (const node of bodyWrap.children) {
+      if (!node || !(node instanceof HTMLElement)) continue;
+      // Streaming indicator — skip (it's a UI artifact)
+      if (node.classList.contains('msg-streaming-indicator')) continue;
+      // Text body
+      if (node.classList.contains('md-body')) {
+        const text = (node.dataset?.text || node.innerText || '').trim();
+        if (text) out.push(text);
+        continue;
+      }
+      // Tool pills
+      if (node.classList.contains('tool-pill')) {
+        const m = _formatToolPill(node);
+        if (m) out.push(m);
+        continue;
+      }
+      // Sub-agent cards
+      if (node.classList.contains('subagent-card')) {
+        const m = _formatSubagent(node);
+        if (m) out.push(m);
+        continue;
+      }
+      // Reasoning (legacy + new CoT)
+      if (node.classList.contains('thinking-card') || node.classList.contains('thinking-seq-card') || node.classList.contains('cot')) {
+        const m = _formatReasoning(node);
+        if (m) out.push(m);
+        continue;
+      }
+      // Footer (cost / turns / duration)
+      if (node.classList.contains('msg-footer')) {
+        const m = _formatFooter(node);
+        if (m) out.push(m);
+        continue;
+      }
+      // Anything else — try to grab innerText so nothing is lost silently
+      const fallback = (node.innerText || '').trim();
+      if (fallback) out.push(fallback);
+    }
+    return out.join('\n\n');
+  }
+
+  function _formatUserMessage(wrap) {
+    const bubble = wrap.querySelector('.msg-bubble');
+    const text = (bubble?.dataset?.fullText || bubble?.textContent || '').trim();
+    return text ? '> ' + text.split('\n').join('\n> ') : '';
+  }
+
+  function buildSessionTranscript({ heading = true } = {}) {
+    if (!messagesEl) return '';
+    const parts = [];
+    if (heading) {
+      const project = state.projectPath ? state.projectPath.split(/[\\/]/).pop() : 'session';
+      parts.push(`# PiPilot Session — ${project}`);
+      parts.push(`*Exported ${new Date().toLocaleString()}*`);
+      if (state.projectPath) parts.push(`*Project path: \`${state.projectPath}\`*`);
+      if (currentSessionId) parts.push(`*Session id: \`${currentSessionId}\`*`);
+      parts.push('---');
+    }
+    let i = 0;
+    for (const msg of messagesEl.children) {
+      if (!msg.classList) continue;
+      const isUser = msg.classList.contains('msg-user');
+      const isAsst = msg.classList.contains('msg-assistant');
+      if (!isUser && !isAsst) continue;
+      i++;
+      if (isUser) {
+        parts.push(`## 🧑 You — turn ${i}`);
+        parts.push(_formatUserMessage(msg));
+      } else {
+        parts.push(`## 🤖 Agent — turn ${i}`);
+        parts.push(_formatAssistantMessage(msg));
+      }
+      parts.push('---');
+    }
+    // Drop trailing separator
+    if (parts[parts.length - 1] === '---') parts.pop();
+    return parts.join('\n\n').replace(/\n{4,}/g, '\n\n\n') + '\n';
+  }
+
   function buildChatExportJSON() {
     const allEls = messagesEl ? Array.from(messagesEl.children) : [];
     const exported = [];
@@ -5215,18 +6025,53 @@
         const time = el.querySelector('.msg-time');
         exported.push({ role: 'user', content: bubble?.textContent || '', timestamp: time?.textContent || '' });
       } else if (el.classList.contains('msg-assistant')) {
-        const bodies = el.querySelectorAll('.md-body');
-        let text = '';
-        bodies.forEach(b => { text += (b.dataset?.text || b.innerText || '') + '\n'; });
+        // Walk in DOM order so the export preserves the live interleaving
+        // of text + tool calls + reasoning + sub-agent activity.
+        const bodyWrap = el.querySelector('.msg-body-wrap') || el;
+        const blocks = [];
+        for (const node of bodyWrap.children) {
+          if (!node || !(node instanceof HTMLElement)) continue;
+          if (node.classList.contains('md-body')) {
+            const text = (node.dataset?.text || node.innerText || '').trim();
+            if (text) blocks.push({ type: 'text', text });
+          } else if (node.classList.contains('tool-pill')) {
+            const argsStr = node.querySelector('.tool-pill-pre')?.textContent?.trim() || '';
+            let input = null;
+            try { input = argsStr ? JSON.parse(argsStr) : null; } catch {}
+            blocks.push({
+              type: 'tool_call',
+              name: node.dataset.toolName || '',
+              id: node.dataset.toolId || '',
+              status: node.classList.contains('error') ? 'error' : (node.classList.contains('running') ? 'running' : 'success'),
+              summary: node.querySelector('.tool-pill-summary')?.textContent?.trim() || '',
+              description: node.querySelector('.tool-pill-bash-desc')?.textContent?.trim() || '',
+              input,
+              result: node.querySelector('.tool-pill-result-wrap')?.innerText?.trim().slice(0, 4000) || '',
+            });
+          } else if (node.classList.contains('subagent-card')) {
+            blocks.push({
+              type: 'subagent',
+              name: node.dataset.toolName || '',
+              description: node.querySelector('.subagent-desc')?.textContent?.trim() || '',
+              status: node.querySelector('.subagent-status-text')?.textContent?.trim() || '',
+            });
+          } else if (node.classList.contains('cot') || node.classList.contains('thinking-card') || node.classList.contains('thinking-seq-card')) {
+            blocks.push({ type: 'reasoning', text: node.innerText?.trim() || '' });
+          } else if (node.classList.contains('msg-footer')) {
+            blocks.push({ type: 'footer', text: node.innerText?.replace(/\s+/g, ' ').trim() });
+          }
+        }
         const time = el.querySelector('.msg-time');
-        const tools = [];
-        el.querySelectorAll('.tool-pill').forEach(p => {
-          tools.push({ name: p.dataset.toolName || '', id: p.dataset.toolId || '' });
-        });
-        exported.push({ role: 'assistant', content: text.trim(), tools, timestamp: time?.textContent || '' });
+        exported.push({ role: 'assistant', blocks, timestamp: time?.textContent || '' });
       }
     }
-    return { session: currentSessionId, project: state.projectPath, exportedAt: new Date().toISOString(), messages: exported };
+    return {
+      session: currentSessionId,
+      project: state.projectPath,
+      exportedAt: new Date().toISOString(),
+      schemaVersion: 2,
+      messages: exported,
+    };
   }
 
   function showChatCtxMenu(x, y) {
@@ -5239,16 +6084,8 @@
       { type: 'sep' },
       ...(hasSelection ? [{ label: 'Copy Selection', icon: '⎘', action: () => { try { navigator.clipboard.writeText(window.getSelection().toString()); } catch {} } }] : []),
       { label: 'Copy All Messages', icon: '⎘', disabled: !hasMessages, action: () => {
-        const allText = Array.from(messagesEl.children).map(el => {
-          if (el.classList.contains('msg-user')) return '> ' + (el.querySelector('.msg-bubble')?.textContent || '');
-          if (el.classList.contains('msg-assistant')) {
-            const bodies = el.querySelectorAll('.md-body');
-            let t = ''; bodies.forEach(b => { t += (b.dataset?.text || b.innerText || '') + '\n'; });
-            return t.trim();
-          }
-          return '';
-        }).filter(Boolean).join('\n\n');
-        try { navigator.clipboard.writeText(allText); bus.emit('toast:show', { message: 'Copied all messages', type: 'ok' }); } catch {}
+        const allText = buildSessionTranscript({ heading: false });
+        try { navigator.clipboard.writeText(allText); bus.emit('toast:show', { message: 'Copied transcript (' + allText.length + ' chars)', type: 'ok' }); } catch {}
       }},
       { type: 'sep' },
       { label: 'Export Chat as JSON', icon: '↓', disabled: !hasMessages, action: () => {
@@ -5263,19 +6100,8 @@
         bus.emit('toast:show', { message: 'Chat exported', type: 'ok' });
       }},
       { label: 'Export Chat as Markdown', icon: '↓', disabled: !hasMessages, action: () => {
-        const lines = Array.from(messagesEl.children).map(el => {
-          if (el.classList.contains('msg-user')) {
-            const t = el.querySelector('.msg-bubble')?.textContent || '';
-            return `## User\n\n${t}`;
-          }
-          if (el.classList.contains('msg-assistant')) {
-            const bodies = el.querySelectorAll('.md-body');
-            let t = ''; bodies.forEach(b => { t += (b.dataset?.text || b.innerText || '') + '\n'; });
-            return `## Assistant\n\n${t.trim()}`;
-          }
-          return '';
-        }).filter(Boolean).join('\n\n---\n\n');
-        const blob = new Blob([lines], { type: 'text/markdown' });
+        const text = buildSessionTranscript({ heading: true });
+        const blob = new Blob([text], { type: 'text/markdown' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -5338,8 +6164,15 @@
 
   // Register on chat panel
   chatPanel?.addEventListener('contextmenu', (e) => {
-    // Don't override context menu on inputs/textareas
+    // Don't override context menu on inputs/textareas — they need
+    // the native cut/copy/paste menu.
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    // Defer to the diagram-export menu when right-clicking on rendered
+    // mermaid SVGs (or any other inline SVG). Belt-and-suspenders next
+    // to the SVG handler's own e.stopPropagation() — covers the brief
+    // race where the SVG's listener hasn't attached yet because mermaid
+    // is still rendering asynchronously.
+    if (e.target.closest('svg')) return;
     e.preventDefault();
     showChatCtxMenu(e.clientX, e.clientY);
   });

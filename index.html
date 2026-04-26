@@ -13,6 +13,68 @@
   <link rel="stylesheet" href="styles/layout.css" />
   <link rel="stylesheet" href="styles/components.css" />
   <link rel="stylesheet" href="styles/editor.css" />
+  <link rel="stylesheet" href="styles/chain-of-thought.css" />
+  <style>
+    /* Map ChainOfThought design tokens onto the IDE's dark palette so
+       reasoning blocks blend with the surrounding chat UI. Typography is
+       left to the component's own stylesheet to match the reference design. */
+    :root {
+      --cot-background: transparent;
+      --cot-foreground: var(--text);
+      --cot-muted: rgba(138,138,148,0.08);
+      --cot-muted-foreground: var(--text-dim);
+      --cot-border: var(--border);
+      --cot-popover-foreground: var(--text);
+      --cot-secondary: rgba(138,138,148,0.12);
+      --cot-secondary-foreground: var(--text);
+    }
+    /* Plain-text reasoning (extended thinking) wraps naturally with line breaks. */
+    .cot-step-description { white-space: pre-wrap; }
+    /* Active step pulse uses the IDE accent so it's visible on dark bg. */
+    .cot-step[data-status="active"] { color: var(--accent); }
+
+    /* Tighter spacing inside markdown-rendered reasoning. The default
+       .md-body rules (used by the chat body) leave 8px between paragraphs
+       which feels cavernous in the smaller CoT context — squeeze it. */
+    .cot-step-description.md-body { white-space: normal; font-size: 12px; line-height: 1.45; }
+    .cot-step-description.md-body p { margin: 0 0 4px; }
+    .cot-step-description.md-body p:last-child { margin-bottom: 0; }
+    .cot-step-description.md-body ul,
+    .cot-step-description.md-body ol { margin: 2px 0 4px; padding-left: 18px; }
+    .cot-step-description.md-body li { margin: 0; line-height: 1.4; }
+    .cot-step-description.md-body h1,
+    .cot-step-description.md-body h2,
+    .cot-step-description.md-body h3 { margin: 6px 0 2px; font-size: 12px; }
+    .cot-step-description.md-body pre { margin: 4px 0; padding: 6px 8px; font-size: 11px; }
+    .cot-step-description.md-body code:not(pre code) { font-size: 11px; padding: 0 3px; }
+    .cot-step-description.md-body table { margin: 4px 0; font-size: 11px; }
+    .cot-step-description.md-body blockquote { margin: 4px 0; padding-left: 6px; }
+    /* Reasoning steps also tighten their own gap so list items don't
+       get stacked with extra cot-step-body gap on top of <p> margins. */
+    .cot-step-body { gap: 2px; }
+
+    /* Wrap the CoT in a tool-pill-style card: matching border, radius, and
+       vertical gap so it sits in the message stream like any other tool pill.
+       Tighter inner gap when collapsed so the header alone looks compact. */
+    .cot {
+      margin: 8px 0;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: transparent;
+      transition: background 0.2s ease, border-color 0.2s ease;
+    }
+    .cot:hover { background: rgba(16,16,21,0.5); }
+    .cot[data-open="false"] { padding: 6px 10px; }
+    /* Header's own hover is now redundant with the card hover — drop it. */
+    .cot-header:hover { color: var(--text); }
+
+    /* Reasoning-effort selector visual cues. Elevated levels (high/xhigh)
+       get the accent color so users see they've opted into heavier thinking;
+       "none" is muted to signal the agent will skip reasoning entirely. */
+    .compose-mode-btn.effort-elevated { color: var(--accent); border-color: rgba(255,107,53,0.35); }
+    .compose-mode-btn.effort-muted { opacity: 0.55; }
+  </style>
 </head>
 <body>
   <!-- Welcome screen (shown when no project is open) -->
@@ -321,6 +383,14 @@
               </button>
               <div id="chat-mode-dropdown" class="compose-mode-dropup hidden"></div>
             </div>
+            <div class="compose-mode-wrap" id="compose-effort-wrap">
+              <button class="compose-mode-btn" id="chat-effort-btn" title="Reasoning effort — how hard the AI thinks before acting">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px;"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/></svg>
+                <span id="chat-effort-label">Medium</span>
+                <span class="chevron-down" style="font-size:8px;margin-left:2px;">&#9652;</span>
+              </button>
+              <div id="chat-effort-dropdown" class="compose-mode-dropup hidden"></div>
+            </div>
             <div class="spacer"></div>
             <button class="btn-send-round" id="chat-send" title="Send (Enter)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
@@ -384,6 +454,17 @@
   <script src="renderer/panels.js"></script>
   <script src="renderer/ace-editor.js"></script>
   <script src="renderer/ace-ai.js"></script>
+  <script src="renderer/ace-extras.js"></script>
+  <script src="renderer/wrap-limit.js"></script>
+  <script src="renderer/diagram-export.js"></script>
+  <script src="renderer/mermaid-safe.js"></script>
+  <script src="renderer/pdf-export.js"></script>
+  <script src="renderer/wiki-auto-update.js"></script>
+  <script src="renderer/docs/profiles.js"></script>
+  <script src="renderer/docs/codestral-client.js"></script>
+  <script src="renderer/docs/resolver.js"></script>
+  <script src="renderer/docs/hover.js"></script>
+  <script src="renderer/minimap.js"></script>
   <script src="renderer/welcome-tab.js"></script>
   <script src="renderer/preview.js"></script>
   <script src="renderer/dual-mode.js"></script>
@@ -392,6 +473,7 @@
   <script src="renderer/terminal.js"></script>
   <script src="renderer/chatdb.js"></script>
   <script src="renderer/ext-db.js"></script>
+  <script src="renderer/chain-of-thought.js"></script>
   <script src="renderer/chat.js"></script>
   <script src="renderer/welcome.js"></script>
   <script src="renderer/shortcuts.js"></script>

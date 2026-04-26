@@ -9,13 +9,24 @@ const DEFAULTS = {
   fontFamily: 'JetBrains Mono',
   cursorStyle: 'line',
   tabSize: 2,
-  wordWrap: 'off',
+  wordWrap: 'on',
   minimap: true,
   lineNumbers: true,
   formatOnSave: false,
   terminalFontSize: 13,
   terminalProfile: null,
   agentDefaultMode: 'agent',
+  // Built-in extensions (always shipped, user-toggleable). Defaults: all on.
+  builtinWordCount: true,
+  builtinJsdoc: true,
+  builtinColorPreview: true,
+  builtinFileSizeIndicator: true,
+  builtinAutoCloseTag: true,
+  builtinApiPlayground: true,
+  builtinDependencyGraph: true,
+  // Auto-update wiki docs after agent completes a meaningful change
+  autoUpdateWiki: true,
+  autoUpdateWikiCooldownMs: 5 * 60 * 1000,
 };
 
 module.exports = function register(ipcMain, ctx) {
@@ -27,7 +38,21 @@ module.exports = function register(ipcMain, ctx) {
   async function readAll() {
     try {
       const raw = await fsp.readFile(settingsFile, 'utf8');
-      return { ...DEFAULTS, ...JSON.parse(raw) };
+      const merged = { ...DEFAULTS, ...JSON.parse(raw) };
+      // One-shot migration: the original default was wordWrap: 'off', which
+      // most users never actively chose. Flip it to 'on' the first time we
+      // see an old settings file, then mark it migrated so we never touch
+      // an explicitly-toggled value again.
+      const migrations = merged.__migrations || {};
+      let dirty = false;
+      if (!migrations.wordWrapDefaultOn) {
+        if (merged.wordWrap === 'off') merged.wordWrap = 'on';
+        migrations.wordWrapDefaultOn = true;
+        merged.__migrations = migrations;
+        dirty = true;
+      }
+      if (dirty) { try { await writeAll(merged); } catch {} }
+      return merged;
     } catch {
       return { ...DEFAULTS };
     }

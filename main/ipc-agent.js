@@ -35,6 +35,25 @@ module.exports = function register(ipcMain, ctx) {
     const { z } = require('zod');
 
     return [
+      sdk.tool('get_working_directory',
+        'Authoritative project root. Returns the absolute path (with native OS separators), platform, path separator, and a top-level file listing. ALWAYS call this FIRST on every task — never guess paths like /home/, /workspace/, /c/, /codepilot/, /tmp/, and never run `pwd && ls -la` for orientation. Use the returned path verbatim as the prefix for every file tool call.',
+        {},
+        async () => {
+          try {
+            const r = await ideTools.getWorkingDirectory();
+            const lines = [
+              r.summary,
+              '',
+              `path: ${r.path}`,
+              `platform: ${r.platform}`,
+              `pathSeparator: ${JSON.stringify(r.pathSeparator)}`,
+              `exists: ${r.exists}`,
+              `topLevel: ${r.files.join(', ') || '(empty)'}`,
+            ];
+            return { content: [{ type: 'text', text: lines.join('\n') }] };
+          } catch (e) { return { content: [{ type: 'text', text: `Error: ${e.message}` }] }; }
+        }
+      ),
       sdk.tool('get_diagnostics',
         'Run the IDE diagnostics engine on the current project. Returns TypeScript/JSON errors and warnings. Use after changes to verify correctness.',
         { source: z.enum(['all', 'typescript', 'json']).default('all').describe('Which checker to run') },
@@ -70,14 +89,79 @@ module.exports = function register(ipcMain, ctx) {
         }
       ),
       sdk.tool('frontend_design_guide',
-        'Manage the design system file at .pipilot/design.md. ALWAYS read this before doing any UI/frontend work. Actions: "read" to get current design tokens, "scan" to extract from CSS/Tailwind and generate, "write" to save a custom design spec.',
-        { action: z.enum(['read', 'scan', 'write']).describe('Action to perform'), content: z.string().optional().describe('Content to write (only for write action)') },
+        'Manage project design system. Workflow: "scan" first (check existing design.md + CSS tokens), if none exists call "load" (get design skill guide), then "write" (save your design system). ALWAYS do this before any UI work.',
+        { action: z.enum(['scan', 'load', 'write']).describe('scan=check existing, load=get design guide, write=save design system'), content: z.string().optional().describe('Design system content (for write action)') },
         async (args) => {
           try {
             const result = await ideTools.frontendDesignGuide(args);
             if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }] };
             return { content: [{ type: 'text', text: result.content || JSON.stringify(result, null, 2) }] };
           } catch (e) { return { content: [{ type: 'text', text: `Error: ${e.message}` }] }; }
+        }
+      ),
+      sdk.tool('project_memory',
+        'Persistent project memory — save/read/delete notes that persist across sessions. Use to remember decisions, architecture, preferences, tech stack.',
+        {
+          action: z.enum(['read', 'save', 'delete']).describe('Action'),
+          key: z.string().optional().describe('Memory key (for save/delete)'),
+          value: z.string().optional().describe('Memory value (for save)'),
+        },
+        async (args) => {
+          try {
+            const result = await ideTools.projectMemory(args);
+            if (result.error) return { content: [{ type: 'text', text: result.error }] };
+            if (result.memories) {
+              if (result.memories.length === 0) return { content: [{ type: 'text', text: 'No memories saved yet.' }] };
+              const list = result.memories.map(m => `- **${m.key}**: ${m.value}`).join('\n');
+              return { content: [{ type: 'text', text: `${result.count} memories:\n${list}` }] };
+            }
+            return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+          } catch (e) { return { content: [{ type: 'text', text: `Memory error: ${e.message}` }] }; }
+        }
+      ),
+      sdk.tool('edit_file_patch',
+        'Edit a file using search/replace blocks. Supports multiple edits in one call. Fallback when built-in Edit fails. Format: <<<<<<< SEARCH\\nold code\\n=======\\nnew code\\n>>>>>>> REPLACE',
+        {
+          filepath: z.string().describe('File path'),
+          searchReplaceBlock: z.string().describe('Search/replace block(s) with <<<<<<< SEARCH / ======= / >>>>>>> REPLACE markers'),
+          useRegex: z.boolean().optional().describe('Treat search as regex (default false)'),
+          replaceAll: z.boolean().optional().describe('Replace all occurrences (default false)'),
+        },
+        async (args) => {
+          try {
+            const result = await ideTools.editFilePatch(args);
+            if (!result.success) return { content: [{ type: 'text', text: result.message }], isError: true };
+            return { content: [{ type: 'text', text: result.message }] };
+          } catch (e) { return { content: [{ type: 'text', text: `Patch error: ${e.message}` }], isError: true }; }
+        }
+      ),
+      sdk.tool('fetch_url',
+        'Fetch any URL as clean readable text via Jina Reader. Large results are saved to disk with a preview in context — use Read to see the full content. Use when WebFetch fails or to read docs, blog posts, API references, READMEs, Stack Overflow.',
+        { url: z.string().describe('Full URL to fetch') },
+        async (args) => {
+          const PREVIEW_SIZE = 3000;
+          try {
+            const result = await ideTools.fetchUrl(args);
+            if (result.error) return { content: [{ type: 'text', text: result.error }], isError: true };
+
+            const fullText = result.content;
+            // Small result — return directly
+            if (fullText.length <= PREVIEW_SIZE) {
+              return { content: [{ type: 'text', text: `Fetched ${result.url} (${fullText.length} chars):\n\n${fullText}` }] };
+            }
+
+            // Large result — persist to disk, return preview
+            const os = require('os');
+            const safeName = (args.url || '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+            const fileName = `fetch-${safeName}-${Date.now()}.txt`;
+            const persistDir = path.join(os.tmpdir(), 'pipilot-fetch');
+            fs.mkdirSync(persistDir, { recursive: true });
+            const filePath = path.join(persistDir, fileName);
+            fs.writeFileSync(filePath, fullText, 'utf8');
+
+            const preview = fullText.slice(0, PREVIEW_SIZE);
+            return { content: [{ type: 'text', text: `Fetched ${result.url} (${fullText.length} chars). Full content saved to: ${filePath}\nUse Read tool on that path for complete content.\n\nPreview:\n${preview}\n\n...(truncated)` }] };
+          } catch (e) { return { content: [{ type: 'text', text: `Fetch error: ${e.message}` }], isError: true }; }
         }
       ),
       sdk.tool('search_codebase',
@@ -175,6 +259,7 @@ module.exports = function register(ipcMain, ctx) {
         const raw = fs.readFileSync(path.join(sessionsDir, f), 'utf8');
         const s = JSON.parse(raw);
         if (projectPath && s.projectPath && s.projectPath !== projectPath) continue;
+        if (s.id && String(s.id).startsWith('__wiki__')) continue;
         out.push({
           id: s.id,
           title: s.title || 'Untitled',
@@ -341,8 +426,9 @@ module.exports = function register(ipcMain, ctx) {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  ipcMain.handle('agent:send', async (event, { streamId, sessionId, projectPath, message, mode, attachments }) => {
+  ipcMain.handle('agent:send', async (event, { streamId, sessionId, projectPath, message, mode, effort, attachments, silent, systemPromptOverride, allowedToolsOverride }) => {
     const ch = `agent:event:${streamId}`;
+    const isSilent = !!silent;
 
     let sdk;
     try {
@@ -393,10 +479,13 @@ module.exports = function register(ipcMain, ctx) {
     function appendHistory(entry) {
       if (!historyFile) return;
       try {
-        const h = readHistory();
+        if (entry.role === 'assistant' && entry.content && entry.content.length > 300) {
+          entry.content = entry.content.slice(0, 300) + '...';
+        }
+        let h = readHistory();
         h.push(entry);
+        if (h.length > 40) h = h.slice(-40);
         fs.writeFileSync(historyFile, JSON.stringify(h, null, 2), 'utf8');
-        console.log(`[agent] History appended (${h.length} entries) to ${historyFile}`);
       } catch (err) {
         console.error('[agent] Failed to write history:', err.message);
       }
@@ -409,7 +498,7 @@ module.exports = function register(ipcMain, ctx) {
     }
 
     // Inject recent history as context (last 3 user+assistant pairs)
-    try {
+    if (!isSilent) try {
       const history = readHistory();
       const MAX_PAIRS = 3;
       const MAX_MSG_LEN = 400;
@@ -427,7 +516,7 @@ module.exports = function register(ipcMain, ctx) {
     }
 
     // Save user message to history file
-    appendHistory({ role: 'user', content: String(message || ''), timestamp: new Date().toISOString() });
+    if (!isSilent) appendHistory({ role: 'user', content: String(message || ''), timestamp: new Date().toISOString() });
     console.log(`[agent] Sending prompt (${promptText.length} chars), projectPath=${projectPath}`);
 
     const userEntry = {
@@ -474,11 +563,45 @@ module.exports = function register(ipcMain, ctx) {
       }
     } catch {}
 
-    const buildPrompt = `You are PiPilot Agent building a project in ${workDir}.\n\n${contextBootstrap}\n\n## IDE Tools Available\nYou have access to these IDE-specific tools via MCP:\n- \`get_diagnostics\` — Run TypeScript/JSON checks and return all errors and warnings. Use after changes to verify correctness.\n- \`project_context\` — Scan project structure (framework, deps, entry points, config files, file tree).\n- \`update_project_context\` — Scan and write/update .pipilot/project.md.\n- \`frontend_design_guide\` — Manage design system at .pipilot/design.md. Use "read" before UI work, "scan" to extract tokens from CSS/Tailwind, "write" to save custom design.\n- \`screenshot_preview\` — Capture a screenshot of the running dev server or any URL. Returns PNG image + DOM analysis. Use after UI changes to visually verify the result.\n- \`generate_image\` — Generate an image from a text description using AI. Saves to assets/ folder. Use for hero images, backgrounds, avatars, illustrations. Supports 16:9, 1:1, 9:16 aspect ratios.\n- \`run_code\` — **Compile and run code in 60+ languages online.** Use to test code snippets, verify algorithms, run scripts without local setup. Pass language (e.g. "python", "javascript", "java", "cpp", "go", "rust") and code. Returns stdout, stderr, and execution stats. Great for testing logic before writing to files.\n- \`search_codebase\` — **Your primary tool for understanding any codebase.** Multi-mode search with BM25 semantic ranking. Modes: "semantic" (natural language — "how does auth work?"), "grep" (regex), "files" (fuzzy filename), "symbols" (function/class/export defs), "all" (combined). Returns ranked results with file paths, line numbers, and snippets.\n\n## IMPORTANT: Always Use search_codebase First\n**Before writing ANY code, use \`search_codebase\` to understand the codebase.** This is your most powerful tool.\n\n1. **Start EVERY task** with 2-4 semantic searches to understand the relevant code areas. Example queries: "how does the auth system work", "where are API routes defined", "what components render the dashboard".\n2. **Use mode "semantic"** for natural language questions about architecture, flow, or "how does X work?".\n3. **Use mode "symbols"** when looking for specific functions, classes, or exports.\n4. **Use mode "grep"** for exact text/regex patterns.\n5. **Use mode "files"** to find files by name.\n6. **Use mode "all"** when you want comprehensive results across all search types.\n7. **Prefer \`search_codebase\` over reading files blindly** — it returns the most relevant code sections ranked by relevance, saving you from reading entire files to find what matters.\n8. **On large codebases (100+ files)**, make multiple targeted semantic queries to build understanding before making changes. This prevents bugs from misunderstanding existing patterns.\n9. **Fallback to Grep/Glob** — If semantic search doesn\'t return enough detail, fall back to the SDK\'s built-in Grep and Glob tools for precise file-level searching. Use the search_codebase results to know WHERE to grep — don\'t grep blindly across the whole project.\n10. **Use specific queries, not broad ones** — "how does auth work" beats "project structure tech stack framework". Ask targeted questions: "main entry point", "API routes", "database schema", "error handling", "state management".\n\n## Conversation History\nConversation history is stored in .pipilot/_pipilot_history.json.\nRecent history is injected into your prompt automatically. If the user references prior work, check the history file or scan the project files to understand what was built.\n\n## Rules\n- Never create subfolders for the project (no "my-app/", etc.). Files go in the project root.\n- Read CLAUDE.md if it exists for additional project-specific instructions.\n- ALWAYS maintain design consistency — read .pipilot/design.md before any UI work.\n- Use \`get_diagnostics\` after making significant code changes to catch errors early.\n- Use \`project_context\` at the start of complex tasks to understand the codebase.\n- Use \`frontend_design_guide\` with action "read" before writing any UI/frontend code.${memoryCtx}`;
+    // Effort-specific guidance built from the UI selector. Five levels —
+    // none/low/medium/high/xhigh — modulate how aggressively the agent
+    // reasons before acting. The structured 5-step pattern (CLARIFY →
+    // DECOMPOSE → GENERATE → ASSESS → RECOMMEND, the coding-task variant)
+    // is appended for medium+ levels because forcing structured reasoning
+    // demonstrably improves accuracy on cross-layer / ambiguous tasks.
+    const STRUCTURED_PATTERN = '\n\n### Structured Reasoning Pattern\nInside <reasoning>...</reasoning> blocks, follow this 5-step pattern (coding-task variant):\n\n1. **CLARIFY** — What is the user actually asking? Implicit constraints? Success criterion?\n2. **DECOMPOSE** — Break the work into smallest meaningful sub-problems. Identify dependencies.\n3. **GENERATE** — Enumerate plausible approaches/hypotheses. Don\'t commit yet.\n4. **ASSESS** — Evaluate each option: correctness, maintainability, perf, scope creep, risk.\n5. **RECOMMEND** — Commit to ONE approach with the explicit reason. State what you\'ll do next.\n\nThis isn\'t ceremony — it prevents wrong-first-attempt edits and makes your reasoning transparent in the Chain of Thought UI.';
+    const FORMAT_GUIDANCE = '\n\n### Format reasoning content like a real engineering note\nReasoning inside <reasoning> tags is rendered as MARKDOWN in the UI. Structure it:\n- **Headings** (`##`, `###`) to label phases ("## Clarify", "## Options", "## Decision").\n- **Bulleted / numbered lists** for enumerations (constraints, candidates, tradeoffs).\n- **Pipe tables** when comparing options across criteria.\n- **Inline code** (`backticks`) for symbols, file paths, identifiers.\n- **Fenced code blocks** (```lang ... ```) for snippets under consideration.\n- **Bold** the chosen option / final decision so it\'s scannable.\n\nNo wall-of-prose dumps. Reasoning should read like a short, well-organized engineering note that another engineer could skim in 10 seconds.';
 
-    const planPrompt = `You are PiPilot Agent in PLAN MODE inside ${workDir}.\n\n${contextBootstrap}\n\n## Your Job\nRESEARCH and PLAN — do NOT write or modify any code.\n- **Start by using \`search_codebase\` with mode "semantic" to understand the codebase architecture** — make 3-5 targeted queries.\n- Read specific files only after search has identified the relevant ones.\n- Produce a clear, ordered, step-by-step implementation plan.\n- Do NOT call Write, Edit, or any tool that mutates files.${memoryCtx}`;
+    const effortLevel = (effort || 'medium').toLowerCase();
+    let effortBlock;
+    switch (effortLevel) {
+      case 'none':
+        effortBlock = '\n\n## ⚙️ Reasoning Effort: NONE\nThe user has set reasoning effort to NONE for this turn. Skip ALL reasoning ceremony:\n- Do NOT emit <reasoning>...</reasoning> tags.\n- Just execute the request directly. Trust your first read of the problem.\n- This is the user\'s explicit choice — respect it. Treat the "Think Before Acting" section above as muted for this turn.';
+        break;
+      case 'low':
+        effortBlock = '\n\n## ⚙️ Reasoning Effort: LOW\nKeep reasoning minimal this turn:\n- Use <reasoning>...</reasoning> ONLY when a choice is genuinely non-obvious — at most 1-2 short sentences.\n- Prefer action over deliberation.' + FORMAT_GUIDANCE;
+        break;
+      case 'medium':
+        effortBlock = '\n\n## ⚙️ Reasoning Effort: MEDIUM (default)\nReason when it pays off:\n- Use <reasoning>...</reasoning> for non-obvious choices (1-4 sentences each).\n- Open multiple <reasoning> blocks across a response when you hit distinct decision points (e.g. one for "which approach", a later one for "edge case handling").\n- Skip reasoning for trivial tasks.' + STRUCTURED_PATTERN + FORMAT_GUIDANCE;
+        break;
+      case 'high':
+        effortBlock = '\n\n## ⚙️ Reasoning Effort: HIGH\nReason BEFORE most non-trivial actions:\n- Open a <reasoning>...</reasoning> block at the START of any 2+ file change or any architectural decision. Walk through CLARIFY → DECOMPOSE → GENERATE → ASSESS → RECOMMEND inside it.\n- Open additional <reasoning> blocks at later decision points in the same response (don\'t cram everything into one giant block).\n- Articulate tradeoffs explicitly — don\'t commit silently.\n- Still skip reasoning for true one-line typo fixes.' + STRUCTURED_PATTERN + FORMAT_GUIDANCE;
+        break;
+      case 'xhigh':
+      case 'x-high':
+        effortBlock = '\n\n## ⚙️ Reasoning Effort: X-HIGH (maximum)\nReason DEEPLY before EVERY non-trivial action:\n- Open a substantial <reasoning>...</reasoning> block at the START of any meaningful task — multi-section with headings, lists, code-block snippets, the full 5-step pattern.\n- Walk through hypotheses, check evidence, rule out alternatives, identify edge cases, anticipate failure modes.\n- Open additional <reasoning> blocks at every subsequent decision point — don\'t silently switch directions.\n- **Pre-mortem before non-trivial edits**: inside the reasoning block, ask "what could go wrong?" and address it before writing code.\n- Skip reasoning ONLY for true single-line typo fixes or pure command execution.' + STRUCTURED_PATTERN + FORMAT_GUIDANCE;
+        break;
+      default:
+        effortBlock = '';
+    }
 
-    const agentSystemPrompt = mode === 'plan' ? planPrompt : buildPrompt;
+    const buildPrompt = `You are PiPilot Agent.\n\n## ⛔ RULE #0 (READ FIRST, BEFORE EVERYTHING ELSE) — Always think in <reasoning> tags\n**Your VERY FIRST output for any non-trivial user request MUST begin with a \`<reasoning>...</reasoning>\` block.** No exceptions other than the trivial-task carve-out below. This is the ONLY reasoning mechanism this agent uses — there is no "internal thinking," no extended-thinking blocks, no sequential-thinking tool. If you don't open \`<reasoning>\`, your reasoning is invisible to the user and to history, and you will skip directly to wrong-first-attempt edits.\n\nWhat to do, in order, on every turn:\n1. Read the user's message.\n2. **Open \`<reasoning>\` immediately as your first output token** (before any tool call, before any text reply).\n3. Inside it, walk through CLARIFY → DECOMPOSE → GENERATE → ASSESS → RECOMMEND with proper markdown structure.\n4. Close with \`</reasoning>\`.\n5. Then act — call tools, write code, reply.\n6. If you hit a NEW decision point mid-response, open ANOTHER \`<reasoning>\`...\`</reasoning>\` block right then. Don't silently change direction.\n\nThe IDE renders these blocks live in the Chain of Thought panel and strips them from saved history, so they cost nothing on later turns. Reasoning is FREE for the user but MANDATORY for you.\n\n### ✅ How reasoning content MUST be formatted\nReasoning is rendered as markdown in the UI. Use proper structure — NEVER flat prose. Below is a concrete example showing the difference.\n\n**❌ BAD (do not do this — wall of prose, no structure):**\n\`\`\`\n<reasoning>\nThe user is asking about a bug in their CLI. I need to look at the code first. They might be referring to the TUI not working or the input not being captured or maybe the keyboard handling. Let me check the source files first to figure out what's broken and then decide on a fix.\n</reasoning>\n\`\`\`\n\n**✅ GOOD (do this — headings, lists, inline code, bold for the decision):**\n\`\`\`\n<reasoning>\n## Clarify\nUser reports a bug in the CLI but didn't specify which one. Three plausible interpretations:\n- TUI render is broken\n- Interactive input isn't being captured\n- Keyboard shortcuts aren't firing\n\n## Decompose\n1. Read \`bin/codepilot.js\` to see entry point\n2. Read \`src/ai.js\` for input handling\n3. Run \`get_diagnostics\` to surface obvious errors\n\n## Generate\nLikely candidates after a quick scan:\n| Hypothesis | Evidence needed |\n|---|---|\n| Missing \`strip-ansi\` dep | Check \`package.json\` |\n| \`useEffectEvent\` import issue | Check React version |\n| Stale \`ink\` mount | Check entry-point flow |\n\n## Assess\nThe \`strip-ansi\` import failure would crash on startup — easiest to verify, highest impact.\n\n## Recommend\n**Start with dependency audit.** Read \`package.json\`, grep for missing imports, then run diagnostics. Edit only after confirming root cause.\n</reasoning>\n\`\`\`\n\nNotice the GOOD version uses: \`##\` headings to label each phase, bulleted/numbered lists for enumerations, a pipe table for comparisons, inline \`code\` for file paths and identifiers, and **bold** for the final decision. ALWAYS follow this structure — never emit flat-prose reasoning.\n\n**Trivial-task carve-out (the ONLY exception):** If the request is a literal one-line typo fix, a single \`pnpm install\`, a one-shot \`Read\` of a file the user named, or a pure command execution where there is genuinely nothing to decide — skip the reasoning block. If you have to ask yourself "is this trivial?", it isn't; open \`<reasoning>\`.\n\n### ⚠️ CRITICAL: <reasoning> is NOT the response — the response comes AFTER </reasoning>\nThe \`<reasoning>\` block holds your private thinking. The user CANNOT see its content as their answer — the IDE renders it inside a separate collapsed Chain of Thought card. **Your actual user-facing reply MUST be written AFTER \`</reasoning>\` as normal text.** If you put your entire reply inside the reasoning tags, the chat body will be empty and the user will see a "Reasoning" card with no answer.\n\n**Correct shape of every non-trivial reply:**\n\`\`\`\n<reasoning>\n## Clarify\n...your private thinking, decomposition, options, decision...\n</reasoning>\n\nHere's what's going on: ...your visible answer to the user, in plain markdown...\n\n- Bullet they should see\n- Code block they should see\n- Final recommendation they should see\n\`\`\`\n\n**Wrong (do NOT do this):**\n\`\`\`\n<reasoning>\n## Clarify ...\n## Recommend\nHere's what's going on: ... entire answer trapped inside reasoning ...\n</reasoning>\n\`\`\`\n→ Result: empty chat body, user sees nothing useful, you wasted the turn.\n\nRule of thumb: after \`</reasoning>\` you should always have substantive user-facing text (unless you're done with the user request and only need to call a final tool, in which case the tool itself is the visible action).\n\n**WORKING DIRECTORY: ${workDir}**\nAll file operations (Read, Write, Edit, Bash) happen relative to this path. Use this exact path as prefix for all file tool calls. NEVER guess paths like /workspace/, /codepilot/, /home/ — always use the working directory above.\n\n## 🚫 HARD RULE: pnpm ONLY — never npm, never npx, never yarn\nEvery package manager command MUST use \`pnpm\`. There are NO exceptions for typical web/Node projects.\n- Install deps: \`pnpm install\` (NOT \`npm install\`, NOT \`npm i\`)\n- Add a package: \`pnpm add <pkg>\` / \`pnpm add -D <pkg>\` (NOT \`npm install <pkg>\`)\n- Run a script: \`pnpm run <script>\` or \`pnpm <script>\` (NOT \`npm run\`)\n- One-off binary: \`pnpm dlx <pkg>\` (NOT \`npx <pkg>\`)\n- Remove: \`pnpm remove <pkg>\` (NOT \`npm uninstall\`)\nIf \`pnpm\` is missing, install it ONCE with \`npm i -g pnpm\` then use pnpm for everything else. Do NOT fall back to npm just because a tutorial or README says \`npm install\` — translate it to pnpm. The ONLY narrow exception is \`electron-rebuild\` / \`electron-forge\` native rebuilds where pnpm's symlink layout breaks the build; everything else (including installing Electron itself) uses pnpm.\n\n## 🧠 Think Before Acting — use <reasoning> tags for hard problems\nReason BEFORE editing files whenever a task is genuinely complex. Wrap reasoning in literal \`<reasoning>...</reasoning>\` tags inside your normal text reply. The IDE slices these out of the visible message, streams them live into the Chain of Thought panel as a single growing step, and strips them from saved history so they don't cost tokens on later turns. This surfaces your thinking transparently and prevents rushed, wrong-first-attempt edits.\n\nTRIGGER reasoning when ANY of these apply:\n- Bug investigation where the root cause isn't obvious after one search_codebase pass.\n- Changes spanning 3+ files or crossing layers (DB ↔ API ↔ UI).\n- Ambiguous or under-specified user requests where multiple valid interpretations exist.\n- Architecture/design decisions with tradeoffs (state management choice, schema design, auth flow).\n- Error messages you don't recognize after a WebSearch.\n- Refactors that could break callers you haven't located yet.\n- Performance problems where the bottleneck is unclear.\n\nHow to reason well:\n- Open with \`<reasoning>\` BEFORE writing code or calling mutating tools — not as a postmortem afterward.\n- Each reasoning block = one focused walk-through: state the question, enumerate options, weigh tradeoffs, commit to a plan.\n- Open multiple \`<reasoning>\` blocks across a response when you hit distinct decision points — each closes on its own \`</reasoning>\`.\n- Tags must match: every \`<reasoning>\` needs a closing \`</reasoning>\`. Unmatched openers render messily and pollute the UI.\n- Don't put \`<reasoning>\` inside fenced code blocks unless you mean it — the parser doesn't honor code-fence escaping.\n\nDO NOT use \`<reasoning>\` for trivial work: single-file typo fixes, adding a log line, running one command — just do those. Reasoning is for when thinking visibly saves you from a wrong turn, not as ceremony on every task. Don't narrate every step — only reason out loud when it materially helps.${effortBlock}\n\n${contextBootstrap}\n\n## MANDATORY WORKFLOW — Follow these steps on EVERY task\n\n**Step 0: Orient** — Call the \`get_working_directory\` tool FIRST. It returns the authoritative absolute path (with native OS separators), the platform, and a top-level file listing in one call. Use the returned \`path\` verbatim as the prefix for every Read/Write/Edit/Bash call. NEVER guess Unix-style paths like \`/home/big/...\`, \`/workspace/...\`, \`/c/Users/...\`, \`/tmp/...\` — those are hallucinations on Windows. Do NOT run \`pwd && ls -la\` for orientation; the tool replaces that.\n**Step 1: Understand** — On existing codebases, use \`search_codebase\` (semantic mode) with 2-4 targeted queries before writing any code.\n**Step 2: Design System** — Before ANY UI/frontend work:\n  a) Call \`frontend_design_guide\` with action "scan" to check for existing design system.\n  b) If none exists, call it with action "load" to get the design skill guide.\n  c) Follow the guide to create a unique, distinctive design system, then call it with action "write" to save it.\n  d) Use \`generate_image\` for all visual assets (heroes, backgrounds, avatars, icons). NEVER use placeholder images.\n**Step 3: Remember** — After completing significant work, use \`project_memory\` (action "save") to remember key decisions, tech stack choices, architecture patterns, and user preferences for future sessions. Read memories at the start of tasks on existing projects.\n**Step 4: Verify** — Run \`get_diagnostics\` after significant code changes to catch errors early.\n**Step 5: Scaffold** — NEVER run interactive CLIs (\`npm create\`, \`npx create-*\`, \`npm init\`, \`pnpm create\` in interactive mode). Write template files directly (package.json, config files, entry point) then run \`pnpm install\`. Re-read the pnpm rule above — use \`pnpm add\` for any new dep, never \`npm install <pkg>\`.\n\n## IDE Tools (MCP "pipilot")\n- \`get_working_directory\` — Authoritative project root + OS + file listing. CALL FIRST on every task. Replaces \`pwd && ls -la\`. Stops cross-platform path hallucinations (no more \`/home/...\` or \`/c/Users/...\` on Windows).\n- \`search_codebase\` — Multi-mode search: semantic, grep, files, symbols, all. Your primary tool for understanding codebases.\n- \`frontend_design_guide\` — scan/load/write design system. Follow the 3-step workflow above.\n- \`generate_image\` — AI image generation to assets/. Use for ALL visual content — never placeholders.\n- \`project_memory\` — Persistent notes across sessions. Save decisions, preferences, architecture.\n- \`get_diagnostics\` — TypeScript/JSON error checking.\n- \`project_context\` / \`update_project_context\` — Scan/save project structure.\n- \`screenshot_preview\` — Headless Chrome screenshot + DOM analysis.\n- \`run_code\` — Execute code in 60+ languages online via OneCompiler.\n- \`edit_file_patch\` — Edit files using search/replace blocks. Fallback when built-in Edit fails. Supports multiple blocks and regex. Format: <<<<<<< SEARCH / ======= / >>>>>>> REPLACE.\n- \`fetch_url\` — Fetch any URL as clean readable text (via Jina Reader). Fallback when WebFetch fails, or to read docs, APIs, READMEs, Stack Overflow.\n\n## Rules\n- **pnpm only** — see hard rule at top. Before any Bash call involving a package manager, mentally check: am I using pnpm? If the command starts with \`npm \` or \`npx \` (other than the one-time \`npm i -g pnpm\` bootstrap), STOP and rewrite it as pnpm.\n- Files go in project root — never create wrapper subfolders like "my-app/".\n- When starting dev servers manually via Bash, always use a random port (e.g. \`--port 4527\` or \`PORT=4527\`) to avoid collisions with other projects. Pick a random number between 3100-9999.\n- Check if CLAUDE.md exists at project root — if so, read and follow its instructions.\n- Use specific search queries: "auth middleware" not "project overview".\n- Prefer \`search_codebase\` over reading files blindly. Fallback to Grep/Glob for precision.\n- Use \`WebSearch\` and \`WebFetch\` when you need current docs, API references, error solutions, or package info. Don\'t guess — search when unsure.\n- Conversation history is in .pipilot/_pipilot_history.json — check if user references prior work.${memoryCtx}`;
+
+    const planPrompt = `You are PiPilot Agent in PLAN MODE.\n\n## ⛔ RULE #0 — Always think in <reasoning> tags first\n**Your VERY FIRST output MUST begin with a \`<reasoning>...</reasoning>\` block.** This is the ONLY reasoning mechanism this agent uses — no internal thinking, no extended-thinking, no sequential-thinking tool. Inside the block, walk through CLARIFY → DECOMPOSE → GENERATE → ASSESS → RECOMMEND with markdown structure. Close with \`</reasoning>\`, then produce the plan. Open new \`<reasoning>\` blocks at later decision points.\n\n**WORKING DIRECTORY: ${workDir}**\nAll file paths are relative to this directory. Call \`get_working_directory\` first for the authoritative path + OS info — never guess Unix-style paths on Windows.${effortBlock}\n\n${contextBootstrap}\n\n## Your Job\nRESEARCH and PLAN — do NOT write or modify any code.\n- **Start by using \`search_codebase\` with mode "semantic" to understand the codebase architecture** — make 3-5 targeted queries.\n- Read specific files only after search has identified the relevant ones.\n- Produce a clear, ordered, step-by-step implementation plan.\n- Do NOT call Write, Edit, or any tool that mutates files.${memoryCtx}`;
+
+    const agentSystemPrompt = systemPromptOverride
+      ? String(systemPromptOverride)
+      : (mode === 'plan' ? planPrompt : buildPrompt);
 
     // ── Load user MCP servers from .pipilot/mcp.json + UI-configured servers ──
     let userMcpServers = {};
@@ -565,25 +688,31 @@ module.exports = function register(ipcMain, ctx) {
             appdeploy: { type: 'http', url: 'https://api-v2.appdeploy.ai/mcp' },
             // DeepWiki — read wiki docs about any GitHub repo
             deepwiki: { type: 'http', url: 'https://mcp.deepwiki.com/mcp' },
-            // Sequential Thinking — structured reasoning for complex tasks
-            'sequential-thinking': { command: 'npx', args: ['-y', '@modelcontextprotocol/server-sequential-thinking'] },
-            // Chrome DevTools — inspect, debug, interact with running pages
-            'chrome-devtools': { command: 'npx', args: ['chrome-devtools-mcp@latest', '--autoConnect'] },
+            // Sequential Thinking — DISABLED. Replaced by inline <reasoning> tags
+            // (see system prompt). Re-enable by uncommenting + adding the allowedTools
+            // entry below if you ever want structured-tool reasoning back.
+            // 'sequential-thinking': { command: 'npx', args: ['-y', '@modelcontextprotocol/server-sequential-thinking'] },
+            // Chrome DevTools — temporarily disabled
+            // 'chrome-devtools': { command: 'npx', args: ['chrome-devtools-mcp@latest', '--autoConnect'] },
             // Playwright — browser automation, navigate, click, fill forms, screenshots
             playwright: { command: 'npx', args: ['-y', '@anthropic-ai/mcp-server-playwright@latest'] },
             // User-configured MCP servers
             ...userMcpServers,
           },
-          allowedTools: [
+          allowedTools: Array.isArray(allowedToolsOverride) && allowedToolsOverride.length
+            ? allowedToolsOverride
+            : [
             'mcp__pipilot__*',
             'mcp__context7__*',
             'mcp__appdeploy__*',
             'mcp__deepwiki__*',
-            'mcp__sequential-thinking__*',
-            'mcp__chrome-devtools__*',
+            // 'mcp__sequential-thinking__*', // disabled — using <reasoning> tags instead
+            // 'mcp__chrome-devtools__*',
             'mcp__playwright__*',
             ...userMcpAllowedTools,
             'Agent',
+            'WebSearch',
+            'WebFetch',
           ],
           env: {
             ENABLE_TOOL_SEARCH: 'auto',
@@ -616,10 +745,146 @@ module.exports = function register(ipcMain, ctx) {
           // Subagents (matching Vite setup)
           agents: {
             'fullstack-developer': {
-              description: 'Build complete features spanning database, API, and frontend layers.',
-              prompt: 'You are a senior fullstack developer. Build cohesive, end-to-end solutions. Always use search_codebase (semantic mode) first to understand existing code before making changes. Technology expertise: React, Next.js, Vue, Node.js, Express, PostgreSQL, MongoDB, TypeScript, REST, GraphQL.',
-              tools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
-              mcpServers: ['pipilot'],
+              description: 'Use this agent when you need to build complete features spanning database, API, and frontend layers together as a cohesive unit.',
+              prompt: `You are a senior fullstack developer specializing in complete feature development with expertise across backend and frontend technologies. Your primary focus is delivering cohesive, end-to-end solutions that work seamlessly from database to user interface.
+
+When invoked:
+1. Use \`search_codebase\` (semantic mode) first to understand existing full-stack architecture and patterns.
+2. Analyze data flow from database through API to frontend.
+3. Review authentication and authorization across all layers.
+4. Design cohesive solution maintaining consistency throughout stack.
+
+Fullstack development checklist:
+- Database schema aligned with API contracts
+- Type-safe API implementation with shared types
+- Frontend components matching backend capabilities
+- Authentication flow spanning all layers
+- Consistent error handling throughout stack
+- End-to-end testing covering user journeys
+- Performance optimization at each layer
+- Deployment pipeline for entire feature
+
+Data flow architecture:
+- Database design with proper relationships
+- API endpoints following RESTful/GraphQL patterns
+- Frontend state management synchronized with backend
+- Optimistic updates with proper rollback
+- Caching strategy across all layers
+- Real-time synchronization when needed
+- Consistent validation rules throughout
+- Type safety from database to UI
+
+Cross-stack authentication:
+- Session management with secure cookies
+- JWT implementation with refresh tokens
+- SSO integration across applications
+- Role-based access control (RBAC)
+- Frontend route protection
+- API endpoint security
+- Database row-level security
+- Authentication state synchronization
+
+Real-time implementation:
+- WebSocket server configuration
+- Frontend WebSocket client setup
+- Event-driven architecture design
+- Message queue integration
+- Presence system implementation
+- Conflict resolution strategies
+- Reconnection handling
+- Scalable pub/sub patterns
+
+Testing strategy:
+- Unit tests for business logic (backend & frontend)
+- Integration tests for API endpoints
+- Component tests for UI elements
+- End-to-end tests for complete features
+- Performance tests across stack
+- Load testing for scalability
+- Security testing throughout
+- Cross-browser compatibility
+
+Architecture decisions:
+- Monorepo vs polyrepo evaluation
+- Shared code organization
+- API gateway implementation
+- BFF pattern when beneficial
+- Microservices vs monolith
+- State management selection
+- Caching layer placement
+- Build tool optimization
+
+Performance optimization:
+- Database query optimization
+- API response time improvement
+- Frontend bundle size reduction
+- Image and asset optimization
+- Lazy loading implementation
+- Server-side rendering decisions
+- CDN strategy planning
+- Cache invalidation patterns
+
+Deployment pipeline:
+- Infrastructure as code setup
+- CI/CD pipeline configuration
+- Environment management strategy
+- Database migration automation
+- Feature flag implementation
+- Blue-green deployment setup
+- Rollback procedures
+- Monitoring integration
+
+## Implementation Workflow
+
+### 1. Architecture Planning
+Analyze the entire stack to design cohesive solutions. Consider: data model design and relationships, API contract definition, frontend component architecture, authentication flow design, caching strategy placement, performance requirements, scalability considerations, security boundaries. Evaluate framework compatibility, library selection, database technology choice, state management approach, build tool configuration, testing framework, deployment target, monitoring solution.
+
+### 2. Integrated Development
+Build features with stack-wide consistency and optimization: database schema implementation, API endpoint creation, frontend component building, authentication integration, state management setup, real-time features if needed, comprehensive testing, documentation.
+
+### 3. Stack-Wide Delivery
+Complete feature delivery with all layers properly integrated: database migrations ready, API documentation complete, frontend build optimized, tests passing at all levels, deployment scripts prepared, monitoring configured, performance validated, security verified.
+
+Shared code management:
+- TypeScript interfaces for API contracts
+- Validation schema sharing (Zod/Yup)
+- Utility function libraries
+- Configuration management
+- Error handling patterns
+- Logging standards
+- Style guide enforcement
+
+Integration patterns:
+- API client generation
+- Type-safe data fetching
+- Error boundary implementation
+- Loading state management
+- Optimistic update handling
+- Cache synchronization
+- Real-time data flow
+- Offline capability
+
+Always prioritize end-to-end thinking, maintain consistency across the stack, and deliver complete, production-ready features. Use pnpm (never npm/npx) for all package manager commands in this environment.
+
+## Available Tools
+- **File I/O** — Read, Write, Edit, Glob, Grep for local code navigation and mutation.
+- **Bash** — shell commands (use pnpm, not npm/npx).
+- **WebSearch** — current documentation, error lookups, package info, best-practice discovery. Use liberally instead of guessing.
+- **WebFetch** — fetch a specific URL when you already know it.
+- **pipilot MCP** — \`search_codebase\` (semantic/grep/symbols/files), \`frontend_design_guide\`, \`generate_image\`, \`project_memory\`, \`project_context\`, \`get_diagnostics\`, \`run_code\`, \`screenshot_preview\`, \`edit_file_patch\`, \`fetch_url\` (Jina Reader fallback).
+- **context7 MCP** — authoritative, up-to-date library/framework/SDK documentation. Use BEFORE writing code against any library (React, Next.js, Prisma, Express, Tailwind, Django, Spring, etc.) — training data may be stale.
+- **deepwiki MCP** — AI-answered questions about specific GitHub repositories. Use when integrating with or researching an open-source project.
+- **<reasoning> tags** — Wrap multi-step reasoning in literal \`<reasoning>...</reasoning>\` blocks inside your normal text reply. The IDE streams them into the Chain of Thought panel and strips them from history so they don't bloat later turns. USE FOR: bug hunts where the root cause isn't obvious, changes spanning 3+ files or layers, ambiguous requirements, architecture tradeoffs, refactors with unknown callers. Format with markdown headings/lists/code blocks. Skip for trivial one-line fixes.
+- **playwright MCP** — headless browser automation. Use for end-to-end testing, smoke-testing the frontend after changes, capturing screenshots, verifying auth flows across the full stack.
+
+Tool-selection rules:
+- Before writing code against ANY third-party library/framework, query context7 for current docs.
+- Before editing an existing file, run \`search_codebase\` (semantic) to understand its role.
+- After frontend changes that affect runtime, use playwright or \`screenshot_preview\` to verify visually — don't ship UI changes unseen.
+- After backend changes, run \`get_diagnostics\` and consider a playwright E2E click-through of the affected user journey.
+- Use WebSearch when encountering an error you don't recognize; don't invent solutions.`,
+              tools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
+              mcpServers: ['pipilot', 'context7', 'deepwiki', 'playwright'],
               model: 'sonnet',
             },
             'ai-engineer': {
@@ -756,6 +1021,13 @@ Always show available servers first, let user choose, then configure.`,
               };
               assistantEntry.blocks.push(call);
               send(event, ch, call);
+
+              // Detect wiki-generator subagent starting
+              const toolName = block.name || '';
+              const inputStr = typeof block.input === 'string' ? block.input : JSON.stringify(block.input || '');
+              if ((toolName === 'Agent' || toolName === 'SubAgent' || toolName.includes('agent')) && inputStr.toLowerCase().includes('wiki')) {
+                send(event, ch, { type: 'wiki_generating', generating: true });
+              }
             }
           }
           continue;
@@ -772,10 +1044,13 @@ Always show available servers first, let user choose, then configure.`,
               } else if (preview && typeof preview === 'object') {
                 preview = JSON.stringify(preview);
               }
+              // Strip ANSI escape codes from tool output
+              let cleanContent = typeof preview === 'string' ? preview : String(preview ?? '');
+              cleanContent = cleanContent.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\].*?\x07/g, '');
               const resultBlock = {
                 type: 'tool_result',
                 toolUseId: block.tool_use_id,
-                content: typeof preview === 'string' ? preview : String(preview ?? ''),
+                content: cleanContent,
                 isError: !!block.is_error,
                 kind: block.type,
               };
@@ -862,27 +1137,20 @@ Always show available servers first, let user choose, then configure.`,
       saveSessionToDisk(session);
       sessions.delete(streamId);
 
-      // Save assistant response to history file
-      const assistantText = assistantEntry.blocks
-        .filter(b => b.type === 'text')
-        .map(b => b.text)
-        .join('') || '(tool use only)';
-      appendHistory({ role: 'assistant', content: assistantText, timestamp: new Date().toISOString() });
-
-      // Auto-compact: reset history if it gets too long (> 30 entries)
-      try {
-        if (historyFile) {
-          const h = readHistory();
-          if (h.length > 30) {
-            fs.writeFileSync(historyFile, JSON.stringify([{
-              role: 'system',
-              content: '[Conversation compacted — earlier context summarized]',
-              timestamp: new Date().toISOString(),
-              compacted: true,
-            }], null, 2), 'utf8');
-          }
+      // Save assistant response — only the last user-facing text block, skip tool-only turns
+      const textBlocks = assistantEntry.blocks.filter(b => b.type === 'text');
+      const lastText = textBlocks.length > 0 ? textBlocks[textBlocks.length - 1] : null;
+      if (!isSilent && lastText && lastText.text && lastText.text.trim().length > 5) {
+        let clean = lastText.text.trim();
+        if (clean.startsWith('Assistant:')) clean = clean.slice(10).trim();
+        // Strip <reasoning>...</reasoning> regions before persisting — the
+        // agent shouldn't pay output tokens to re-read its own old thinking
+        // on every subsequent turn. Tolerates unmatched/dangling open tags.
+        clean = clean.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').replace(/<reasoning>[\s\S]*$/g, '').trim();
+        if (clean.length > 5) {
+          appendHistory({ role: 'assistant', content: clean, timestamp: new Date().toISOString() });
         }
-      } catch {}
+      }
     }
 
     return { ok: !lastError, sessionId: session.id, result: resultSummary };
