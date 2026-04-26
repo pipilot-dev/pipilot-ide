@@ -4989,9 +4989,8 @@
   // tests, generated assets, and anything inside .pipilot/wikis/ (the
   // wiki agent's own writes must not re-trigger itself).
   const WIKI_WRITE_TOOLS = new Set([
-    'Write', 'Edit', 'MultiEdit', 'create_file',
-    'mcp__pipilot__edit_file_patch',
-    'mcp__pipilot__write_file',
+    'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
+    'create_file', 'edit_file', 'write_file', 'edit_file_patch',
   ]);
   const WIKI_SKIP_RE = /(\.test\.|\.spec\.|__tests__|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|\.min\.|node_modules|\.pipilot[\\/](wikis|sessions|memory)|\.git[\\/])/i;
 
@@ -4999,20 +4998,32 @@
     const files = new Set();
     for (const b of blocks || []) {
       if (b?.type !== 'tool_call') continue;
-      const baseName = (b.name || '').replace(/^mcp__pipilot__/, '');
+      // Strip any mcp prefix so both built-in and MCP-wrapped versions
+      // hit the same set ("mcp__pipilot__edit_file_patch" → "edit_file_patch").
+      const baseName = (b.name || '').replace(/^mcp__[a-zA-Z0-9_-]+__/, '');
       if (!WIKI_WRITE_TOOLS.has(b.name) && !WIKI_WRITE_TOOLS.has(baseName)) continue;
       const inp = b.input || {};
-      const candidate = inp.file_path || inp.path || inp.target_file || inp.filePath;
+      // edit_file_patch uses `filepath`; SDK Write/Edit use `file_path`;
+      // some tools use `path` / `target_file` / `filePath`.
+      const candidate = inp.file_path || inp.filepath || inp.path || inp.target_file || inp.filePath;
       if (typeof candidate === 'string' && candidate && !WIKI_SKIP_RE.test(candidate)) {
         files.add(candidate);
       }
       // MultiEdit: { file_path, edits: [...] }
       if (Array.isArray(inp.files)) {
         for (const f of inp.files) {
-          const p = typeof f === 'string' ? f : (f?.path || f?.file_path);
+          const p = typeof f === 'string' ? f : (f?.path || f?.file_path || f?.filepath);
           if (typeof p === 'string' && p && !WIKI_SKIP_RE.test(p)) files.add(p);
         }
       }
+    }
+    if (files.size === 0) {
+      // Diagnostic: log what tool calls we saw so the user can see why
+      // nothing matched (wrong tool name, wrong field, skipped path).
+      const seen = (blocks || [])
+        .filter(b => b?.type === 'tool_call')
+        .map(b => ({ name: b.name, inputKeys: Object.keys(b.input || {}) }));
+      if (seen.length) console.log('[wiki-auto-update] no file edits matched. tool_calls=', seen);
     }
     return Array.from(files);
   }
