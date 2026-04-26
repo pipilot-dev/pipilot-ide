@@ -63,11 +63,120 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
   const { getSecret, ghEnsure } = deps;
 
   const globalFile = path.join(ctx.userDataPath, 'missions.json');
+  const runsDir = path.join(ctx.userDataPath, 'missions-runs');
+  try { fs.mkdirSync(runsDir, { recursive: true }); } catch {}
+
   // Per-mission run state. Now driven from main, so this map outlives
   // any renderer reload — a new renderer can call missions:get-state
   // and replay the full buffer of events.
-  // id -> { mission, startedAt, agent, events, status, finalText, toolCallCount }
+  // id -> { mission, startedAt, agent, events, status, finalText, toolCallCount, _persistQueue, _persistTimer, _persistFile }
   const inFlight = new Map();
+
+  // ── Disk persistence ──────────────────────────────────────────
+  // Each run gets one JSONL file at:
+  //   <userData>/missions-runs/<missionId>/<startedAt>.jsonl
+  // First line is a meta record with the mission snapshot; every
+  // event from the agent stream is appended as one record; a final
+  // "end" record is written when the run finalizes. Reopening any
+  // mission tab — minutes, hours, or weeks later — reads the most
+  // recent file and replays the full transcript. Survives renderer
+  // reloads, app restarts, even crashes (because we flush every
+  // 250ms during the run).
+  function runFilePath(missionId, startedAt) {
+    const safe = String(missionId).replace(/[^a-zA-Z0-9._-]/g, '_');
+    return path.join(runsDir, safe, String(startedAt) + '.jsonl');
+  }
+
+  function persistInit(runState) {
+    const dir = path.join(runsDir, String(runState.mission.id).replace(/[^a-zA-Z0-9._-]/g, '_'));
+    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+    const file = path.join(dir, String(runState.startedAt) + '.jsonl');
+    runState._persistFile = file;
+    runState._persistQueue = [];
+    runState._persistTimer = null;
+    // Header line — mission snapshot. Captures the prompt + target so
+    // reading the file alone is enough to reconstruct what ran.
+    runState._persistQueue.push(JSON.stringify({
+      kind: 'meta',
+      mission: runState.mission,
+      startedAt: runState.startedAt,
+      schema: 1,
+    }));
+    persistFlushSoon(runState);
+  }
+
+  function persistAppend(runState, evt) {
+    if (!runState._persistFile) return;
+    runState._persistQueue.push(JSON.stringify({ kind: 'event', ts: evt.ts || Date.now(), evt }));
+    persistFlushSoon(runState);
+  }
+
+  function persistFinalize(runState, finalRecord) {
+    if (!runState._persistFile) return;
+    runState._persistQueue.push(JSON.stringify({ kind: 'end', ...finalRecord, endedAt: Date.now() }));
+    persistFlushNow(runState);
+  }
+
+  function persistFlushSoon(runState) {
+    if (runState._persistTimer) return;
+    runState._persistTimer = setTimeout(() => {
+      runState._persistTimer = null;
+      persistFlushNow(runState);
+    }, 250);
+  }
+
+  function persistFlushNow(runState) {
+    if (!runState._persistFile) return;
+    const lines = runState._persistQueue;
+    if (!lines || !lines.length) return;
+    runState._persistQueue = [];
+    const blob = lines.join('\n') + '\n';
+    fs.appendFile(runState._persistFile, blob, 'utf8', (err) => {
+      if (err) console.warn('[missions] persist append failed:', err.message);
+    });
+  }
+
+  // List runs for a mission, newest-first. Returns metadata only.
+  async function listRunsOnDisk(missionId) {
+    const dir = path.join(runsDir, String(missionId).replace(/[^a-zA-Z0-9._-]/g, '_'));
+    try {
+      const files = await fsp.readdir(dir);
+      const runs = files
+        .filter(f => f.endsWith('.jsonl'))
+        .map(f => ({
+          file: path.join(dir, f),
+          startedAt: parseInt(f.replace('.jsonl', ''), 10) || 0,
+        }))
+        .filter(r => r.startedAt)
+        .sort((a, b) => b.startedAt - a.startedAt);
+      return runs;
+    } catch {
+      return [];
+    }
+  }
+
+  // Load a single run file from disk. Returns events array + meta + end.
+  async function loadRunFromDisk(file) {
+    try {
+      const raw = await fsp.readFile(file, 'utf8');
+      const events = [];
+      let meta = null;
+      let end = null;
+      for (const line of raw.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const obj = JSON.parse(t);
+          if (obj.kind === 'meta') meta = obj;
+          else if (obj.kind === 'event') events.push(obj.evt);
+          else if (obj.kind === 'end') end = obj;
+        } catch {}
+      }
+      return { ok: true, file, meta, events, end };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  }
 
   // ── Storage ───────────────────────────────────────────────────────
 
@@ -454,6 +563,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       stopRequested: false,
     };
     inFlight.set(mission.id, runState);
+    persistInit(runState);
 
     broadcast('missions:status', { id: mission.id, state: 'running', startedAt });
     broadcast('missions:start', { mission, startedAt });
@@ -469,6 +579,9 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       runState.events.push(stamped);
       if (evt.type === 'tool_call') runState.toolCallCount++;
       if (evt.type === 'text' && typeof evt.text === 'string') runState.finalText += evt.text;
+      // Persist to disk so the run survives forever (reloads, restarts,
+      // multi-day-later replay). Batched flush every 250ms.
+      persistAppend(runState, stamped);
       // Broadcast every event so any open mission tab streams live.
       try {
         const win = ctx.getWindow?.();
@@ -566,6 +679,10 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         } catch {}
       }
     }
+
+    // Final disk record so a future "open this mission" reads
+    // status/duration/etc. even though the in-memory run state is GC'd.
+    persistFinalize(runState, { status, summary, durationMs, toolCallCount: runState.toolCallCount, finalText: cleanFinal });
 
     broadcast('missions:status', { id: mission.id, state: 'idle', status, summary, durationMs });
     broadcast('missions:end', { missionId: mission.id, status, summary, durationMs, finalText: cleanFinal, bugbotFindings });
@@ -711,6 +828,36 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       events: rs.events.slice(),
       toolCallCount: rs.toolCallCount,
     };
+  });
+
+  // List historic runs for a mission (newest first). Returns
+  // [{ file, startedAt }] — caller picks one to load.
+  ipcMain.handle('missions:list-runs', async (_e, { id } = {}) => {
+    if (!id) return { ok: false, error: 'id required' };
+    try {
+      const runs = await listRunsOnDisk(id);
+      return { ok: true, runs };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  });
+
+  // Load a specific run file (or the latest if no file specified).
+  // Returns { meta, events, end } — full transcript ready for replay.
+  ipcMain.handle('missions:load-run', async (_e, { id, file } = {}) => {
+    if (!id && !file) return { ok: false, error: 'id or file required' };
+    try {
+      let target = file;
+      if (!target) {
+        const runs = await listRunsOnDisk(id);
+        target = runs[0]?.file;
+        if (!target) return { ok: true, meta: null, events: [], end: null };
+      }
+      const r = await loadRunFromDisk(target);
+      return r;
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
   });
 
   // List currently-running missions across the whole app — used by the

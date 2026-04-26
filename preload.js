@@ -360,6 +360,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     stop: (id) => ipcRenderer.invoke('missions:stop', { id }),
     getState: (id) => ipcRenderer.invoke('missions:get-state', { id }),
     inFlightState: () => ipcRenderer.invoke('missions:in-flight-state'),
+    listRuns: (id) => ipcRenderer.invoke('missions:list-runs', { id }),
+    loadRun: (id, file) => ipcRenderer.invoke('missions:load-run', { id, file }),
     readLog: (projectPath) => ipcRenderer.invoke('missions:read-log', { projectPath }),
     onEvent: (handler) => {
       const fn = (_e, payload) => { try { handler(payload); } catch {} };

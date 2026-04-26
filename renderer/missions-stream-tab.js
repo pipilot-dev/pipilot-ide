@@ -381,35 +381,56 @@
         tickDuration();
       }
     }
-    // Async tail: ask main for authoritative state. Useful after a
-    // renderer reload when the local buffer is empty but main still
-    // has the live in-flight or recently-finished run. If we render
-    // from main, also clear the "never run yet" placeholder we may
-    // have set in the synchronous branch.
+    // Async tail: ask main for authoritative state. Three layers, in
+    // priority order:
+    //   1. main's live in-flight buffer (running OR just-finished
+    //      within the 10-min retention window)
+    //   2. disk: load the latest persisted run file from
+    //      <userData>/missions-runs/<id>/<startedAt>.jsonl
+    //   3. mission.lastRunStatus on the saved record (handled in the
+    //      sync fallthrough below)
     let asyncFilled = false;
+    const replay = (events, status, startedAt) => {
+      // Wipe any placeholder we put in earlier.
+      body.innerHTML = '<div class="pp-mst-empty" data-role="empty" style="display:none;"></div>';
+      for (const evt of events || []) applyEvent(evt);
+      if (status && status !== 'running') {
+        setStatus(status, status);
+        clearInterval(durationTimer);
+      } else if (startedAt) {
+        const realStart = startedAt;
+        tickDuration = () => {
+          const s = Math.floor((Date.now() - realStart) / 1000);
+          durEl.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+        };
+        tickDuration();
+        setStatus('running', 'running');
+      }
+    };
     (async () => {
       try {
         const st = await api.missions.getState(mission.id);
-        if (!st?.ok) return;
-        if (!appliedFromBuf && (st.events?.length || st.running)) {
+        if (st?.ok && !appliedFromBuf && (st.events?.length || st.running)) {
           asyncFilled = true;
-          // Wipe any "never run" placeholder we put in earlier.
-          body.innerHTML = '<div class="pp-mst-empty" data-role="empty" style="display:none;"></div>';
-          for (const evt of st.events || []) applyEvent(evt);
-          if (!st.running && st.status) {
-            setStatus(st.status, st.status);
-            clearInterval(durationTimer);
-          } else if (st.startedAt) {
-            const realStart = st.startedAt;
-            tickDuration = () => {
-              const s = Math.floor((Date.now() - realStart) / 1000);
-              durEl.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
-            };
-            tickDuration();
-            setStatus('running', 'running');
+          replay(st.events, st.running ? 'running' : st.status, st.startedAt);
+          return;
+        }
+        if (!appliedFromBuf && !asyncFilled) {
+          // Fall back to disk — load most recent run.
+          const r = await api.missions.loadRun(mission.id);
+          if (r?.ok && (r.events?.length || r.end)) {
+            asyncFilled = true;
+            const status = r.end?.status || (r.meta ? 'success' : null);
+            const startedAt = r.meta?.startedAt;
+            // If duration was recorded in the end record, freeze it
+            // on the duration label.
+            if (r.end?.durationMs && durEl) durEl.textContent = (r.end.durationMs / 1000).toFixed(1) + 's';
+            replay(r.events, status, startedAt);
           }
         }
-      } catch {}
+      } catch (err) {
+        console.warn('[missions-stream] state fetch failed', err);
+      }
     })();
     if (!appliedFromBuf && !isRunningNow) {
       const last = mission.lastRunStatus;
