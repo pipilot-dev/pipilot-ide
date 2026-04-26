@@ -203,6 +203,7 @@ app.whenReady().then(() => {
   const ctx = {
     getWindow: () => mainWindow,
     userDataPath: app.getPath('userData'),
+    appPath: app.getAppPath(),
     stream: makeStreamHelper,
   };
 
@@ -221,14 +222,35 @@ app.whenReady().then(() => {
   registerSearchIndexHandlers(ipcMain, ctx);
   registerExtensionHandlers(ipcMain, ctx);
   registerExtDBHandlers(ipcMain, ctx);
+  try { require('./main/diary')(ipcMain); } catch (err) { console.error('[diary] register failed:', err); }
+  let secretsApi = null;
+  try { secretsApi = require('./main/secrets')(ipcMain, ctx); } catch (err) { console.error('[secrets] register failed:', err); }
+  try { require('./main/missions')(ipcMain, ctx, { getSecret: secretsApi?.getSecret }); } catch (err) { console.error('[missions] register failed:', err); }
 
   createWindow();
 
+  // Tray + power-save + sleep monitor. Must run after createWindow so the
+  // close-interceptor can be attached to the freshly created window.
+  try {
+    require('./main/background-mode').init({
+      ipcMain,
+      getWindow: () => mainWindow,
+      userDataPath: ctx.userDataPath,
+    });
+  } catch (err) {
+    console.error('[background-mode] init failed:', err);
+  }
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
   });
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // With background mode the tray keeps the app alive even when no window
+  // exists. The user explicitly quits via the tray menu.
+  if (process.platform !== 'darwin') {
+    // Don't auto-quit — tray handles it.
+  }
 });

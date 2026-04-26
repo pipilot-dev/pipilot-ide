@@ -426,7 +426,7 @@ module.exports = function register(ipcMain, ctx) {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  ipcMain.handle('agent:send', async (event, { streamId, sessionId, projectPath, message, mode, effort, attachments, silent, systemPromptOverride, allowedToolsOverride }) => {
+  ipcMain.handle('agent:send', async (event, { streamId, sessionId, projectPath, message, mode, effort, attachments, silent, systemPromptOverride, allowedToolsOverride, extraMcpServers }) => {
     const ch = `agent:event:${streamId}`;
     const isSilent = !!silent;
 
@@ -698,6 +698,8 @@ module.exports = function register(ipcMain, ctx) {
             playwright: { command: 'npx', args: ['-y', '@anthropic-ai/mcp-server-playwright@latest'] },
             // User-configured MCP servers
             ...userMcpServers,
+            // Per-call extras (e.g. Missions injecting github MCP with PAT)
+            ...(extraMcpServers && typeof extraMcpServers === 'object' ? extraMcpServers : {}),
           },
           allowedTools: Array.isArray(allowedToolsOverride) && allowedToolsOverride.length
             ? allowedToolsOverride

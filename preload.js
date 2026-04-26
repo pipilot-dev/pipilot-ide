@@ -322,6 +322,40 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ---------- Settings ----------
+  // ---------- Secrets (encrypted at rest via safeStorage) ----------
+  secrets: {
+    status: () => ipcRenderer.invoke('secrets:status'),
+    has: (key) => ipcRenderer.invoke('secrets:has', { key }),
+    get: (key) => ipcRenderer.invoke('secrets:get', { key }),
+    set: (key, value) => ipcRenderer.invoke('secrets:set', { key, value }),
+    delete: (key) => ipcRenderer.invoke('secrets:delete', { key }),
+  },
+
+  // ---------- Missions (scheduled/reactive background agents) ----------
+  missions: {
+    list: (projectPath) => ipcRenderer.invoke('missions:list', { projectPath }),
+    save: (scope, projectPath, mission) => ipcRenderer.invoke('missions:save', { scope, projectPath, mission }),
+    delete: (scope, projectPath, id) => ipcRenderer.invoke('missions:delete', { scope, projectPath, id }),
+    run: (id, projectPath, force) => ipcRenderer.invoke('missions:run', { id, projectPath, force }),
+    reportRun: (payload) => ipcRenderer.invoke('missions:report-run', payload),
+    readLog: (projectPath) => ipcRenderer.invoke('missions:read-log', { projectPath }),
+    onRunNow: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('missions:run-now', fn);
+      return () => ipcRenderer.removeListener('missions:run-now', fn);
+    },
+    onStatus: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('missions:status', fn);
+      return () => ipcRenderer.removeListener('missions:status', fn);
+    },
+    onChanged: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('missions:changed', fn);
+      return () => ipcRenderer.removeListener('missions:changed', fn);
+    },
+  },
+
   settings: {
     get: (key) => ipcRenderer.invoke('settings:get', key),
     set: (key, value) => ipcRenderer.invoke('settings:set', { key, value }),
