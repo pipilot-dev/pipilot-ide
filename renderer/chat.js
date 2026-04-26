@@ -5098,6 +5098,17 @@
         // the tool pill — otherwise the trailing chars of the prior text
         // chunk (e.g. "wor" from "working") stay buffered and never display.
         flushBufferedTextToBody();
+        // Notify diagnostics + other listeners when the chat agent
+        // edits a file (since chokidar may not be watching yet).
+        try {
+          const editTools = new Set(['Write','Edit','MultiEdit','NotebookEdit','create_file','edit_file','write_file','edit_file_patch']);
+          const baseName = (evt.name || '').replace(/^mcp__[a-zA-Z0-9_-]+__/, '');
+          if (editTools.has(evt.name) || editTools.has(baseName)) {
+            const inp = evt.input || {};
+            const p = inp.file_path || inp.filepath || inp.path || inp.target_file || null;
+            bus.emit('agent:file-edit', { path: p, by: 'chat', tool: evt.name });
+          }
+        } catch {}
         if (evt.name === 'TodoWrite') {
           try {
             const input = evt.input || {};

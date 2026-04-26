@@ -121,11 +121,17 @@
     }
 
     running = true;
-    try {
-      await api.diagnostics?.start(projectPath);
-    } catch (e) {
-      running = false;
-    }
+    // We deliberately DO NOT call api.diagnostics.start(projectPath)
+    // here any more — that immediately spawns a TypeScript compiler
+    // pass over the whole project, which can pin the main process
+    // CPU for 10-30s on large repos and makes the IDE feel frozen
+    // on launch. Diagnostics now only run on demand:
+    //   - when the user saves a file (file:saved bus event)
+    //   - when the agent edits a file (file:external-change event)
+    //   - when the user clicks the manual refresh button in the
+    //     Problems panel
+    // No initial scan, no watcher pinning startup. The Problems
+    // panel will sit empty until the first edit triggers a run.
 
     // Debounced server-side tsc recheck (shared by save + external change)
     let diagTimer = null;
@@ -148,9 +154,24 @@
       scheduleDiagnosticsRun();
     });
 
-    // On external file change (agent edits): re-run diagnostics
+    // On external file change (agent edits seen via chokidar — only
+    // fires when the user has expanded a folder and the watcher is
+    // active): re-run diagnostics.
     bus.on('file:external-change', (evt) => {
       if (!evt || (evt.type !== 'change' && evt.type !== 'add' && evt.type !== 'unlink')) return;
+      scheduleDiagnosticsRun();
+    });
+
+    // Direct agent-edit signal — fires from chat / missions / wiki
+    // runners when their stream contains a file-mutating tool call.
+    // Reliable even when chokidar isn't watching yet (lazy boot).
+    bus.on('agent:file-edit', (payload) => {
+      // Only re-check if the edit looks like source — skip lockfiles,
+      // tests inside generated dirs, .pipilot artifacts.
+      const p = String(payload?.path || '').replace(/\\/g, '/');
+      if (!p) { scheduleDiagnosticsRun(); return; }
+      if (/\/(node_modules|\.pipilot\/(wikis|sessions|missions))\//.test(p)) return;
+      if (/(package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(p)) return;
       scheduleDiagnosticsRun();
     });
   }

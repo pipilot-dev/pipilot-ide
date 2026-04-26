@@ -51,6 +51,16 @@
     const b = buffers.get(missionId);
     if (b) b.events.push(evt);
     bus.emit('mission:event', { missionId, evt });
+    // Bridge file-mutating tool_calls to the diagnostics trigger.
+    if (evt.type === 'tool_call' && evt.name) {
+      const editTools = new Set(['Write','Edit','MultiEdit','NotebookEdit','create_file','edit_file','write_file','edit_file_patch']);
+      const baseName = evt.name.replace(/^mcp__[a-zA-Z0-9_-]+__/, '');
+      if (editTools.has(evt.name) || editTools.has(baseName)) {
+        const inp = evt.input || {};
+        const p = inp.file_path || inp.filepath || inp.path || inp.target_file || null;
+        bus.emit('agent:file-edit', { path: p, by: 'mission', missionId, tool: evt.name });
+      }
+    }
   });
 
   api.missions.onEnd((payload) => {
