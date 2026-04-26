@@ -96,6 +96,7 @@
     running = true;
     console.log('[wiki-auto-update] starting agent', { changedFiles, projectPath });
     bus.emit('wiki:auto-status', { state: 'running' });
+    try { api.background?.setAgentActive?.(true, 'wiki'); } catch {}
 
     const sessionId = '__wiki__' + Date.now();
     let stream = null;
@@ -158,6 +159,7 @@
       bus.emit('toast:show', { type: 'warn', message: 'Wiki auto-update failed' });
     } finally {
       try { stream && stream.dispose && stream.dispose(); } catch {}
+      try { api.background?.setAgentActive?.(false, 'wiki'); } catch {}
       lastRunAt = Date.now();
       running = false;
       bus.emit('wiki:auto-status', { state: 'idle' });

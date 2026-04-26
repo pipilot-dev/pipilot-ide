@@ -198,6 +198,10 @@
     if (!mission?.id) return;
     if (inFlight.has(mission.id)) return;
     inFlight.add(mission.id);
+    // Hold the powerSaveBlocker for this mission run via the background
+    // module's refcounted active-agent tracker. Tag is unique per
+    // mission so multiple concurrent missions are counted correctly.
+    try { api.background?.setAgentActive?.(true, 'mission:' + mission.id); } catch {}
 
     const startedAt = Date.now();
     const sessionId = '__mission__' + mission.id + '__' + startedAt;
@@ -298,6 +302,8 @@
 
     const durationMs = Date.now() - startedAt;
     inFlight.delete(mission.id);
+    // Release the powerSaveBlocker reference for this mission.
+    try { api.background?.setAgentActive?.(false, 'mission:' + mission.id); } catch {}
 
     // Update buffer + announce end so open tabs can switch to "done" UI.
     if (buf) { buf.status = status; buf.endedAt = Date.now(); }

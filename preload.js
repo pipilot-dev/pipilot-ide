@@ -30,7 +30,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // is active so the main process can hold a powerSaveBlocker, and
   // listens for power events so the UI can show "paused on suspend".
   background: {
-    setAgentActive: (active) => ipcRenderer.invoke('background:agent-active', !!active),
+    setAgentActive: (active, tag) => ipcRenderer.invoke('background:agent-active',
+      tag ? { active: !!active, tag } : !!active),
     status: () => ipcRenderer.invoke('background:status'),
     setPrefs: (prefs) => ipcRenderer.invoke('background:set-prefs', prefs),
     onSuspend: (cb) => { const fn = (_e, p) => cb(p); ipcRenderer.on('power:suspend', fn); return () => ipcRenderer.removeListener('power:suspend', fn); },
