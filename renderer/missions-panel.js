@@ -106,6 +106,18 @@
 .pp-me-mini-btn:hover { color:var(--accent-light,#ffb38a); }
 .pp-me-mini-btn.spinning { animation:pp-mini-spin 0.8s linear infinite; }
 @keyframes pp-mini-spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+
+/* Custom select — replaces native <select> so the dropdown popup
+   matches the dark editor theme on Windows/Linux. */
+.pp-cselect { position:relative; width:100%; }
+.pp-cselect-btn { width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:6px; padding:8px 10px; color:var(--text-strong); font-family:var(--font-sans); font-size:12.5px; cursor:pointer; outline:none; transition:border-color 0.15s; text-align:left; }
+.pp-cselect-btn:hover, .pp-cselect-btn:focus, .pp-cselect.open .pp-cselect-btn { border-color:var(--accent); }
+.pp-cselect-caret { color:var(--text-dim); font-size:10px; transition:transform 0.15s; }
+.pp-cselect.open .pp-cselect-caret { transform:rotate(180deg); }
+.pp-cselect-list { position:absolute; left:0; right:0; top:calc(100% + 2px); z-index:10; max-height:240px; overflow-y:auto; background:#16161a; border:1px solid var(--border); border-radius:6px; box-shadow:0 12px 28px rgba(0,0,0,0.5); padding:3px; display:flex; flex-direction:column; gap:1px; }
+.pp-cselect-item { background:transparent; border:none; color:var(--text); padding:7px 10px; border-radius:4px; text-align:left; font-size:12.5px; cursor:pointer; font-family:var(--font-sans); transition:background 0.12s; }
+.pp-cselect-item:hover, .pp-cselect-item.active { background:rgba(255,107,53,0.14); color:var(--accent-light,#ffb38a); }
+.pp-cselect-item.selected { background:rgba(255,107,53,0.08); color:var(--accent-light,#ffb38a); font-weight:500; }
 .pp-missions-pat-pill { display:flex; align-items:center; gap:6px; padding:5px 9px; border-radius:14px; font-size:11px; cursor:pointer; transition:background 0.15s; }
 .pp-missions-pat-pill.set { background:rgba(86,212,221,0.1); border:1px solid rgba(86,212,221,0.3); color:#56d4dd; }
 .pp-missions-pat-pill.unset { background:rgba(255,107,53,0.08); border:1px solid rgba(255,107,53,0.3); color:var(--accent-light, #ffb38a); }
@@ -154,6 +166,11 @@
 .pp-me-label { font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-mid); font-family:var(--font-mono); font-weight:500; }
 .pp-me-input, .pp-me-textarea, .pp-me-select { width:100%; background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:6px; padding:8px 10px; color:var(--text-strong); font-family:var(--font-sans); font-size:12.5px; outline:none; transition:border-color 0.15s; box-sizing:border-box; }
 .pp-me-input:focus, .pp-me-textarea:focus, .pp-me-select:focus { border-color:var(--accent); }
+/* Style option items inside native selects so the dropdown popup is
+   dark on Windows/Linux Chromium (limited but honored). */
+.pp-me-select option { background:#16161a; color:var(--text-strong); padding:6px 10px; }
+.pp-me-select option:checked,
+.pp-me-select option:hover { background:rgba(255,107,53,0.18); color:var(--accent-light,#ffb38a); }
 .pp-me-textarea { resize:vertical; min-height:90px; max-height:220px; font-family:var(--font-mono); font-size:12px; line-height:1.55; }
 .pp-me-help { font-size:11px; color:var(--text-dim); }
 
@@ -392,6 +409,100 @@
     renderList();
   }
 
+  // ---------- Custom select component ----------
+  // Renders a button + dark dropdown popup, fully styleable. Returns
+  // the wrapper element with .value getter/setter and onChange hook.
+  function createCustomSelect({ options, value, onChange, placeholder }) {
+    const wrap = document.createElement('div');
+    wrap.className = 'pp-cselect';
+    let current = value ?? options[0]?.value ?? '';
+    let activeIdx = -1;
+    let listEl = null;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pp-cselect-btn';
+    btn.innerHTML = `<span class="pp-cselect-label"></span><span class="pp-cselect-caret">▾</span>`;
+    wrap.appendChild(btn);
+
+    function labelFor(v) {
+      const o = options.find(x => x.value === v);
+      return o ? o.label : (placeholder || v);
+    }
+    function paint() {
+      btn.querySelector('.pp-cselect-label').textContent = labelFor(current);
+    }
+    function close() {
+      if (!listEl) return;
+      listEl.remove();
+      listEl = null;
+      wrap.classList.remove('open');
+      activeIdx = -1;
+    }
+    function open() {
+      if (listEl) { close(); return; }
+      wrap.classList.add('open');
+      listEl = document.createElement('div');
+      listEl.className = 'pp-cselect-list';
+      listEl.innerHTML = options.map((o, i) =>
+        `<button type="button" class="pp-cselect-item ${o.value === current ? 'selected' : ''}" data-idx="${i}">${escapeHtml(o.label)}</button>`
+      ).join('');
+      wrap.appendChild(listEl);
+      activeIdx = options.findIndex(o => o.value === current);
+      listEl.querySelectorAll('.pp-cselect-item').forEach(el => {
+        el.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          const idx = parseInt(el.dataset.idx, 10);
+          pick(idx);
+        });
+      });
+      // Outside click closes.
+      setTimeout(() => {
+        document.addEventListener('mousedown', function once(ev) {
+          if (!wrap.contains(ev.target)) { close(); document.removeEventListener('mousedown', once); }
+        });
+      }, 0);
+    }
+    function pick(idx) {
+      const o = options[idx]; if (!o) return;
+      current = o.value;
+      paint();
+      close();
+      try { onChange?.(o.value, o); } catch {}
+    }
+
+    btn.addEventListener('click', open);
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); return; }
+    });
+    wrap.addEventListener('keydown', (e) => {
+      if (!listEl) return;
+      const items = Array.from(listEl.querySelectorAll('.pp-cselect-item'));
+      if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, items.length - 1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (activeIdx >= 0) pick(activeIdx); return; }
+      else if (e.key === 'Escape') { close(); return; }
+      else return;
+      items.forEach((it, i) => it.classList.toggle('active', i === activeIdx));
+      items[activeIdx]?.scrollIntoView({ block: 'nearest' });
+    });
+
+    paint();
+
+    Object.defineProperty(wrap, 'value', {
+      get() { return current; },
+      set(v) { current = v; paint(); },
+    });
+    wrap.setOptions = (opts, newValue) => {
+      options = opts;
+      if (newValue !== undefined) current = newValue;
+      else if (!options.find(o => o.value === current)) current = options[0]?.value ?? '';
+      paint();
+      if (listEl) { close(); open(); }
+    };
+    return wrap;
+  }
+
   // ---------- Preset menu ----------
   function openPresetMenu(anchor) {
     const existing = document.getElementById('pp-preset-menu');
@@ -579,22 +690,11 @@
       <div class="pp-me-row">
         <div class="pp-me-field">
           <label class="pp-me-label">Permissions</label>
-          <select class="pp-me-select" id="pp-me-perm">
-            <option value="fs-only" ${m.permissions?.preset === 'fs-only' ? 'selected' : ''}>FS only (Read/Edit/Write)</option>
-            <option value="fs-plus-bash" ${m.permissions?.preset === 'fs-plus-bash' ? 'selected' : ''}>FS + Bash</option>
-            <option value="fs-plus-web" ${m.permissions?.preset === 'fs-plus-web' ? 'selected' : ''}>FS + Web</option>
-            <option value="full" ${m.permissions?.preset === 'full' ? 'selected' : ''}>Full (FS + Bash + Web + sub-agents)</option>
-            <option value="cloud" ${m.permissions?.preset === 'cloud' ? 'selected' : ''}>Cloud only (GitHub MCP)</option>
-          </select>
+          <div id="pp-me-perm-mount"></div>
         </div>
         <div class="pp-me-field">
           <label class="pp-me-label">Effort</label>
-          <select class="pp-me-select" id="pp-me-effort">
-            <option value="none" ${m.effort === 'none' ? 'selected' : ''}>None</option>
-            <option value="low" ${m.effort === 'low' ? 'selected' : ''}>Low</option>
-            <option value="medium" ${m.effort === 'medium' ? 'selected' : ''}>Medium</option>
-            <option value="high" ${m.effort === 'high' ? 'selected' : ''}>High</option>
-          </select>
+          <div id="pp-me-effort-mount"></div>
         </div>
       </div>
 
@@ -636,9 +736,7 @@
           </div>
           <div class="pp-me-field" style="flex:0 0 180px;">
             <label class="pp-me-label">Branch <button class="pp-me-mini-btn" data-act="branch-refresh" type="button" title="Refresh branches">↻</button></label>
-            <select class="pp-me-select" id="pp-me-branch">
-              <option value="${escapeHtml(branch)}">${escapeHtml(branch)}</option>
-            </select>
+            <div id="pp-me-branch-mount"></div>
           </div>
         </div>
         <div class="pp-me-help" id="pp-me-cloud-help">${patIsSet ? 'Pick from your repos. Branches load when you select a repo.' : '⚠ Connect GitHub before saving a cloud mission.'}</div>`;
@@ -731,6 +829,39 @@
       });
     });
     wireCronTabs(body, m);
+
+    // Mount custom selects (replace native <select> so the dropdown
+    // popup is dark on Windows/Linux instead of grey).
+    const permMount = body.querySelector('#pp-me-perm-mount');
+    if (permMount) {
+      const sel = createCustomSelect({
+        options: [
+          { value: 'fs-only', label: 'FS only (Read/Edit/Write)' },
+          { value: 'fs-plus-bash', label: 'FS + Bash' },
+          { value: 'fs-plus-web', label: 'FS + Web' },
+          { value: 'full', label: 'Full (FS + Bash + Web + sub-agents)' },
+          { value: 'cloud', label: 'Cloud only (GitHub MCP)' },
+        ],
+        value: m.permissions?.preset || 'fs-only',
+      });
+      sel.id = 'pp-me-perm';
+      permMount.appendChild(sel);
+    }
+    const effortMount = body.querySelector('#pp-me-effort-mount');
+    if (effortMount) {
+      const sel = createCustomSelect({
+        options: [
+          { value: 'none', label: 'None' },
+          { value: 'low', label: 'Low' },
+          { value: 'medium', label: 'Medium' },
+          { value: 'high', label: 'High' },
+        ],
+        value: m.effort || 'medium',
+      });
+      sel.id = 'pp-me-effort';
+      effortMount.appendChild(sel);
+    }
+
     if (m.target?.kind === 'cloud') wireCloudPicker(body, m);
     else wireLocalPicker(body, m);
   }
@@ -841,9 +972,20 @@
   function wireCloudPicker(body, m) {
     const repoInput = body.querySelector('#pp-me-repo');
     const repoList = body.querySelector('#pp-me-repo-list');
-    const branchSel = body.querySelector('#pp-me-branch');
+    const branchMount = body.querySelector('#pp-me-branch-mount');
     const helpEl = body.querySelector('#pp-me-cloud-help');
-    if (!repoInput || !branchSel) return;
+    if (!repoInput || !branchMount) return;
+
+    // Mount the branch custom select (initially with whatever was saved).
+    const initialBranch = m.target.branch || 'main';
+    let branchSel = createCustomSelect({
+      options: [{ value: initialBranch, label: initialBranch }],
+      value: initialBranch,
+      onChange: (v) => { m.target.branch = v; },
+    });
+    branchSel.id = 'pp-me-branch';
+    branchMount.innerHTML = '';
+    branchMount.appendChild(branchSel);
 
     let repos = [];
     let activeIdx = -1;
@@ -863,22 +1005,23 @@
     }
 
     async function loadBranches(repo, refresh = false) {
-      branchSel.innerHTML = `<option value="${escapeHtml(m.target.branch || 'main')}">Loading…</option>`;
+      branchSel.setOptions([{ value: m.target.branch || 'main', label: 'Loading…' }]);
       const r = await api.github.listBranches(repo, refresh);
       if (!r?.ok) {
-        branchSel.innerHTML = `<option value="${escapeHtml(m.target.branch || 'main')}">${escapeHtml(m.target.branch || 'main')}</option>`;
+        const v = m.target.branch || 'main';
+        branchSel.setOptions([{ value: v, label: v }], v);
         return;
       }
       const branches = r.branches || [];
       const repoMeta = repos.find(x => x.fullName === repo);
       const def = repoMeta?.defaultBranch || 'main';
-      // Sort: default first, then alphabetical.
       branches.sort((a, b) => (a.name === def ? -1 : b.name === def ? 1 : a.name.localeCompare(b.name)));
-      branchSel.innerHTML = branches.map(b =>
-        `<option value="${escapeHtml(b.name)}" ${b.name === (m.target.branch || def) ? 'selected' : ''}>${escapeHtml(b.name)}${b.protected ? ' 🔒' : ''}${b.name === def ? ' (default)' : ''}</option>`
-      ).join('') || `<option value="main">main</option>`;
-      // Persist whatever ended up selected back into the model.
-      if (branchSel.value) m.target.branch = branchSel.value;
+      const opts = branches.length
+        ? branches.map(b => ({ value: b.name, label: b.name + (b.protected ? ' 🔒' : '') + (b.name === def ? ' (default)' : '') }))
+        : [{ value: 'main', label: 'main' }];
+      const chosen = (m.target.branch && opts.find(o => o.value === m.target.branch)) ? m.target.branch : (def || opts[0].value);
+      branchSel.setOptions(opts, chosen);
+      m.target.branch = chosen;
     }
 
     function filteredRepos(query) {
@@ -944,10 +1087,6 @@
       else return;
       items.forEach((it, i) => it.classList.toggle('active', i === activeIdx));
       items[activeIdx]?.scrollIntoView({ block: 'nearest' });
-    });
-
-    branchSel.addEventListener('change', () => {
-      m.target.branch = branchSel.value;
     });
 
     body.querySelector('[data-act="repo-refresh"]')?.addEventListener('click', async (e) => {
