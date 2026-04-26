@@ -91,6 +91,21 @@
 .pp-preset-menu { position:fixed; z-index:9100; min-width:230px; background:var(--surface,#1c1c21); border:1px solid var(--border); border-radius:8px; padding:4px; box-shadow:0 12px 32px rgba(0,0,0,0.45); display:flex; flex-direction:column; gap:2px; }
 .pp-preset-item { background:transparent; border:none; color:var(--text); padding:7px 10px; border-radius:5px; text-align:left; font-size:12.5px; cursor:pointer; font-family:var(--font-sans); transition:background 0.12s; }
 .pp-preset-item:hover { background:rgba(255,107,53,0.12); color:var(--accent-light,#ffb38a); }
+
+/* Combobox for the cloud repo picker */
+.pp-combo { position:relative; }
+.pp-combo-list { position:absolute; left:0; right:0; top:calc(100% + 2px); z-index:10; max-height:240px; overflow-y:auto; background:var(--surface,#1c1c21); border:1px solid var(--border); border-radius:6px; box-shadow:0 12px 28px rgba(0,0,0,0.4); padding:3px; display:flex; flex-direction:column; gap:1px; }
+.pp-combo-item { background:transparent; border:none; color:var(--text); padding:6px 9px; border-radius:4px; text-align:left; font-size:12px; cursor:pointer; display:flex; align-items:center; gap:8px; font-family:var(--font-sans); }
+.pp-combo-item:hover, .pp-combo-item.active { background:rgba(255,107,53,0.12); color:var(--accent-light,#ffb38a); }
+.pp-combo-item .pp-combo-name { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:500; }
+.pp-combo-item .pp-combo-meta { font-size:10px; color:var(--text-dim); font-family:var(--font-mono); display:flex; align-items:center; gap:5px; }
+.pp-combo-item .pp-combo-private { background:rgba(255,107,53,0.15); color:var(--accent-light,#ffb38a); padding:1px 5px; border-radius:8px; font-size:9px; letter-spacing:0.06em; text-transform:uppercase; }
+.pp-combo-empty { padding:10px; color:var(--text-dim); font-size:11.5px; text-align:center; }
+.pp-combo-loading { padding:10px; color:var(--text-mid); font-size:11.5px; text-align:center; }
+.pp-me-mini-btn { background:transparent; border:none; color:var(--text-dim); cursor:pointer; padding:0 4px; font-size:12px; vertical-align:middle; transition:color 0.15s; }
+.pp-me-mini-btn:hover { color:var(--accent-light,#ffb38a); }
+.pp-me-mini-btn.spinning { animation:pp-mini-spin 0.8s linear infinite; }
+@keyframes pp-mini-spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
 .pp-missions-pat-pill { display:flex; align-items:center; gap:6px; padding:5px 9px; border-radius:14px; font-size:11px; cursor:pointer; transition:background 0.15s; }
 .pp-missions-pat-pill.set { background:rgba(86,212,221,0.1); border:1px solid rgba(86,212,221,0.3); color:#56d4dd; }
 .pp-missions-pat-pill.unset { background:rgba(255,107,53,0.08); border:1px solid rgba(255,107,53,0.3); color:var(--accent-light, #ffb38a); }
@@ -608,14 +623,25 @@
 
   function renderTargetBody(m) {
     if (m.target?.kind === 'cloud') {
+      const repo = m.target.repo || '';
+      const branch = m.target.branch || 'main';
       return `
         <div class="pp-me-row">
-          <div class="pp-me-field"><label class="pp-me-label">Repository</label>
-            <input class="pp-me-input" id="pp-me-repo" placeholder="owner/name" value="${escapeHtml(m.target.repo || '')}" /></div>
-          <div class="pp-me-field" style="flex:0 0 140px;"><label class="pp-me-label">Branch</label>
-            <input class="pp-me-input" id="pp-me-branch" placeholder="main" value="${escapeHtml(m.target.branch || 'main')}" /></div>
+          <div class="pp-me-field" style="flex:1;">
+            <label class="pp-me-label">Repository <button class="pp-me-mini-btn" data-act="repo-refresh" type="button" title="Refresh repo list">↻</button></label>
+            <div class="pp-combo">
+              <input class="pp-me-input pp-combo-input" id="pp-me-repo" placeholder="owner/name — start typing" value="${escapeHtml(repo)}" autocomplete="off" />
+              <div class="pp-combo-list" id="pp-me-repo-list" hidden></div>
+            </div>
+          </div>
+          <div class="pp-me-field" style="flex:0 0 180px;">
+            <label class="pp-me-label">Branch <button class="pp-me-mini-btn" data-act="branch-refresh" type="button" title="Refresh branches">↻</button></label>
+            <select class="pp-me-select" id="pp-me-branch">
+              <option value="${escapeHtml(branch)}">${escapeHtml(branch)}</option>
+            </select>
+          </div>
         </div>
-        <div class="pp-me-help">${patIsSet ? '' : '⚠ Connect GitHub before saving a cloud mission.'}</div>`;
+        <div class="pp-me-help" id="pp-me-cloud-help">${patIsSet ? 'Pick from your repos. Branches load when you select a repo.' : '⚠ Connect GitHub before saving a cloud mission.'}</div>`;
     }
     return `
       <input class="pp-me-input" id="pp-me-projectpath" placeholder="C:/path/to/project" value="${escapeHtml(m.target?.projectPath || state?.projectPath || '')}" />
@@ -688,6 +714,7 @@
         body.querySelectorAll('#pp-me-target-tabs .pp-me-tab').forEach(t => t.classList.toggle('active', t === tab));
         body.querySelector('#pp-me-target-body').innerHTML = renderTargetBody(m);
         body.querySelector('#pp-me-cloud-pr-field').style.display = kind === 'cloud' ? '' : 'none';
+        if (kind === 'cloud') wireCloudPicker(body, m);
       });
     });
     body.querySelectorAll('#pp-me-trigger-tabs .pp-me-tab').forEach(tab => {
@@ -700,6 +727,138 @@
       });
     });
     wireCronTabs(body, m);
+    if (m.target?.kind === 'cloud') wireCloudPicker(body, m);
+  }
+
+  // Cloud picker: combobox of user's repos + branch dropdown that
+  // re-populates whenever a repo is selected. Repo list is cached in
+  // main process for 5 minutes; refresh button busts the cache.
+  function wireCloudPicker(body, m) {
+    const repoInput = body.querySelector('#pp-me-repo');
+    const repoList = body.querySelector('#pp-me-repo-list');
+    const branchSel = body.querySelector('#pp-me-branch');
+    const helpEl = body.querySelector('#pp-me-cloud-help');
+    if (!repoInput || !branchSel) return;
+
+    let repos = [];
+    let activeIdx = -1;
+
+    async function loadRepos(refresh = false) {
+      if (helpEl) helpEl.textContent = 'Loading repositories…';
+      const r = await api.github.listRepos(refresh);
+      if (!r?.ok) {
+        if (helpEl) helpEl.textContent = '⚠ ' + (r?.error || 'Failed to load repos');
+        return;
+      }
+      repos = r.repos || [];
+      if (helpEl) helpEl.textContent = `${repos.length} repo${repos.length === 1 ? '' : 's'} available · type to filter`;
+      // If we already have a repo set, also load its branches so the
+      // dropdown shows real options instead of just the saved value.
+      if (m.target.repo) await loadBranches(m.target.repo);
+    }
+
+    async function loadBranches(repo, refresh = false) {
+      branchSel.innerHTML = `<option value="${escapeHtml(m.target.branch || 'main')}">Loading…</option>`;
+      const r = await api.github.listBranches(repo, refresh);
+      if (!r?.ok) {
+        branchSel.innerHTML = `<option value="${escapeHtml(m.target.branch || 'main')}">${escapeHtml(m.target.branch || 'main')}</option>`;
+        return;
+      }
+      const branches = r.branches || [];
+      const repoMeta = repos.find(x => x.fullName === repo);
+      const def = repoMeta?.defaultBranch || 'main';
+      // Sort: default first, then alphabetical.
+      branches.sort((a, b) => (a.name === def ? -1 : b.name === def ? 1 : a.name.localeCompare(b.name)));
+      branchSel.innerHTML = branches.map(b =>
+        `<option value="${escapeHtml(b.name)}" ${b.name === (m.target.branch || def) ? 'selected' : ''}>${escapeHtml(b.name)}${b.protected ? ' 🔒' : ''}${b.name === def ? ' (default)' : ''}</option>`
+      ).join('') || `<option value="main">main</option>`;
+      // Persist whatever ended up selected back into the model.
+      if (branchSel.value) m.target.branch = branchSel.value;
+    }
+
+    function filteredRepos(query) {
+      const q = (query || '').trim().toLowerCase();
+      if (!q) return repos.slice(0, 50);
+      return repos.filter(r =>
+        r.fullName.toLowerCase().includes(q) ||
+        (r.description || '').toLowerCase().includes(q)
+      ).slice(0, 50);
+    }
+
+    function renderList(query) {
+      const list = filteredRepos(query);
+      activeIdx = -1;
+      if (!repos.length) {
+        repoList.innerHTML = `<div class="pp-combo-loading">Loading…</div>`;
+        repoList.hidden = false;
+        return;
+      }
+      if (!list.length) {
+        repoList.innerHTML = `<div class="pp-combo-empty">No matches</div>`;
+        repoList.hidden = false;
+        return;
+      }
+      repoList.innerHTML = list.map(r => `
+        <button type="button" class="pp-combo-item" data-repo="${escapeHtml(r.fullName)}">
+          <span class="pp-combo-name">${escapeHtml(r.fullName)}</span>
+          <span class="pp-combo-meta">${r.private ? '<span class="pp-combo-private">private</span>' : ''}${r.language ? '<span>' + escapeHtml(r.language) + '</span>' : ''}</span>
+        </button>
+      `).join('');
+      repoList.hidden = false;
+      repoList.querySelectorAll('[data-repo]').forEach(btn => {
+        btn.addEventListener('mousedown', (e) => {
+          e.preventDefault();   // keep input focus for the blur handler order
+          pickRepo(btn.dataset.repo);
+        });
+      });
+    }
+
+    async function pickRepo(fullName) {
+      m.target.repo = fullName;
+      repoInput.value = fullName;
+      repoList.hidden = true;
+      await loadBranches(fullName);
+    }
+
+    repoInput.addEventListener('input', () => {
+      m.target.repo = repoInput.value.trim();
+      renderList(repoInput.value);
+    });
+    repoInput.addEventListener('focus', () => renderList(repoInput.value));
+    repoInput.addEventListener('blur', () => setTimeout(() => { repoList.hidden = true; }, 120));
+    repoInput.addEventListener('keydown', (e) => {
+      const items = Array.from(repoList.querySelectorAll('.pp-combo-item'));
+      if (!items.length) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, items.length - 1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); }
+      else if (e.key === 'Enter' && activeIdx >= 0) {
+        e.preventDefault();
+        pickRepo(items[activeIdx].dataset.repo);
+        return;
+      } else if (e.key === 'Escape') { repoList.hidden = true; return; }
+      else return;
+      items.forEach((it, i) => it.classList.toggle('active', i === activeIdx));
+      items[activeIdx]?.scrollIntoView({ block: 'nearest' });
+    });
+
+    branchSel.addEventListener('change', () => {
+      m.target.branch = branchSel.value;
+    });
+
+    body.querySelector('[data-act="repo-refresh"]')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.classList.add('spinning');
+      try { await loadRepos(true); } finally { btn.classList.remove('spinning'); }
+    });
+    body.querySelector('[data-act="branch-refresh"]')?.addEventListener('click', async (e) => {
+      if (!m.target.repo) return;
+      const btn = e.currentTarget;
+      btn.classList.add('spinning');
+      try { await loadBranches(m.target.repo, true); } finally { btn.classList.remove('spinning'); }
+    });
+
+    // Kick off initial load.
+    loadRepos();
   }
 
   function wireCronTabs(body, m) {

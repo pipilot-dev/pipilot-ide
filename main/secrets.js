@@ -75,6 +75,11 @@ module.exports = function register(ipcMain, ctx) {
         all[key] = encrypt(value);
       }
       await writeAll(all);
+      // Notify any listeners (e.g. github module wants to flush its cache).
+      try {
+        const win = ctx.getWindow?.();
+        if (win && !win.isDestroyed()) win.webContents.send('secrets:changed', { key });
+      } catch {}
       return { ok: true, encryptionAvailable: encryptionAvailable() };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };

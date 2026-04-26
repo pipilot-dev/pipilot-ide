@@ -329,6 +329,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     get: (key) => ipcRenderer.invoke('secrets:get', { key }),
     set: (key, value) => ipcRenderer.invoke('secrets:set', { key, value }),
     delete: (key) => ipcRenderer.invoke('secrets:delete', { key }),
+    onChanged: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('secrets:changed', fn);
+      return () => ipcRenderer.removeListener('secrets:changed', fn);
+    },
+  },
+
+  // ---------- GitHub API proxy (uses stored PAT, never exposed) ----------
+  github: {
+    whoami: () => ipcRenderer.invoke('github:whoami'),
+    listRepos: (refresh) => ipcRenderer.invoke('github:list-repos', { refresh: !!refresh }),
+    listBranches: (repo, refresh) => ipcRenderer.invoke('github:list-branches', { repo, refresh: !!refresh }),
   },
 
   // ---------- Missions (scheduled/reactive background agents) ----------
