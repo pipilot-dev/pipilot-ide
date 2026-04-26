@@ -133,8 +133,18 @@
       id: tabId,
       name: 'Mission · ' + mission.name,
       icon: '⚡',
+      // Return value becomes the editor's unmount handler — fires
+      // whenever the user closes this tab. We use it to release
+      // event subscriptions and drop the openTabs entry so the next
+      // open mounts a fresh view.
       mount: (container) => {
-        mountStreamView(container, mission);
+        try {
+          return mountStreamView(container, mission);
+        } catch (err) {
+          console.error('[missions-stream-tab] mount failed:', err);
+          container.innerHTML = `<div style="padding:24px;color:var(--error,#e5534b);font-family:var(--font-mono);font-size:12px;">Failed to mount mission view:<br/>${escapeHtml(err?.stack || err?.message || String(err))}</div>`;
+          return () => {};
+        }
       },
     });
   }
@@ -381,16 +391,17 @@
       }
     });
 
-    openTabs.set(mission.id, {
-      tabId: tabIdFor(mission.id),
-      dispose: () => {
-        try { offEvent(); } catch {}
-        try { offEnd(); } catch {}
-        try { offStatus && offStatus(); } catch {}
-        clearInterval(durationTimer);
-        openTabs.delete(mission.id);
-      },
-    });
+    const dispose = () => {
+      try { offEvent(); } catch {}
+      try { offEnd(); } catch {}
+      try { offStatus && offStatus(); } catch {}
+      clearInterval(durationTimer);
+      openTabs.delete(mission.id);
+    };
+    openTabs.set(mission.id, { tabId: tabIdFor(mission.id), dispose });
+    // Returned to editor.openVirtualTab as the doc.unmount handler so
+    // closing the tab tears down our subscriptions automatically.
+    return dispose;
   }
 
   // Public API
