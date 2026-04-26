@@ -388,8 +388,16 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         const cloneRes = await execAsync('git', ['clone', '--branch', branch, '--depth', '50', url, scratchDir]);
         if (!cloneRes.ok) {
           // Sanitise the error so we never leak the PAT in the log.
-          const safeStderr = (cloneRes.stderr || cloneRes.error || 'unknown').replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
-          const summary = 'Clone failed: ' + safeStderr.slice(0, 400);
+          // Pull the LAST non-empty line from stderr — git's last
+          // output line is usually the actual error (e.g. "fatal:
+          // Remote branch X not found"), while earlier lines are
+          // progress noise like "Cloning into '...'".
+          const sanitised = (cloneRes.stderr || cloneRes.error || 'unknown')
+            .replace(/x-access-token:[^@]+@/g, 'x-access-token:***@')
+            .replace(/https:\/\/[^@]+@/g, 'https://***@');
+          const lines = sanitised.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+          const lastError = lines.reverse().find(l => /^(fatal|error|remote):/i.test(l)) || lines[0] || sanitised;
+          const summary = 'Clone failed: ' + lastError.slice(0, 800);
           await patchStats(mission, { lastRunAt: Date.now(), lastRunStatus: 'error', lastRunMessage: summary, runCount: (mission.runCount || 0) + 1 });
           await appendLog(mission, 'error', summary);
           broadcast('missions:status', { id: mission.id, state: 'idle', status: 'error', summary });
@@ -545,7 +553,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       await patchStats(m, {
         lastRunAt: Date.now(),
         lastRunStatus: status || 'success',
-        lastRunMessage: (summary || '').slice(0, 280),
+        lastRunMessage: (summary || '').slice(0, 800),
         runCount: (m.runCount || 0) + 1,
       });
       await appendLog(m, status || 'success', [

@@ -144,6 +144,8 @@
 @keyframes pp-mission-pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 
 .pp-mission-meta { display:flex; gap:10px; font-size:10.5px; color:var(--text-dim); font-family:var(--font-mono); flex-wrap:wrap; }
+.pp-mission-msg { font-size:10.5px; color:var(--text-mid); font-family:var(--font-mono); line-height:1.45; max-height:3.6em; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; word-break:break-word; }
+.pp-mission-card.error .pp-mission-msg { color:var(--error,#e5534b); opacity:0.85; }
 .pp-mission-meta span { display:flex; align-items:center; gap:3px; }
 .pp-mission-actions { display:flex; gap:6px; margin-top:2px; }
 .pp-mission-btn { background:transparent; border:1px solid rgba(255,255,255,0.1); color:var(--text-mid); padding:3px 9px; border-radius:5px; font-size:10.5px; cursor:pointer; transition:all 0.15s; }
@@ -365,7 +367,7 @@
         <span>· ${escapeHtml(describeTrigger(m.trigger))}</span>
         <span>· ran ${m.runCount || 0}× · ${escapeHtml(relativeTime(m.lastRunAt))}</span>
       </div>
-      ${m.lastRunMessage ? `<div class="pp-mission-meta" style="opacity:0.85;">${escapeHtml(m.lastRunMessage.slice(0, 100))}</div>` : ''}
+      ${m.lastRunMessage ? `<div class="pp-mission-msg" title="${escapeHtml(m.lastRunMessage)}">${escapeHtml(m.lastRunMessage)}</div>` : ''}
       <div class="pp-mission-actions">
         <button class="pp-mission-btn primary" data-act="run" ${isRunning ? 'disabled' : ''}>${isRunning ? 'Running…' : 'Run now'}</button>
         <button class="pp-mission-btn" data-act="edit">Edit</button>

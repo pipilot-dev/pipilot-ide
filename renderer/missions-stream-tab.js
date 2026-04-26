@@ -264,13 +264,40 @@
       }
     }
 
-    // Replay buffered events (when the tab opens mid-run or after end).
+    // Initial-state resolution. Three cases, in priority order:
+    //   1. There's a live buffer (mission ran or is running this session) →
+    //      replay events, render whatever status the buffer carries.
+    //   2. The renderer's in-flight set says it isn't running, AND the
+    //      mission has a lastRunStatus (i.e. previously completed) →
+    //      paint that final status, freeze the duration counter.
+    //   3. Otherwise (never run yet) → idle/never UI.
     const buf = window.PiPilot?.missions?.runner?.getBuffer?.(mission.id);
+    const isRunningNow = !!window.PiPilot?.missions?.runner?.isRunning?.(mission.id);
     if (buf) {
       for (const evt of buf.events) applyEvent(evt);
       if (buf.status && buf.status !== 'running') {
         setStatus(buf.status, buf.status);
         clearInterval(durationTimer);
+      }
+    } else if (!isRunningNow) {
+      const last = mission.lastRunStatus;
+      if (last) {
+        setStatus(last, last);
+        clearInterval(durationTimer);
+        durEl.textContent = '';
+        if (mission.lastRunMessage) {
+          const msg = document.createElement('div');
+          msg.className = 'pp-mst-pill ' + (last === 'success' ? 'success' : 'error');
+          msg.innerHTML = `<span class="pp-mst-pill-icon">${last === 'success' ? SVG.ok : SVG.err}</span><span class="pp-mst-pill-preview">${escapeHtml(mission.lastRunMessage)}</span>`;
+          body.appendChild(msg);
+          if (empty) empty.style.display = 'none';
+        }
+      } else {
+        // Never run.
+        setStatus('idle', 'never');
+        clearInterval(durationTimer);
+        durEl.textContent = '';
+        if (empty) empty.textContent = 'This mission hasn\'t run yet. Click Run again to fire it.';
       }
     }
 
@@ -284,6 +311,28 @@
       setStatus(payload.status, payload.status);
       clearInterval(durationTimer);
       if (payload.durationMs) durEl.textContent = (payload.durationMs / 1000).toFixed(1) + 's';
+    });
+    // Catch terminal events that come from MAIN (e.g. clone failures
+    // that abort the mission before the renderer ever sees a stream).
+    // missions:status fires with { state: 'idle', status: 'error', summary }
+    // from fireMission's early-return path.
+    const offStatus = api.missions.onStatus((payload) => {
+      if (payload?.id !== mission.id) return;
+      if (payload.state === 'running') {
+        setStatus('running', 'running');
+        return;
+      }
+      if (payload.state === 'idle' && payload.status) {
+        setStatus(payload.status, payload.status);
+        clearInterval(durationTimer);
+        if (payload.summary && body && empty?.style.display !== 'none') {
+          const msg = document.createElement('div');
+          msg.className = 'pp-mst-pill ' + (payload.status === 'success' ? 'success' : 'error');
+          msg.innerHTML = `<span class="pp-mst-pill-icon">${payload.status === 'success' ? SVG.ok : SVG.err}</span><span class="pp-mst-pill-preview">${escapeHtml(payload.summary)}</span>`;
+          body.appendChild(msg);
+          if (empty) empty.style.display = 'none';
+        }
+      }
     });
 
     // Footer actions
@@ -325,6 +374,7 @@
       dispose: () => {
         try { offEvent(); } catch {}
         try { offEnd(); } catch {}
+        try { offStatus && offStatus(); } catch {}
         clearInterval(durationTimer);
         openTabs.delete(mission.id);
       },
