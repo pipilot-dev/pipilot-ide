@@ -375,21 +375,7 @@
     root.querySelector('[data-act="edit"]').addEventListener('click', () => {
       window.PiPilot?.missions?.openEditor?.(mission);
     });
-    root.querySelector('[data-act="log"]').addEventListener('click', async () => {
-      const logPath = mission.target?.kind === 'local' && mission.target.projectPath
-        ? mission.target.projectPath + (mission.target.projectPath.includes('\\') ? '\\' : '/') + '.pipilot' + (mission.target.projectPath.includes('\\') ? '\\' : '/') + 'missions.log.md'
-        : null;
-      if (logPath && api.files?.read) {
-        try {
-          // Open via the editor's normal openFile flow.
-          window.PiPilot?.editor?.openFile?.(logPath);
-        } catch (err) {
-          bus.emit('toast:show', { type: 'warn', message: 'Log not yet written' });
-        }
-      } else {
-        bus.emit('toast:show', { type: 'info', message: 'Log lives in user data for cloud missions' });
-      }
-    });
+    root.querySelector('[data-act="log"]').addEventListener('click', () => openMissionLog(mission));
 
     const dispose = () => {
       try { offEvent(); } catch {}
@@ -404,8 +390,99 @@
     return dispose;
   }
 
+  // ── Mission log viewer ─────────────────────────────────────────
+  // Cloud missions write their log to <userData>/missions.log.md;
+  // local missions write to <projectPath>/.pipilot/missions.log.md.
+  // The renderer can't open files outside the open project via the
+  // normal editor.openFile path, so we use the missions:read-log IPC
+  // (which knows both possible locations) and render the content in
+  // a virtual tab. Hovering over the mission section in the log
+  // shows everything: status, target, trigger, tool count, duration,
+  // final agent text.
+  async function openMissionLog(mission) {
+    const editor = window.PiPilot?.editor;
+    if (!editor?.openVirtualTab || !api.missions?.readLog) {
+      bus.emit('toast:show', { type: 'warn', message: 'Cannot open log' });
+      return;
+    }
+    const projectPath = mission.target?.kind === 'local'
+      ? mission.target.projectPath
+      : (window.PiPilot?.state?.projectPath || null);
+    let combined = '';
+    let files = [];
+    try {
+      const r = await api.missions.readLog(projectPath);
+      files = r?.files || [];
+      if (!files.length) {
+        bus.emit('toast:show', { type: 'info', message: 'Log file does not exist yet — run the mission first.' });
+        return;
+      }
+      // Filter content per-mission so the tab shows only entries that
+      // belong to this mission's name (the log is shared across all
+      // missions in that scope). Each block starts with "## <iso> —
+      // <mission name> [<status>]".
+      for (const f of files) {
+        const blocks = f.content.split(/(?=^## \d{4}-\d{2}-\d{2}T)/m);
+        const matching = blocks.filter(b => {
+          const head = b.split('\n', 1)[0];
+          return head.includes('— ' + mission.name + ' [') ||
+                 head.includes('- ' + mission.name + ' [');
+        });
+        if (matching.length) {
+          combined += `\n\n<!-- from ${f.file} -->\n` + matching.join('\n') + '\n';
+        }
+      }
+      if (!combined.trim()) {
+        // No mission-specific entries — show the full log so the user
+        // can find what they're looking for.
+        combined = files.map(f => `<!-- ${f.file} -->\n` + f.content).join('\n\n---\n\n');
+      }
+    } catch (err) {
+      bus.emit('toast:show', { type: 'warn', message: 'Could not read log: ' + (err?.message || err) });
+      return;
+    }
+
+    const tabId = 'pipilot://mission-log/' + mission.id;
+    editor.openVirtualTab({
+      id: tabId,
+      name: 'Log · ' + mission.name,
+      icon: '📄',
+      mount: (container) => {
+        container.style.cssText = 'width:100%;height:100%;background:var(--bg,#16161a);overflow:auto;display:flex;flex-direction:column;';
+        const head = document.createElement('div');
+        head.style.cssText = 'padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;';
+        head.innerHTML = `
+          <div style="font-size:13px;font-weight:600;color:var(--text-strong);">Mission log — ${escapeHtml(mission.name)}</div>
+          <div style="display:flex;gap:8px;">
+            <button class="pp-mst-btn" data-act="reveal">📂 Reveal in folder</button>
+            <button class="pp-mst-btn" data-act="refresh">↻ Refresh</button>
+          </div>`;
+        container.appendChild(head);
+        const pre = document.createElement('pre');
+        pre.style.cssText = 'flex:1;margin:0;padding:14px 18px;font-family:var(--font-mono);font-size:11.5px;line-height:1.55;color:var(--text);white-space:pre-wrap;word-wrap:break-word;overflow:auto;';
+        pre.textContent = combined.trim();
+        container.appendChild(pre);
+        head.querySelector('[data-act="refresh"]').addEventListener('click', async () => {
+          try {
+            const r = await api.missions.readLog(projectPath);
+            const fresh = (r?.files || []).map(f => `<!-- ${f.file} -->\n` + f.content).join('\n\n---\n\n');
+            pre.textContent = fresh.trim() || '(empty)';
+          } catch {}
+        });
+        head.querySelector('[data-act="reveal"]').addEventListener('click', () => {
+          const target = files[0]?.file;
+          if (target && api.shell?.showItemInFolder) {
+            api.shell.showItemInFolder(target);
+          }
+        });
+        return () => {};
+      },
+    });
+  }
+
   // Public API
   window.PiPilot = window.PiPilot || {};
   window.PiPilot.missions = window.PiPilot.missions || {};
   window.PiPilot.missions.openStreamTab = openMissionTab;
+  window.PiPilot.missions.openLog = openMissionLog;
 })();
