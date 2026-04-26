@@ -269,8 +269,9 @@
       const slides = all.map((entry, i) => {
         const ago = relativeTimeFromString(entry.time) || entry.time;
         const eyebrow = i === 0 ? 'Resume where you left off' : 'Earlier session';
+        const sid = entry?.meta?.session || '';
         return `
-          <div class="wt-resume-slide" data-idx="${i}" ${i === 0 ? '' : 'aria-hidden="true"'}>
+          <div class="wt-resume-slide" data-idx="${i}" data-session-id="${escapeHtmlSafe(sid)}" ${i === 0 ? '' : 'aria-hidden="true"'}>
             <div class="wt-resume-head">
               <span class="wt-resume-eyebrow">${eyebrow}</span>
               <span class="wt-resume-time">${escapeHtmlSafe(ago)}</span>
@@ -306,6 +307,7 @@
 
       const card = host.querySelector('.wt-resume-card');
       const track = host.querySelector('.wt-resume-track');
+      const resumeBtn = () => host.querySelector('[data-action="resume-chat"]');
       const setActive = (idx) => {
         const n = all.length;
         const i = ((idx % n) + n) % n;
@@ -318,6 +320,16 @@
         host.querySelectorAll('.wt-resume-dot').forEach((el, j) => {
           el.classList.toggle('active', j === i);
         });
+        // Sync the resume button to the active slide's session — disable
+        // when the entry was written without a session id (older diaries).
+        const btn = resumeBtn();
+        if (btn) {
+          const sid = all[i]?.meta?.session || '';
+          btn.dataset.sessionId = sid;
+          btn.disabled = !sid;
+          btn.title = sid ? `Open session ${sid}` : 'Session id not recorded for this entry';
+          btn.textContent = sid ? 'Open session' : 'Open chat';
+        }
       };
       // Mark first slide active so CSS reveals it.
       setActive(0);
@@ -340,8 +352,32 @@
         card?.setAttribute('tabindex', '0');
       }
 
-      host.querySelector('[data-action="resume-chat"]')?.addEventListener('click', () => {
-        bus.emit('menu:view:toggle-chat');
+      host.querySelector('[data-action="resume-chat"]')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        const sid = btn?.dataset?.sessionId || '';
+        // Make sure the chat panel is visible so the user actually sees
+        // the session they just opened — only emits "show" if currently
+        // hidden, so it never closes an open panel.
+        try { bus.emit('chat:show'); } catch {}
+        if (!sid) {
+          // Fallback: no session id recorded — best we can do is reveal
+          // the chat panel and let the user pick from history.
+          try { bus.emit('menu:view:toggle-chat'); } catch {}
+          return;
+        }
+        try {
+          const loadFn = window.PiPilot?.chat?.loadSession;
+          if (typeof loadFn === 'function') {
+            await loadFn(sid);
+            window.PiPilot?.chat?.focus?.();
+          } else {
+            console.warn('[welcome] chat.loadSession unavailable');
+            try { bus.emit('menu:view:toggle-chat'); } catch {}
+          }
+        } catch (err) {
+          console.warn('[welcome] failed to open session', sid, err);
+          bus.emit('toast:show', { type: 'warn', message: 'Could not open that chat session' });
+        }
       });
       host.querySelector('[data-action="dismiss-resume"]')?.addEventListener('click', () => {
         host.style.transition = 'opacity 0.2s, max-height 0.3s';
@@ -983,6 +1019,16 @@
   color: #fff;
 }
 .wt-resume-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.wt-resume-btn:disabled,
+.wt-resume-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.12);
+  color: var(--text-mid);
+}
+.wt-resume-btn:disabled:hover,
+.wt-resume-btn[disabled]:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.12); }
 .wt-resume-btn.ghost {
   background: transparent;
   border-color: rgba(255,255,255,0.1);
