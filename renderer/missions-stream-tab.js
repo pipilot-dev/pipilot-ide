@@ -219,15 +219,30 @@
       rerunBtn.disabled = state === 'running';
     }
 
-    function appendTextDelta(text) {
+    // text_delta fires per token (dozens of times per second) for live
+    // streaming feel. text fires at block_stop with the canonical body
+    // — we use it as the authoritative replace so any missed deltas
+    // are corrected. Tool calls / errors close out the active text el
+    // so the next text starts a new block.
+    function appendStreamingText(text, kind) {
       if (!text) return;
       if (empty) empty.style.display = 'none';
       if (!activeTextEl) {
         activeTextEl = document.createElement('div');
         activeTextEl.className = 'pp-mst-text';
+        activeTextEl.dataset.streaming = '1';
+        activeTextEl.dataset.text = '';
         body.appendChild(activeTextEl);
       }
-      activeTextEl.textContent += text;
+      if (kind === 'delta') {
+        activeTextEl.dataset.text = (activeTextEl.dataset.text || '') + text;
+        activeTextEl.textContent = activeTextEl.dataset.text;
+      } else {
+        // Block finalised — text carries the canonical body.
+        activeTextEl.dataset.text = text;
+        activeTextEl.textContent = text;
+        delete activeTextEl.dataset.streaming;
+      }
       scrollToBottom();
     }
 
@@ -278,11 +293,22 @@
     function applyEvent(evt) {
       if (!evt) return;
       switch (evt.type) {
-        case 'text':       appendTextDelta(evt.text || ''); break;
-        case 'tool_call':  appendToolCall(evt); break;
+        case 'text_delta':  appendStreamingText(evt.text || '', 'delta'); break;
+        case 'text':        appendStreamingText(evt.text || '', 'final'); break;
+        case 'tool_call':
+          // Close any in-flight text element so subsequent text starts
+          // a fresh block instead of mashing into the prior one.
+          activeTextEl = null;
+          appendToolCall(evt);
+          break;
         case 'tool_result': markToolResult(evt.toolUseId, evt.isError); break;
-        case 'error':      appendError(evt.message); break;
-        case 'thinking':   /* skip — streamed reasoning isn't surfaced */ break;
+        case 'error':       activeTextEl = null; appendError(evt.message); break;
+        case 'thinking':    /* skip — streamed reasoning isn't surfaced */ break;
+        case 'block_stop':
+          // Force the current text block to close so the next event
+          // starts cleanly. Harmless for tool blocks.
+          activeTextEl = null;
+          break;
       }
     }
 

@@ -262,8 +262,11 @@
           if (!evt) return;
           if (evt.type === 'tool_call') toolCallCount++;
           if (evt.type === 'text' && typeof evt.text === 'string') finalText += evt.text;
-          // Forward EVERY event to the per-mission buffer + bus so
-          // open tabs render the live stream.
+          // text_delta fires per token from the SDK — much smoother
+          // streaming feel than waiting for a whole `text` block.
+          // We forward both: text_delta drives the live visual stream;
+          // text replaces the streamed value with the canonical block
+          // (so accumulation stays correct even if a delta is missed).
           pushEvent(mission.id, evt);
           if (evt.type === 'result' || evt.type === 'error') {
             resultEvt = evt;
