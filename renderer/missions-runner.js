@@ -61,11 +61,11 @@
       try { stream && stream.stop && stream.stop(); } catch {}
     }, TIMEOUT_MS);
 
-    // Cloud missions: wire the GitHub Copilot HTTP MCP. Bearer auth
-    // means we don't spawn npx and the PAT only lives in the
-    // Authorization header for the HTTP request. We also forward
-    // extraEnv (GH_TOKEN/GITHUB_TOKEN) so the Bash tool's `gh` CLI
-    // works without any global config write.
+    // Cloud missions: wire the GitHub Copilot HTTP MCP for all
+    // GitHub-API ops (PRs, issues, search). The PAT only lives in the
+    // Authorization header for that HTTP request. The clone's git
+    // remote URL has its own token-inlined HTTPS auth (set up by
+    // main/missions.js) so `git push` works without any extra env.
     let extraMcpServers = null;
     if (mission.target?.kind === 'cloud' && payload.githubPat) {
       extraMcpServers = {
@@ -76,7 +76,6 @@
         },
       };
     }
-    const extraEnv = (payload.extraEnv && typeof payload.extraEnv === 'object') ? payload.extraEnv : {};
 
     // Cloud missions get the OS-temp scratch clone as cwd; local
     // missions keep their configured project path.
@@ -100,7 +99,6 @@
           systemPromptOverride: payload.systemPrompt,
           allowedToolsOverride: payload.allowedTools,
           extraMcpServers,
-          extraEnv,
         }, (evt) => {
           if (!evt) return;
           if (evt.type === 'tool_call') toolCallCount++;

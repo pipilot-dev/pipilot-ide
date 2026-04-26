@@ -50,11 +50,11 @@ const PERMISSION_PRESETS = {
   'fs-plus-bash':  ['Read','Edit','Write','MultiEdit','Glob','Grep','Bash','BashOutput','KillShell','mcp__pipilot__*'],
   'fs-plus-web':   ['Read','Edit','Write','MultiEdit','Glob','Grep','WebFetch','WebSearch','mcp__pipilot__*','mcp__context7__*'],
   'full':          ['Read','Edit','Write','MultiEdit','Glob','Grep','Bash','BashOutput','KillShell','WebFetch','WebSearch','Agent','mcp__pipilot__*','mcp__context7__*','mcp__playwright__*'],
-  // Cloud preset: full local toolkit because the agent works on a
-  // throwaway scratch clone (cwd = OS-temp dir), plus GitHub MCP for
-  // remote-only ops (search/issues/PRs) and gh CLI for the push +
-  // PR-open flow. The mission system prompt mandates clone-and-push
-  // for all writes; per-file MCP commits are explicitly forbidden.
+  // Cloud preset: full local toolkit (the agent works on a throwaway
+  // scratch clone) + GitHub MCP for all GitHub-API ops (PRs, issues,
+  // search, comments). No `gh` CLI — MCP covers the same surface area.
+  // git is the only external binary needed, used via Bash for clone
+  // setup (already done by main) and the final commit + push.
   'cloud':         ['Read','Edit','Write','MultiEdit','Glob','Grep','Bash','BashOutput','KillShell','WebFetch','WebSearch','mcp__github__*','mcp__pipilot__*','mcp__context7__*'],
 };
 
@@ -233,21 +233,35 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       const repo = mission.target.repo;
       const workBranch = `pipilot-mission-${mission.id}`;
       const scratchDir = ghInfo.scratchDir || `<scratch>`;
-      const prStepIfNeeded = mission.cloudPr
-        ? `gh pr create --title "[PiPilot Mission] ${mission.name.replace(/"/g, '\\"')}" --body "$(cat <<'EOF'\n<describe what changed and why, in markdown. ~3-8 sentences.>\nEOF\n)" --base ${baseBranch} --head ${workBranch}`
-        : `# Direct-commit mode: skip PR creation, the push above already updates ${baseBranch}.`;
       const branchSetup = mission.cloudPr
         ? `git checkout -b ${workBranch}    # new branch off ${baseBranch}`
-        : `git checkout ${baseBranch}        # direct-commit mode`;
+        : `git checkout ${baseBranch}       # direct-commit mode`;
       const pushCmd = mission.cloudPr
         ? `git push -u origin ${workBranch}`
         : `git push origin ${baseBranch}`;
+      const prGuidance = mission.cloudPr
+        ? [
+            `6. **Open the Pull Request via the GitHub MCP** (NOT a shell command):`,
+            `   \`\`\``,
+            `   mcp__github__create_pull_request {`,
+            `     owner: "${repo.split('/')[0]}",`,
+            `     repo:  "${repo.split('/')[1]}",`,
+            `     base:  "${baseBranch}",`,
+            `     head:  "${workBranch}",`,
+            `     title: "[PiPilot Mission] ${mission.name.replace(/"/g, '\\"')}",`,
+            `     body:  "<3-8 sentence markdown summary: what changed and why>"`,
+            `   }`,
+            `   \`\`\``,
+          ].join('\n')
+        : `(No PR step — direct-commit mode. The push above already updated ${baseBranch}.)`;
       toolGuide = [
-        `**Cloud mission workflow — clone, edit locally, push.**`,
+        `**Cloud mission workflow — clone, edit locally, push, then PR via MCP.**`,
         ``,
         `You have a clean, isolated git working tree pre-cloned at:`,
         `  ${scratchDir}`,
-        `which is the cwd you were started in. \`gh\` (${ghInfo.gh?.version || 'installed'}) and \`git\` (${ghInfo.git?.version || 'installed'}) are both on PATH and pre-authenticated via GH_TOKEN — DO NOT run \`gh auth login\` (it would clobber the user's global config; env-var auth is intentionally process-scoped).`,
+        `which is the cwd you were started in. \`git\` (${ghInfo.gitVersion || 'installed'}) is on PATH. The clone's \`origin\` remote URL has the PAT inlined for HTTPS push, so \`git push\` works with no auth prompt and no global config — that auth is scoped strictly to this scratch clone.`,
+        ``,
+        `For ALL GitHub API operations (PRs, issues, comments, search, repo metadata) use the **github MCP tools** (\`mcp__github__*\`). They're typed wrappers over the GitHub REST API, faster and more reliable than shelling out. The \`gh\` CLI is NOT installed and you don't need it.`,
         ``,
         `Standard flow — every cloud mission MUST follow this exact shape:`,
         ``,
@@ -265,32 +279,23 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         `   git add -A`,
         `   git commit -m "<imperative present-tense subject ≤72 chars>" -m "<blank line then markdown body explaining WHY>"`,
         `   \`\`\``,
-        `   ONE commit covers the whole mission, no matter how many files changed. Maintainers reviewing PiPilot Mission PRs see a single atomic change, not a stream of "Update X" noise.`,
+        `   ONE commit covers the whole mission, no matter how many files changed. Maintainers reviewing PiPilot Mission PRs see a single atomic change.`,
         ``,
         `5. **Push.**`,
         `   \`\`\`bash`,
         `   ${pushCmd}`,
         `   \`\`\``,
         ``,
-        `6. **${mission.cloudPr ? 'Open a PR' : 'Done'}.** ${mission.cloudPr ? 'Use gh:' : ''}`,
-        `   \`\`\`bash`,
-        `   ${prStepIfNeeded}`,
-        `   \`\`\``,
+        prGuidance,
         ``,
-        `Reading from the remote without cloning (PR diffs, issue lists, search) — use the GitHub Copilot HTTP MCP at api.githubcopilot.com/mcp via \`mcp__github__*\` tools. Useful for: \`mcp__github__list_pull_requests\`, \`mcp__github__search_code\`, \`mcp__github__list_issues\`, \`mcp__github__get_issue\`, \`mcp__github__add_issue_comment\`. Don't use mcp__github__create_or_update_file — it makes per-file commits, which is exactly what the clone-and-push flow exists to avoid.`,
+        `Useful read-only MCP tools while planning: mcp__github__list_pull_requests, mcp__github__search_code, mcp__github__list_issues, mcp__github__get_issue, mcp__github__get_file_contents.`,
         ``,
-        `If you need to abandon (mission is unnecessary), end with: \`Skipped: <reason>\` and DO NOT push or open a PR. The scratch clone will be cleaned up later.`,
+        `Do NOT use mcp__github__create_or_update_file — that creates one commit per file and pollutes the PR history. The local-clone-and-push flow above gives you one atomic commit per mission, which is the whole point.`,
+        ``,
+        `If the mission turns out to be unnecessary, end with \`Skipped: <reason>\` and DO NOT push or open a PR. The scratch clone is left in place for inspection and cleaned up later.`,
       ].join('\n');
     } else {
-      const ghLine = ghInfo.hasToken
-        ? ghInfo.installed
-          ? `- \`gh\` CLI is available and pre-authenticated via GH_TOKEN — useful for inspecting GitHub remotes from inside the local project (e.g. \`gh pr view\`, \`gh issue list\`).`
-          : `- \`gh\` CLI is not installed on this machine; if you need GitHub data, use WebFetch on api.github.com.`
-        : ``;
-      toolGuide = [
-        `Use Read/Edit/Write/Glob/Grep and the pipilot MCP tools to inspect and edit local files.`,
-        ghLine,
-      ].filter(Boolean).join('\n');
+      toolGuide = `Use Read/Edit/Write/Glob/Grep and the pipilot MCP tools to inspect and edit local files.`;
     }
 
     return [
@@ -346,62 +351,54 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       }
     }
 
-    // Provision git + gh CLI for missions that need them. Cloud
-    // missions REQUIRE both (clone-and-push is the only path now);
-    // local missions only need them if a PAT is set.
-    let ghInfo = { gh: { installed: false }, git: { installed: false }, hasToken: !!pat, env: pat ? { GH_TOKEN: pat, GITHUB_TOKEN: pat } : {} };
-    if (typeof ghEnsure === 'function' && (mission.target?.kind === 'cloud' || pat)) {
-      try { ghInfo = { ...ghInfo, ...(await ghEnsure()) }; } catch (err) { console.warn('[missions] ghEnsure failed:', err.message); }
+    // Cloud missions only need `git` on the machine. The Copilot HTTP
+    // MCP covers everything `gh` would be used for (PRs, issues,
+    // search, comments) as typed tools the agent can call directly.
+    let ghInfo = { git: { installed: false }, gitInstalled: false, hasToken: !!pat };
+    if (typeof ghEnsure === 'function' && mission.target?.kind === 'cloud') {
+      try { ghInfo = { ...ghInfo, ...(await ghEnsure(mission)) }; } catch (err) { console.warn('[missions] ghEnsure failed:', err.message); }
     }
 
-    // Cloud missions need BOTH git + gh — clone-and-push is the only
-    // path. If either is missing, abort with a clear message and tell
-    // the renderer to surface an install modal.
     if (mission.target?.kind === 'cloud') {
-      const missing = [];
-      if (!ghInfo.git?.installed) missing.push('git');
-      if (!ghInfo.gh?.installed) missing.push('gh');
-      if (missing.length) {
-        const summary = `Cloud missions require ${missing.join(' + ')} on this machine. Install and restart PiPilot to continue.`;
+      if (!ghInfo.gitInstalled) {
+        const summary = 'Cloud missions require git on this machine. Install from https://git-scm.com/downloads and restart PiPilot.';
         await patchStats(mission, { lastRunAt: Date.now(), lastRunStatus: 'error', lastRunMessage: summary, runCount: (mission.runCount || 0) + 1 });
         await appendLog(mission, 'error', summary);
         broadcast('missions:status', { id: mission.id, state: 'idle', status: 'error', summary });
         broadcast('missions:install-required', {
           missionId: mission.id,
-          missing,
-          links: {
-            git: 'https://git-scm.com/downloads',
-            gh: 'https://cli.github.com/',
-          },
-          ghInstallMessage: ghInfo.ghInstallMessage || null,
+          missing: ['git'],
+          links: { git: 'https://git-scm.com/downloads' },
         });
-        return { ok: false, reason: 'missing-cli', missing };
+        return { ok: false, reason: 'missing-git' };
       }
 
-      // Clone the repo into a fresh OS-temp scratch dir so the agent has
-      // a real working tree to edit. Each run gets its own dir so a
-      // crashed/abandoned previous attempt can never contaminate this
-      // one. Old dirs are best-effort cleaned on a successful run end.
+      // Clone the repo into a fresh OS-temp scratch dir so the agent
+      // has a real working tree to edit. Each run gets its own dir so
+      // a crashed/abandoned previous attempt can't contaminate the new
+      // one. Auth: PAT is inlined into the HTTPS clone URL — scoped
+      // strictly to this clone's `origin` remote, never the user's
+      // global config. `git push` later reuses the same remote URL.
       const scratchDir = path.join(os.tmpdir(), 'pipilot-missions', mission.id, String(Date.now()));
       try {
         await fsp.mkdir(scratchDir, { recursive: true });
         const repo = mission.target.repo;
         const branch = mission.target.branch || 'main';
-        // Use gh's clone (handles auth via GH_TOKEN automatically) and
-        // shallow clone for speed — depth=1 is enough for most edits;
-        // the agent can `git fetch --unshallow` if it needs history.
-        const cloneRes = await execAsync('gh', ['repo', 'clone', repo, scratchDir, '--', '--branch', branch, '--depth', '50'], ghInfo.env);
+        const url = ghInfo.cloneUrl || `https://github.com/${repo}.git`;
+        const cloneRes = await execAsync('git', ['clone', '--branch', branch, '--depth', '50', url, scratchDir]);
         if (!cloneRes.ok) {
-          const summary = 'Clone failed: ' + (cloneRes.stderr || cloneRes.error || 'unknown');
+          // Sanitise the error so we never leak the PAT in the log.
+          const safeStderr = (cloneRes.stderr || cloneRes.error || 'unknown').replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
+          const summary = 'Clone failed: ' + safeStderr.slice(0, 400);
           await patchStats(mission, { lastRunAt: Date.now(), lastRunStatus: 'error', lastRunMessage: summary, runCount: (mission.runCount || 0) + 1 });
           await appendLog(mission, 'error', summary);
           broadcast('missions:status', { id: mission.id, state: 'idle', status: 'error', summary });
           return { ok: false, reason: 'clone-failed', error: summary };
         }
-        // Configure committer identity for this clone only — uses
-        // --local so it never touches the user's global git config.
-        await execAsync('git', ['-C', scratchDir, 'config', '--local', 'user.name', 'PiPilot Mission'], ghInfo.env);
-        await execAsync('git', ['-C', scratchDir, 'config', '--local', 'user.email', 'mission@pipilot.local'], ghInfo.env);
+        // Committer identity for this clone only — `--local` writes to
+        // <scratch>/.git/config, never touches the user's ~/.gitconfig.
+        await execAsync('git', ['-C', scratchDir, 'config', '--local', 'user.name', 'PiPilot Mission']);
+        await execAsync('git', ['-C', scratchDir, 'config', '--local', 'user.email', 'mission@pipilot.local']);
         ghInfo.scratchDir = scratchDir;
       } catch (err) {
         const summary = 'Failed to prepare scratch clone: ' + (err?.message || err);
@@ -418,15 +415,14 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       mission,
       systemPrompt: buildSystemPrompt(mission, ghInfo),
       allowedTools: buildAllowedTools(mission),
-      githubPat: pat,
+      githubPat: pat,                 // for the HTTP MCP Bearer header
       effort: mission.effort || 'medium',
       cloudPr: mission.cloudPr !== false,
-      extraEnv: ghInfo.env || {},
       // Cloud missions: cwd of the spawned agent is the cloned scratch
-      // dir, NOT the user's open project. Local missions: use the
-      // configured projectPath as before.
+      // dir; the clone's `origin` remote already has the PAT inlined,
+      // so `git push` works without env-var injection.
       cwdOverride: ghInfo.scratchDir || null,
-      ghInfo: { gitInstalled: ghInfo.gitInstalled, ghInstalled: ghInfo.ghInstalled, scratchDir: ghInfo.scratchDir || null },
+      ghInfo: { gitInstalled: ghInfo.gitInstalled, scratchDir: ghInfo.scratchDir || null },
     });
     return { ok: true };
   }

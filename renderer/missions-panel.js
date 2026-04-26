@@ -1221,7 +1221,7 @@
     const links = payload?.links || {};
     const items = missing.map(name => `
       <div class="pp-install-item">
-        <div class="pp-install-name">${escapeHtml(name === 'gh' ? 'GitHub CLI (gh)' : name === 'git' ? 'Git' : name)}</div>
+        <div class="pp-install-name">${escapeHtml(name === 'git' ? 'Git' : name)}</div>
         <a href="${escapeHtml(links[name] || '')}" data-link="${escapeHtml(links[name] || '')}" class="pp-install-link">${escapeHtml(links[name] || '')}</a>
       </div>
     `).join('');
@@ -1234,7 +1234,7 @@
           <button class="pp-me-close" data-act="close">&times;</button>
         </div>
         <div class="pp-me-body">
-          <div class="pp-me-help">Cloud missions clone the repo into an OS-temp scratch dir and push back via <code>git</code> + <code>gh</code>. The following ${missing.length === 1 ? 'tool is' : 'tools are'} not on this machine:</div>
+          <div class="pp-me-help">Cloud missions clone the repo into an OS-temp scratch dir and push back via <code>git</code>. The following ${missing.length === 1 ? 'tool is' : 'tools are'} not on this machine:</div>
           <div class="pp-install-list">${items}</div>
           <div class="pp-me-help" style="margin-top:8px;">Install ${missing.length === 1 ? 'it' : 'them'} from the official site${missing.length === 1 ? '' : 's'} above, then <strong>restart PiPilot</strong> so the new binary is on PATH for the agent's bash subprocess. After restart, click <em>Run now</em> on the mission again.</div>
         </div>

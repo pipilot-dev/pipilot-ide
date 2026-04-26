@@ -1,21 +1,22 @@
-// PiPilot IDE — gh CLI provisioning for cloud missions
+// PiPilot IDE — Git provisioning for cloud missions
 //
-// Cloud missions get the GitHub Copilot HTTP MCP for tool-based access,
-// PLUS the agent can use the `gh` CLI directly via the Bash tool when
-// shell ops are easier than MCP calls (search PRs, gh repo clone,
-// gh issue list ...). We do two things before each cloud mission:
+// Cloud missions clone the target repo into an OS-temp scratch dir,
+// edit locally, then `git push` back. Everything else GitHub-related
+// (PRs, issues, search, comments, repo metadata) goes through the
+// Copilot HTTP MCP at api.githubcopilot.com/mcp — no `gh` CLI needed
+// because the MCP exposes the same surface area to the agent as
+// typed tools.
 //
-//   1. Check `gh --version` — if missing, attempt platform-native
-//      install (winget on Windows, brew on macOS, apt on Debian).
-//      Best-effort: failure surfaces a warning, mission still runs.
-//   2. Inject GH_TOKEN/GITHUB_TOKEN env vars into the agent's bash
-//      subprocess for that run only — `gh` reads GH_TOKEN automatically.
-//      No `gh auth login` call (which writes to ~/.config/gh/hosts.yml
-//      globally); the env-var path is naturally process-scoped, so the
-//      user's existing global gh config is untouched.
+// So this module's only job is:
+//   1. Verify `git` is on PATH (we don't auto-install — git installs
+//      cross-platform are too invasive to do silently from a desktop
+//      IDE; we surface a "please install" message and let the user
+//      visit https://git-scm.com/downloads).
+//   2. Hand the runner a token-embedded clone URL so the spawned
+//      `git clone` and subsequent `git push` work without any
+//      credential prompt or global config write.
 
-const { execFile, spawn } = require('child_process');
-const os = require('os');
+const { execFile } = require('child_process');
 
 function execCmd(cmd, args, opts = {}) {
   return new Promise((resolve) => {
@@ -28,7 +29,6 @@ function execCmd(cmd, args, opts = {}) {
       stdout = so || ''; stderr = se || '';
       resolve({ ok: !err, code: err?.code ?? 0, stdout, stderr, error: err?.message });
     });
-    // Hard timeout — install commands can wedge.
     if (opts.timeoutMs) {
       setTimeout(() => {
         if (done) return;
@@ -40,13 +40,6 @@ function execCmd(cmd, args, opts = {}) {
   });
 }
 
-async function isGhInstalled() {
-  const r = await execCmd('gh', ['--version'], { timeoutMs: 4000 });
-  if (!r.ok) return { installed: false };
-  const m = /gh version (\S+)/.exec(r.stdout || '');
-  return { installed: true, version: m ? m[1] : 'unknown' };
-}
-
 async function isGitInstalled() {
   const r = await execCmd('git', ['--version'], { timeoutMs: 4000 });
   if (!r.ok) return { installed: false };
@@ -54,120 +47,59 @@ async function isGitInstalled() {
   return { installed: true, version: m ? m[1] : 'unknown' };
 }
 
-// Platform-specific install. Returns { ok, message }. Best-effort —
-// many systems will refuse without elevation; we surface that to the UI.
-async function tryInstallGh() {
-  const platform = os.platform();
-  if (platform === 'win32') {
-    // winget is on every Windows 11 by default; older Win10 builds may
-    // not have it.
-    const winget = await execCmd('winget', ['--version'], { timeoutMs: 4000 });
-    if (winget.ok) {
-      const r = await execCmd('winget', [
-        'install', '--id', 'GitHub.cli',
-        '--silent',
-        '--accept-source-agreements',
-        '--accept-package-agreements',
-      ], { timeoutMs: 5 * 60_000 });
-      if (r.ok) return { ok: true, via: 'winget', message: 'Installed via winget' };
-      return { ok: false, message: 'winget install failed: ' + (r.stderr || r.error || 'unknown') };
-    }
-    // Try scoop as fallback.
-    const scoop = await execCmd('scoop', ['--version'], { timeoutMs: 4000 });
-    if (scoop.ok) {
-      const r = await execCmd('scoop', ['install', 'gh'], { timeoutMs: 5 * 60_000 });
-      if (r.ok) return { ok: true, via: 'scoop', message: 'Installed via scoop' };
-    }
-    return { ok: false, message: 'gh CLI is not installed and winget/scoop are unavailable. Install manually from https://cli.github.com/.' };
-  }
-  if (platform === 'darwin') {
-    const brew = await execCmd('brew', ['--version'], { timeoutMs: 4000 });
-    if (!brew.ok) return { ok: false, message: 'Install Homebrew first (https://brew.sh) or install gh manually.' };
-    const r = await execCmd('brew', ['install', 'gh'], { timeoutMs: 5 * 60_000 });
-    if (r.ok) return { ok: true, via: 'brew', message: 'Installed via brew' };
-    return { ok: false, message: 'brew install gh failed: ' + (r.stderr || r.error || 'unknown') };
-  }
-  // Linux: try apt, dnf, pacman in that order. None of these will work
-  // without sudo + tty. Best to surface a manual-install message here
-  // and let the user run it. (Pre-baking the apt key + repo is too
-  // invasive for a desktop IDE to do silently.)
-  return {
-    ok: false,
-    message: 'gh CLI is not installed. On Linux, install per the instructions at https://github.com/cli/cli/blob/trunk/docs/install_linux.md',
-  };
-}
-
 module.exports = function register(ipcMain, ctx, deps = {}) {
   const { getSecret } = deps;
 
-  // Cache the install check for 60s so back-to-back cloud missions
-  // don't keep hitting --version on the binaries.
-  let lastCheck = { at: 0, gh: { installed: false }, git: { installed: false } };
+  let lastCheck = { at: 0, git: { installed: false } };
   async function check() {
     if (Date.now() - lastCheck.at < 60_000) return lastCheck;
-    const [gh, git] = await Promise.all([isGhInstalled(), isGitInstalled()]);
-    lastCheck = { at: Date.now(), gh, git };
+    const git = await isGitInstalled();
+    lastCheck = { at: Date.now(), git };
     return lastCheck;
   }
 
   ipcMain.handle('gh:check', async () => {
     try {
       const r = await check();
-      // Backward-compatible flat shape for callers that only want gh.
-      return { ok: true, installed: r.gh.installed, version: r.gh.version, gh: r.gh, git: r.git };
+      return { ok: true, git: r.git, installed: r.git.installed, version: r.git.version };
     } catch (err) { return { ok: false, error: err?.message || String(err) }; }
   });
 
-  ipcMain.handle('gh:install', async () => {
-    try {
-      const cur = await check();
-      if (cur.gh.installed) return { ok: true, alreadyInstalled: true, ...cur };
-      const r = await tryInstallGh();
-      lastCheck.at = 0;
-      const after = await check();
-      return { ok: r.ok && after.gh.installed, ...r, ...after };
-    } catch (err) {
-      return { ok: false, error: err?.message || String(err) };
-    }
-  });
+  // Build an HTTPS clone URL with the PAT inlined as the basic-auth
+  // username (the GitHub-recommended pattern for PAT push). Returns
+  // null if no PAT is set — caller should branch on that for public
+  // repos vs private.
+  async function authedRepoUrl(repo) {
+    if (typeof getSecret !== 'function') return `https://github.com/${repo}.git`;
+    let pat = null;
+    try { pat = await getSecret('githubPat'); } catch {}
+    if (!pat) return `https://github.com/${repo}.git`;
+    // x-access-token is GitHub's documented username for PAT-as-password.
+    return `https://x-access-token:${encodeURIComponent(pat)}@github.com/${repo}.git`;
+  }
 
-  // Ensure: returns the install state of BOTH git and gh, plus the env
-  // vars we want to inject into the agent's bash subprocess. Does NOT
-  // attempt to install git (cross-platform git installs require running
-  // a real installer with elevation — we surface a "please install"
-  // message instead and the renderer modal links to the official
-  // download).
-  async function ensureForMission() {
-    const cur = await check();
-    let ghInstallResult = null;
-    if (!cur.gh.installed) {
-      try { ghInstallResult = await tryInstallGh(); } catch (err) { ghInstallResult = { ok: false, message: err?.message }; }
-      if (ghInstallResult?.ok) {
-        lastCheck.at = 0;
-        await check();
-      }
+  // Returns the install state of git + an auth helper. No env injection
+  // (the token rides in the clone URL instead, scoped strictly to the
+  // scratch clone; gh CLI removed entirely — MCP covers all of it).
+  async function ensureForMission(mission) {
+    const r = await check();
+    let cloneUrl = null;
+    let hasToken = false;
+    if (mission?.target?.kind === 'cloud' && mission.target.repo) {
+      cloneUrl = await authedRepoUrl(mission.target.repo);
+      try { hasToken = !!(typeof getSecret === 'function' && await getSecret('githubPat')); } catch {}
     }
-    let token = null;
-    if (typeof getSecret === 'function') {
-      try { token = await getSecret('githubPat'); } catch {}
-    }
-    const env = token ? { GH_TOKEN: token, GITHUB_TOKEN: token } : {};
     return {
-      git: lastCheck.git,
-      gh: lastCheck.gh,
-      ghInstallAttempted: !!ghInstallResult,
-      ghInstallOk: ghInstallResult?.ok ?? null,
-      ghInstallMessage: ghInstallResult?.message ?? null,
-      env,
-      hasToken: !!token,
-      // Convenience flags for callers.
-      gitInstalled: lastCheck.git.installed,
-      ghInstalled: lastCheck.gh.installed,
+      git: r.git,
+      gitInstalled: r.git.installed,
+      gitVersion: r.git.version,
+      cloneUrl,
+      hasToken,
     };
   }
 
   ipcMain.handle('gh:ensure-for-mission', async () => {
-    try { return { ok: true, ...(await ensureForMission()) }; }
+    try { return { ok: true, ...(await ensureForMission(null)) }; }
     catch (err) { return { ok: false, error: err?.message || String(err) }; }
   });
 
