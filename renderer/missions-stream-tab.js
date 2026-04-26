@@ -455,20 +455,42 @@
           <div style="font-size:13px;font-weight:600;color:var(--text-strong);">Mission log — ${escapeHtml(mission.name)}</div>
           <div style="display:flex;gap:8px;">
             <button class="pp-mst-btn" data-act="reveal">📂 Reveal in folder</button>
+            <button class="pp-mst-btn" data-act="raw">📝 Raw markdown</button>
             <button class="pp-mst-btn" data-act="refresh">↻ Refresh</button>
           </div>`;
         container.appendChild(head);
-        const pre = document.createElement('pre');
-        pre.style.cssText = 'flex:1;margin:0;padding:14px 18px;font-family:var(--font-mono);font-size:11.5px;line-height:1.55;color:var(--text);white-space:pre-wrap;word-wrap:break-word;overflow:auto;';
-        pre.textContent = combined.trim();
-        container.appendChild(pre);
+        const body = document.createElement('div');
+        body.className = 'pp-mst-log md-body';
+        body.style.cssText = 'flex:1;margin:0;padding:18px 24px;font-family:var(--font-sans);font-size:13px;line-height:1.65;color:var(--text);overflow:auto;';
+        const renderMarkdown = (md) => {
+          if (window.marked?.parse) {
+            try { return window.marked.parse(md, { breaks: true, gfm: true }); } catch {}
+          }
+          return '<pre style="white-space:pre-wrap;font-family:var(--font-mono);font-size:11.5px;">' + escapeHtml(md) + '</pre>';
+        };
+        let showRaw = false;
+        const setContent = (md) => {
+          body.innerHTML = showRaw
+            ? '<pre style="white-space:pre-wrap;font-family:var(--font-mono);font-size:11.5px;line-height:1.55;">' + escapeHtml(md) + '</pre>'
+            : renderMarkdown(md);
+        };
+        setContent(combined.trim() || '(empty)');
+        container.appendChild(body);
         head.querySelector('[data-act="refresh"]').addEventListener('click', async () => {
           try {
             const r = await api.missions.readLog(projectPath);
             const fresh = (r?.files || []).map(f => `<!-- ${f.file} -->\n` + f.content).join('\n\n---\n\n');
-            pre.textContent = fresh.trim() || '(empty)';
+            setContent(fresh.trim() || '(empty)');
           } catch {}
         });
+        head.querySelector('[data-act="raw"]').addEventListener('click', (e) => {
+          showRaw = !showRaw;
+          e.currentTarget.textContent = showRaw ? '🎨 Rendered' : '📝 Raw markdown';
+          // Re-render whatever is currently shown.
+          const curr = body.dataset._md || combined.trim();
+          setContent(curr);
+        });
+        body.dataset._md = combined.trim();
         head.querySelector('[data-act="reveal"]').addEventListener('click', () => {
           const target = files[0]?.file;
           if (target && api.shell?.showItemInFolder) {

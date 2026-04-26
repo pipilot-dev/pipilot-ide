@@ -27,6 +27,164 @@
   // status, startedAt, endedAt, stream }.
   // events: array of { ts, ...evt } so tab renderers can scrub or reflow.
   const buffers = new Map();
+
+  // ── Mission transcript builder ─────────────────────────────────
+  // Mirrors the chat-panel md export: text + inline tool pills with
+  // bash commands fenced, file ops shown with paths + diffs, plus a
+  // collapsed reasoning section. Used as the `finalText` on
+  // missions:report-run so the persisted log mirrors what the user
+  // saw in the stream tab.
+
+  function _trim(s, maxLines = 12, maxChars = 1200) {
+    if (!s) return '';
+    let out = String(s);
+    if (out.length > maxChars) out = out.slice(0, maxChars) + ' …(truncated)';
+    const lines = out.split('\n');
+    if (lines.length > maxLines) out = lines.slice(0, maxLines).join('\n') + `\n…(${lines.length - maxLines} more lines)`;
+    return out;
+  }
+
+  function _formatToolCall(call, result) {
+    const name = call.name || 'tool';
+    const lname = name.replace(/^mcp__[a-zA-Z0-9_-]+__/, '').toLowerCase();
+    const input = call.input || {};
+    const isError = result?.isError;
+    const isMcp = name.startsWith('mcp__');
+    const status = isError ? '🔴' : (isMcp ? '🔌' : '🔧');
+
+    const headParts = [`**${status} ${name}**`];
+    // Most-meaningful inline preview per tool kind.
+    const path = input.file_path || input.filepath || input.path || input.target_file;
+    if (lname === 'bash' || lname === 'run_in_terminal' || lname === 'bashoutput') {
+      if (input.description) headParts[0] += ` — ${input.description}`;
+    } else if (path) {
+      headParts[0] += ' `' + path + '`';
+    } else if (input.pattern) {
+      headParts[0] += ' `' + input.pattern + '`';
+    } else if (input.url) {
+      headParts[0] += ' ' + input.url;
+    } else if (input.query) {
+      headParts[0] += ' `' + input.query + '`';
+    } else if (input.description) {
+      headParts[0] += ` — ${input.description}`;
+    }
+    const parts = [headParts[0]];
+
+    // Body — fenced details per tool kind.
+    if (lname === 'bash' || lname === 'run_in_terminal') {
+      if (input.command) parts.push('```bash\n$ ' + _trim(input.command, 12, 1200) + '\n```');
+    } else if (lname === 'write' || lname === 'create_file') {
+      if (input.content) {
+        const ext = (path || '').split('.').pop();
+        parts.push('```' + (ext || '') + '\n' + _trim(input.content, 30, 2400) + '\n```');
+      }
+    } else if (lname === 'edit' || lname === 'multiedit' || lname === 'edit_file_patch') {
+      if (input.old_string && input.new_string) {
+        const oldLines = _trim(input.old_string, 12, 600).split('\n').map(l => '- ' + l).join('\n');
+        const newLines = _trim(input.new_string, 12, 600).split('\n').map(l => '+ ' + l).join('\n');
+        parts.push('```diff\n' + oldLines + '\n' + newLines + '\n```');
+      } else if (input.searchReplaceBlock) {
+        parts.push('```\n' + _trim(input.searchReplaceBlock, 24, 1600) + '\n```');
+      }
+    } else if (lname === 'todowrite' && Array.isArray(input.todos)) {
+      for (const t of input.todos) {
+        const mark = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]';
+        parts.push(`- ${mark} ${t.content || t.description || ''}`);
+      }
+    } else if (lname === 'webfetch' || lname === 'fetch_url') {
+      if (input.url) parts.push('URL: ' + input.url);
+    } else if (lname === 'websearch') {
+      if (input.query) parts.push('Query: `' + input.query + '`');
+    } else {
+      // Generic small-args dump.
+      const inputStr = JSON.stringify(input || {});
+      if (inputStr.length > 2 && inputStr.length < 400) {
+        parts.push('```json\n' + JSON.stringify(input, null, 2) + '\n```');
+      }
+    }
+
+    // Result snippet — only when present + non-trivial + small.
+    if (result && typeof result.content === 'string' && result.content.length) {
+      const snippet = _trim(result.content, 8, 600);
+      if (snippet.trim()) {
+        const tag = isError ? 'error' : 'output';
+        parts.push(`<details>\n<summary>${isError ? '⚠ ' : ''}${tag}</summary>\n\n\`\`\`\n${snippet}\n\`\`\`\n\n</details>`);
+      }
+    }
+    return parts.join('\n');
+  }
+
+  function buildMissionTranscript(buf, mission, finalStatus) {
+    const events = buf?.events || [];
+    if (!events.length) return '(no events captured)';
+    // Pre-index tool_results by id so we can colour pills.
+    const resultsById = new Map();
+    for (const evt of events) {
+      if (evt.type === 'tool_result' && evt.toolUseId) resultsById.set(evt.toolUseId, evt);
+    }
+    const out = [];
+    let currentText = '';
+    const flushText = () => {
+      if (currentText.trim()) {
+        // Strip <reasoning>…</reasoning> — caller can opt to keep them
+        // separately, but the inline transcript mirrors what the user saw.
+        const cleaned = currentText.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim();
+        if (cleaned) out.push(cleaned);
+      }
+      currentText = '';
+    };
+    let reasoningBlocks = [];
+    let inReasoning = false;
+    let reasoningBuf = '';
+    for (const evt of events) {
+      switch (evt.type) {
+        case 'text': {
+          // Detect inline <reasoning> tags and split them out.
+          let s = evt.text || '';
+          while (s.length) {
+            if (!inReasoning) {
+              const open = s.indexOf('<reasoning>');
+              if (open === -1) { currentText += s; break; }
+              currentText += s.slice(0, open);
+              s = s.slice(open + '<reasoning>'.length);
+              inReasoning = true;
+              reasoningBuf = '';
+            } else {
+              const close = s.indexOf('</reasoning>');
+              if (close === -1) { reasoningBuf += s; break; }
+              reasoningBuf += s.slice(0, close);
+              if (reasoningBuf.trim()) reasoningBlocks.push(reasoningBuf.trim());
+              s = s.slice(close + '</reasoning>'.length);
+              inReasoning = false;
+              reasoningBuf = '';
+            }
+          }
+          break;
+        }
+        case 'tool_call': {
+          flushText();
+          const result = resultsById.get(evt.id);
+          out.push(_formatToolCall(evt, result));
+          break;
+        }
+        case 'thinking': {
+          if (typeof evt.text === 'string' && evt.text.trim()) reasoningBlocks.push(evt.text.trim());
+          break;
+        }
+        case 'error': {
+          flushText();
+          if (evt.message) out.push(`> **⚠ Error:** ${evt.message}`);
+          break;
+        }
+      }
+    }
+    flushText();
+    if (reasoningBlocks.length) {
+      out.unshift('<details>\n<summary>🧠 Reasoning</summary>\n\n' + reasoningBlocks.join('\n\n---\n\n') + '\n\n</details>');
+    }
+    if (finalStatus) out.push(`*Final status: \`${finalStatus}\`*`);
+    return out.join('\n\n');
+  }
   function pushEvent(missionId, evt) {
     const b = buffers.get(missionId);
     if (!b) return;
@@ -148,6 +306,7 @@
     try { stream && stream.dispose && stream.dispose(); } catch {}
 
     try {
+      const transcript = buildMissionTranscript(buf, mission, status);
       await api.missions.reportRun({
         id: mission.id,
         projectPath: window.PiPilot?.state?.projectPath || null,
@@ -155,7 +314,7 @@
         summary,
         durationMs,
         toolCallCount,
-        finalText: cleanFinal,
+        finalText: transcript,
       });
     } catch (err) {
       console.warn('[missions-runner] reportRun failed:', err);
