@@ -61,11 +61,13 @@
     if (b) { b.status = payload.status || 'success'; b.endedAt = Date.now(); }
     bus.emit('mission:end', payload);
     bus.emit('missions:refresh');
-    // BugBot post-processing — read findings file and surface in
-    // Problems panel when a bugbot-tagged mission completes.
+    // BugBot post-processing — main pre-reads the findings JSONL
+    // (works for cloud missions too since main knows the scratch
+    // dir) and ships them on the end payload. We just normalise +
+    // emit problems:updated.
     const m = b?.mission || payload?.mission;
-    if (m && Array.isArray(m.tags) && m.tags.includes('bugbot') && m.target?.kind === 'local' && payload.status !== 'error') {
-      processBugBotFindings(m).catch(err => console.warn('[missions-runner] bugbot post-process', err));
+    if (payload.bugbotFindings && payload.bugbotFindings.items?.length) {
+      surfaceBugBotFindings(payload.bugbotFindings, m);
     }
     // Outcome toast based on the mission's notify prefs.
     if (m) {
@@ -120,35 +122,18 @@
   })();
 
   // ── BugBot integration ──────────────────────────────────────────
-  async function processBugBotFindings(mission) {
-    const projectPath = mission.target.projectPath;
-    if (!projectPath) return;
-    const sep = projectPath.includes('\\') ? '\\' : '/';
-    const findingsPath = projectPath + sep + '.pipilot' + sep + 'bug-findings.jsonl';
-    let raw = '';
-    try {
-      const r = await api.files.read(findingsPath);
-      raw = r?.content || (typeof r === 'string' ? r : '');
-    } catch { return; }
-    if (!raw.trim()) return;
-    const items = [];
-    for (const line of raw.split(/\r?\n/)) {
-      const t = line.trim();
-      if (!t) continue;
-      try {
-        const obj = JSON.parse(t);
-        if (!obj || !obj.path || !obj.message) continue;
-        items.push({
-          path: obj.path,
-          line: typeof obj.line === 'number' ? obj.line : 1,
-          column: typeof obj.column === 'number' ? obj.column : 1,
-          severity: obj.severity || 'warning',
-          message: String(obj.message).slice(0, 400),
-          code: obj.code || 'BugBot',
-          source: 'BugBot',
-        });
-      } catch {}
-    }
+  // Main has already read the JSONL and sent the parsed items on the
+  // end payload. We normalise + emit problems:updated.
+  function surfaceBugBotFindings(findings, mission) {
+    const items = (findings.items || []).map(obj => ({
+      path: obj.path,
+      line: typeof obj.line === 'number' ? obj.line : 1,
+      column: typeof obj.column === 'number' ? obj.column : 1,
+      severity: obj.severity || 'warning',
+      message: String(obj.message || '').slice(0, 400),
+      code: obj.code || 'BugBot',
+      source: 'BugBot',
+    }));
     if (!items.length) return;
     const counts = {
       errors: items.filter(i => i.severity === 'error').length,
@@ -162,7 +147,7 @@
     }, {});
     bus.emit('problems:updated', { items, counts, byFile, error: null });
     bus.emit('bottom:show', 'problems');
-    bus.emit('toast:show', { type: 'info', message: `BugBot: ${items.length} finding${items.length === 1 ? '' : 's'}` });
+    bus.emit('toast:show', { type: 'info', message: `BugBot: ${items.length} finding${items.length === 1 ? '' : 's'}${findings.rootPath ? ' (from ' + findings.rootPath.split(/[\\/]/).slice(-2).join('/') + ')' : ''}` });
   }
 
   // Public API consumed by the stream tab + others.

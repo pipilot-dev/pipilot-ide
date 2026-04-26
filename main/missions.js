@@ -445,6 +445,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     const runState = {
       mission,
       startedAt,
+      workDir,             // remembered so finalize can read findings from the right path
       events: [],          // append-only event log for buffer replay
       status: 'running',
       finalText: '',
@@ -537,8 +538,37 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       cleanFinal || '(no output)',
     ].join('\n'));
 
+    // BugBot post-process: read the findings JSONL from wherever the
+    // agent wrote it (local project root for local missions, scratch
+    // clone for cloud missions). Findings live in the buffer here in
+    // main, then ride over the broadcast to the renderer's Problems
+    // panel — works regardless of target kind.
+    let bugbotFindings = null;
+    if (Array.isArray(mission.tags) && mission.tags.includes('bugbot') && status !== 'error') {
+      const findingsRoot = mission.target?.kind === 'local'
+        ? mission.target.projectPath
+        : runState.workDir || (mission.target?.kind === 'cloud' && mission.target.scratchDir);
+      if (findingsRoot) {
+        const findingsPath = path.join(findingsRoot, '.pipilot', 'bug-findings.jsonl');
+        try {
+          const raw = await fsp.readFile(findingsPath, 'utf8');
+          if (raw.trim()) {
+            const items = [];
+            for (const line of raw.split(/\r?\n/)) {
+              const t = line.trim(); if (!t) continue;
+              try {
+                const obj = JSON.parse(t);
+                if (obj && obj.path && obj.message) items.push(obj);
+              } catch {}
+            }
+            if (items.length) bugbotFindings = { items, rootPath: findingsRoot, sourceFile: findingsPath };
+          }
+        } catch {}
+      }
+    }
+
     broadcast('missions:status', { id: mission.id, state: 'idle', status, summary, durationMs });
-    broadcast('missions:end', { missionId: mission.id, status, summary, durationMs, finalText: cleanFinal });
+    broadcast('missions:end', { missionId: mission.id, status, summary, durationMs, finalText: cleanFinal, bugbotFindings });
     try {
       const win = ctx.getWindow?.();
       if (win && !win.isDestroyed()) win.webContents.send('missions:bg-active', { id: mission.id, active: false });

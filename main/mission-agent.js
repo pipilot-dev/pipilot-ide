@@ -16,6 +16,7 @@
 const path = require('path');
 const { loadSdk } = require('./sdk-loader');
 const ideTools = require('./mcp-ide-tools');
+const { buildIdeTools } = require('./ide-tools-mcp');
 
 // Run a mission agent stream. Returns { promise, abort, controller }.
 //   opts: {
@@ -63,11 +64,17 @@ function runMissionAgent(opts, onEvent) {
       try { ideTools.setWorkDir(workDir); } catch {}
     }
 
-    // Mission agents don't get the pipilot MCP (extracting buildIdeTools
-    // from ipc-agent.js was too invasive for this refactor pass — the
-    // built-in Read/Edit/Write/Glob/Grep/Bash suffices for missions
-    // and we can always add the MCP back later).
+    // Build pipilot MCP — same set the chat agent gets, so missions
+    // can use search_codebase, get_diagnostics, edit_file_patch, etc.
     const mcpServers = {};
+    if (pipilotMcp) {
+      try {
+        const tools = buildIdeTools(sdk);
+        mcpServers.pipilot = sdk.createSdkMcpServer({ name: 'pipilot', version: '1.0.0', tools });
+      } catch (err) {
+        console.warn('[mission-agent] pipilot mcp register failed', err.message);
+      }
+    }
     if (extraMcpServers && typeof extraMcpServers === 'object') {
       Object.assign(mcpServers, extraMcpServers);
     }

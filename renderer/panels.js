@@ -1294,32 +1294,117 @@
 
       const sec = el('div', { class: 'p-section ext-section' });
 
-      // Fetch registry and installed in parallel
-      const [registryResp, installedResp] = await Promise.all([
+      // Fetch registry, installed, and built-ins in parallel
+      const [registryResp, installedResp, builtinsResp, settingsResp] = await Promise.all([
         api.extensions?.registry?.().catch(() => ({ extensions: [] })) || { extensions: [] },
         api.extensions?.installed?.().catch(() => ({ installed: {} })) || { installed: {} },
+        api.extensions?.listBuiltins?.().catch(() => ({ builtins: [] })) || { builtins: [] },
+        api.settings?.all?.().catch(() => ({ settings: {} })) || { settings: {} },
       ]);
       const registry = registryResp?.extensions || [];
       const installed = installedResp?.installed || {};
+      const builtins = builtinsResp?.builtins || [];
+      const settings = settingsResp?.settings || {};
 
-      if (!registry.length && !Object.keys(installed).length) {
+      // ── Built-in extensions (always present, can't be uninstalled) ──
+      // These render BEFORE marketplace extensions with a "Built-in" badge
+      // and a settings-gear button instead of a toggle. The gear opens
+      // Settings → Features where the user can enable/disable them.
+      const GEAR_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+      for (const b of builtins) {
+        const enabled = settings[b.settingsKey] !== false;
+        const card = el('div', { class: 'connector-card builtin-ext' });
+        card.style.flexWrap = 'wrap';
+
+        const icon = el('div', { class: 'icon', style: { fontSize: '18px' } }, '⚡');
+
+        const builtinBadge = el('span', {
+          style: {
+            display: 'inline-flex', alignItems: 'center',
+            padding: '1px 6px',
+            fontSize: '9px', fontWeight: '600',
+            color: 'var(--accent-light)',
+            background: 'rgba(255,107,53,0.10)',
+            border: '1px solid rgba(255,107,53,0.28)',
+            borderRadius: '3px',
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+            fontFamily: 'var(--font-mono)',
+          },
+        }, 'Built-in');
+
+        const stateBadge = el('span', {
+          style: {
+            display: 'inline-flex', alignItems: 'center',
+            padding: '1px 6px',
+            fontSize: '9px', fontWeight: '500',
+            color: enabled ? 'var(--ok)' : 'var(--text-faint)',
+            background: enabled ? 'rgba(86,211,100,0.10)' : 'rgba(255,255,255,0.04)',
+            border: enabled ? '1px solid rgba(86,211,100,0.28)' : '1px solid var(--border)',
+            borderRadius: '3px',
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            fontFamily: 'var(--font-mono)',
+          },
+        }, enabled ? 'On' : 'Off');
+
+        const info = el('div', { class: 'info' },
+          el('div', { class: 'name', style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' } },
+            b.name,
+            builtinBadge,
+            stateBadge,
+          ),
+          el('div', { class: 'desc' }, b.desc || ''),
+          el('div', { style: { fontSize: '9px', color: 'var(--text-dim)', marginTop: '2px' } }, 'Ships with PiPilot · cannot be uninstalled')
+        );
+
+        card.appendChild(icon);
+        card.appendChild(info);
+
+        const actions = el('div', { style: { display: 'flex', gap: '4px', marginLeft: 'auto' } });
+        // Settings gear → opens Settings modal at the Features tab.
+        const gearBtn = el('button', {
+          class: 'btn btn-secondary btn-small',
+          title: 'Configure in Settings → Features',
+          style: { padding: '4px 7px', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+          onClick: () => bus.emit('modal:settings', { tab: 'Features' }),
+        });
+        gearBtn.innerHTML = GEAR_SVG + '<span style="font-size:10px;">Settings</span>';
+        actions.appendChild(gearBtn);
+
+        card.appendChild(actions);
+        sec.appendChild(card);
+      }
+
+      if (!registry.length && !Object.keys(installed).length && !builtins.length) {
         sec.appendChild(el('div', { style: { color: 'var(--text-dim)', fontSize: '11px', padding: '12px 0' } }, 'No extensions available yet. Check back soon!'));
         container.appendChild(sec);
         return;
       }
+      if (!registry.length && !Object.keys(installed).length) {
+        // Built-ins rendered above; no marketplace yet.
+        container.appendChild(sec);
+        return;
+      }
 
-      // Merge: show installed first, then registry (skip already installed)
+      // Merge: show installed first, then registry (skip already installed).
+      // ALSO skip anything whose id is a built-in — those are already
+      // rendered above as built-in cards and re-listing them in the
+      // marketplace would let users "install" duplicates.
+      const builtinIds = new Set(builtins.map(b => b.id));
       const installedIds = new Set(Object.keys(installed));
       const allExtensions = [];
 
       // Installed extensions
       for (const [id, ext] of Object.entries(installed)) {
+        if (builtinIds.has(id)) continue; // hidden — built-in supersedes
         const regEntry = registry.find(r => r.id === id);
         allExtensions.push({ ...ext, ...(regEntry || {}), id, _installed: true, _enabled: ext.enabled !== false });
       }
 
       // Registry extensions not yet installed
       for (const ext of registry) {
+        if (builtinIds.has(ext.id)) continue; // hidden — built-in supersedes
         if (!installedIds.has(ext.id)) {
           allExtensions.push({ ...ext, _installed: false, _enabled: false });
         }
@@ -1492,10 +1577,88 @@
   }
 
   // ── WIKI PANEL ──
+  // Lucide-style SVG icons for wiki pages
+  const WIKI_ICONS = {
+    home: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>',
+    layers: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
+    package: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
+    zap: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+    terminal: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+    cloud: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>',
+    users: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    clock: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+    help: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    check: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+    shield: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+    database: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
+    grid: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>',
+    palette: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="2"/><circle cx="17.5" cy="10.5" r="2"/><circle cx="8.5" cy="7.5" r="2"/><circle cx="6.5" cy="12.5" r="2"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.7-.8 1.7-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16c3.3 0 6-2.7 6-6 0-5.5-4.5-9.8-10-9.8z"/></svg>',
+    settings: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>',
+    'file-text': '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+  };
+
+  let _wikiGenerating = false;
+  let _wikiContainer = null;
+  let _wikiProjectPath = null;
+
+  // Listen for wiki generation signal from agent hooks
+  bus.on('wiki:generating', (generating) => {
+    _wikiGenerating = !!generating;
+    if (_wikiContainer) updateWikiGeneratingBanner(_wikiContainer);
+    // Auto-switch to wiki panel when generation starts
+    if (generating) bus.emit('panel:switch', 'wiki');
+  });
+
+  // Listen for file changes in .pipilot/wikis/ and auto-refresh
+  bus.on('file:external-change', (evt) => {
+    if (!evt?.path || !_wikiContainer || !_wikiProjectPath) return;
+    const p = String(evt.path).replace(/\\/g, '/');
+    if (p.includes('.pipilot/wikis/') && p.endsWith('.md')) {
+      if (_wikiContainer._refreshTimer) clearTimeout(_wikiContainer._refreshTimer);
+      _wikiContainer._refreshTimer = setTimeout(() => {
+        renderWikiPanel(_wikiContainer, _wikiProjectPath);
+      }, 800);
+    }
+  });
+
+  // Also listen for chokidar watcher events (covers add/change/unlink)
+  bus.on('file:changed', (evt) => {
+    if (!evt?.path || !_wikiContainer || !_wikiProjectPath) return;
+    const p = String(evt.path).replace(/\\/g, '/');
+    if (p.includes('.pipilot/wikis/') && p.endsWith('.md')) {
+      if (_wikiContainer._refreshTimer) clearTimeout(_wikiContainer._refreshTimer);
+      _wikiContainer._refreshTimer = setTimeout(() => {
+        renderWikiPanel(_wikiContainer, _wikiProjectPath);
+      }, 800);
+    }
+  });
+
+  function updateWikiGeneratingBanner(container) {
+    let banner = container.querySelector('.wiki-gen-banner');
+    if (_wikiGenerating) {
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.className = 'wiki-gen-banner';
+        banner.innerHTML = `
+          <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:rgba(255,107,53,0.08);border:1px solid rgba(255,107,53,0.2);border-radius:6px;margin:8px 10px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="animation:tool-spin 1s linear infinite;"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+            <span style="font-size:11px;color:var(--accent);">Generating wiki...</span>
+          </div>
+        `;
+        const header = container.querySelector('.panel-header');
+        if (header) header.after(banner);
+        else container.prepend(banner);
+      }
+    } else {
+      if (banner) banner.remove();
+    }
+  }
+
   async function renderWikiPanel(container, projectPath) {
     container.innerHTML = '';
-    // Use state.projectPath as fallback
+    _wikiContainer = container;
     const pp = projectPath || state.projectPath;
+    _wikiProjectPath = pp;
     if (!pp) { container.innerHTML = '<div style="padding:16px;color:var(--text-dim);font-size:11px;">Open a project first</div>'; return; }
 
     const header = el('div', { class: 'panel-header' },
@@ -1506,99 +1669,246 @@
       )
     );
     container.appendChild(header);
+    updateWikiGeneratingBanner(container);
 
     let result;
-    console.log('[wiki] fetching tree for:', pp);
     try {
       result = await api.wiki.tree(pp);
-      console.log('[wiki] tree result:', JSON.stringify(result)?.slice(0, 500));
     } catch (err) {
-      console.error('[wiki] tree error:', err?.message || err);
       result = { ok: false, sections: [] };
     }
-    // Handle both { ok, sections } and direct { sections }
     const sections = result?.sections || [];
-    console.log('[wiki] sections count:', sections.length);
 
     if (!sections.length) {
-      const empty = el('div', { style: 'padding:20px;text-align:center;' });
+      const empty = el('div', { style: 'padding:24px 16px;text-align:center;' });
       empty.innerHTML = `
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1" style="margin-bottom:8px;opacity:0.5;"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
         <div style="color:var(--text-dim);font-size:12px;margin-bottom:12px;">No wiki pages yet</div>
         <button class="btn btn-primary btn-small" id="wiki-generate-btn" style="font-size:11px;padding:6px 14px;">
-          ✨ Generate Wiki
+          Generate Wiki
         </button>
-        <div style="color:var(--text-faint);font-size:10px;margin-top:8px;">AI will scan your project and create documentation</div>
+        <div style="color:var(--text-faint);font-size:10px;margin-top:8px;">AI will scan your project and create docs</div>
       `;
       container.appendChild(empty);
       container.querySelector('#wiki-generate-btn')?.addEventListener('click', () => generateWiki(container, pp));
       return;
     }
 
-    const list = el('div', { style: 'padding:4px 0;' });
+    // Group sections by category
+    const grouped = {};
     for (const s of sections) {
-      const row = el('button', { class: 'wiki-page-row', style: 'display:flex;align-items:center;gap:8px;width:100%;padding:6px 12px;background:transparent;border:none;text-align:left;font-size:11px;color:var(--text);cursor:pointer;' });
-      row.innerHTML = `
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(s.title)}</span>
-        <span style="font-size:9px;color:var(--text-dim);">${Math.round(s.size / 1024)}KB</span>
-      `;
-      row.addEventListener('mouseenter', () => { row.style.background = 'var(--surface-alt)'; });
-      row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
-      row.addEventListener('click', () => openWikiPage(pp, s.id, s.title));
-      list.appendChild(row);
+      const cat = s.category || 'Other';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(s);
+    }
+
+    const list = el('div', { style: 'padding:4px 0;' });
+
+    for (const [category, pages] of Object.entries(grouped)) {
+      // Category header (skip if only one category)
+      if (Object.keys(grouped).length > 1) {
+        const catHeader = el('div', { style: 'padding:6px 14px 2px;font-size:10px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;' }, category);
+        list.appendChild(catHeader);
+      }
+
+      for (const s of pages) {
+        const row = el('button', { style: 'display:flex;align-items:center;gap:8px;width:100%;padding:7px 14px;background:transparent;border:none;text-align:left;font-family:inherit;cursor:pointer;border-radius:0;transition:background 0.1s;' });
+
+        const iconSvg = WIKI_ICONS[s.icon] || WIKI_ICONS['file-text'];
+        row.innerHTML = `
+          <span style="color:${s.color || 'var(--text-dim)'};display:inline-flex;flex-shrink:0;">${iconSvg}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--text);">${escapeHtml(s.title)}</span>
+          <span style="font-size:9px;color:var(--text-dim);flex-shrink:0;">${s.size > 1024 ? Math.round(s.size / 1024) + 'KB' : s.size + 'B'}</span>
+        `;
+        row.addEventListener('mouseenter', () => { row.style.background = 'var(--surface-alt)'; });
+        row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
+        row.addEventListener('click', () => openWikiPage(pp, s.id, s.title));
+        list.appendChild(row);
+      }
     }
     container.appendChild(list);
   }
 
-  async function openWikiPage(projectPath, pageId, title) {
+  async function openWikiPage(projectPath, pageId, title, scrollToAnchor) {
     try {
       const result = await api.wiki.page(projectPath, pageId);
       if (!result?.ok || !result.content) { bus.emit('toast:show', { type: 'error', message: 'Page not found' }); return; }
-      // Open as virtual tab with markdown rendering
       const editor = window.PiPilot?.editor;
       if (!editor) return;
       editor.openVirtualTab({
         id: `wiki:${pageId}`,
-        name: `📖 ${title}`,
+        name: `${title}`,
         mount: (container) => {
           container.style.cssText = 'width:100%;height:100%;overflow:auto;background:var(--bg);';
+
+          // Parse markdown — add heading IDs for anchor navigation
           let html;
           if (window.marked?.parse) {
-            try { html = window.marked.parse(result.content); } catch { html = escapeHtml(result.content).replace(/\n/g, '<br>'); }
+            // Configure marked to add IDs to headings
+            const renderer = new window.marked.Renderer();
+            renderer.heading = function(text, level) {
+              // Handle marked v5+ object format
+              const headingText = typeof text === 'object' ? text.text : text;
+              const headingLevel = typeof text === 'object' ? text.depth : level;
+              const slug = String(headingText).toLowerCase().replace(/<[^>]*>/g, '').replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').trim();
+              return `<h${headingLevel} id="${slug}">${headingText}</h${headingLevel}>`;
+            };
+            try { html = window.marked.parse(result.content, { renderer }); } catch { html = escapeHtml(result.content).replace(/\n/g, '<br>'); }
           } else {
             html = escapeHtml(result.content).replace(/\n/g, '<br>');
           }
-          container.innerHTML = `<div class="md-body" style="max-width:760px;margin:0 auto;padding:32px 40px;font-family:var(--font-sans);font-size:14px;line-height:1.7;color:var(--text);">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-              <h1 style="font-size:24px;margin:0;color:var(--text-strong);">${escapeHtml(title)}</h1>
-              <button id="wiki-edit-btn" style="padding:4px 10px;font-size:11px;background:var(--surface-alt);border:1px solid var(--border);border-radius:4px;color:var(--text);cursor:pointer;">Edit</button>
+
+          container.innerHTML = `<div class="md-body wiki-body" style="max-width:760px;margin:0 auto;padding:32px 40px;font-family:var(--font-sans);font-size:14px;line-height:1.7;color:var(--text);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:8px;flex-wrap:wrap;">
+              <h1 id="top" style="font-size:24px;margin:0;color:var(--text-strong);flex:1 1 auto;min-width:0;">${escapeHtml(title)}</h1>
+              <div style="display:flex;gap:6px;flex:0 0 auto;">
+                <button class="wiki-pdf-btn" title="Download this page as PDF" style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;font-size:11px;background:rgba(255,107,53,0.12);border:1px solid rgba(255,107,53,0.28);border-radius:4px;color:var(--accent-light);cursor:pointer;font-weight:500;">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  <span>Download PDF</span>
+                </button>
+                <button class="wiki-edit-btn" style="padding:4px 10px;font-size:11px;background:var(--surface-alt);border:1px solid var(--border);border-radius:4px;color:var(--text);cursor:pointer;">Edit</button>
+              </div>
             </div>
             ${html}
           </div>`;
-          // Render Mermaid diagrams in wiki
-          if (window.mermaid) {
-            container.querySelectorAll('pre code.language-mermaid').forEach(code => {
+
+          // ── Handle all link clicks inside the wiki body ──
+          container.querySelector('.wiki-body')?.addEventListener('click', (e) => {
+            const link = e.target.closest('a');
+            if (!link) return;
+            e.preventDefault();
+            const href = link.getAttribute('href') || '';
+
+            // 1. Anchor links (#section) — scroll within this page
+            if (href.startsWith('#')) {
+              const targetId = href.slice(1);
+              const target = container.querySelector(`#${CSS.escape(targetId)}`);
+              if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              return;
+            }
+
+            // 2. Cross-page wiki links (architecture.md, setup.md, etc.)
+            if (href.endsWith('.md') && !href.includes('://')) {
+              const linkedPageId = href.replace(/\.md$/, '').replace(/^\.?\/?/, '');
+              const linkedTitle = linkedPageId.charAt(0).toUpperCase() + linkedPageId.slice(1).replace(/[-_]/g, ' ');
+              // Check for anchor in cross-page link (e.g. setup.md#installation)
+              const [pagePart, anchorPart] = linkedPageId.split('#');
+              openWikiPage(projectPath, pagePart, linkedTitle, anchorPart || null);
+              return;
+            }
+
+            // 3. File deep links (src/app.js, bin/codepilot.js, etc.) — open in editor
+            if (!href.includes('://') && /\.\w{1,8}$/.test(href) && !href.endsWith('.md')) {
+              const filePath = projectPath + '/' + href.replace(/^\.?\/?/, '');
+              bus.emit('file:open', { path: filePath });
+              return;
+            }
+
+            // 4. External URLs — open in system browser
+            if (href.startsWith('http://') || href.startsWith('https://')) {
+              try { require('electron').shell.openExternal(href); } catch {
+                window.open(href, '_blank');
+              }
+              return;
+            }
+          });
+
+          // ── Copy-to-clipboard buttons on every fenced code block ──
+          // Hover-reveal button in the top-right of each <pre>; click
+          // copies the inner code text. Mirrors the mission stream tab
+          // and chat panel UX so the wiki feels equally responsive.
+          container.querySelectorAll('.wiki-body pre').forEach((pre) => {
+            // Don't double-decorate; mermaid blocks get replaced below
+            // so they end up not being <pre> any more — safe.
+            if (pre.querySelector('.pp-copy-btn')) return;
+            // Skip mermaid pre — they get replaced by the mermaid pass
+            // below into a div that's no longer a <pre>.
+            if (pre.querySelector('code.language-mermaid')) return;
+            pre.style.position = pre.style.position || 'relative';
+            const btn = document.createElement('button');
+            btn.className = 'pp-copy-btn';
+            btn.type = 'button';
+            btn.textContent = 'Copy';
+            btn.style.cssText = 'position:absolute;top:6px;right:6px;background:rgba(20,20,26,0.92);border:1px solid rgba(255,255,255,0.1);color:var(--text-dim);cursor:pointer;padding:3px 9px;border-radius:4px;font-size:10.5px;font-family:var(--font-sans);transition:all 0.15s;opacity:0;';
+            pre.addEventListener('mouseenter', () => { btn.style.opacity = '1'; });
+            pre.addEventListener('mouseleave', () => { btn.style.opacity = '0'; });
+            btn.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              const text = pre.querySelector('code')?.textContent ?? pre.textContent ?? '';
+              try {
+                await navigator.clipboard.writeText(text);
+                btn.textContent = 'Copied'; btn.style.color = 'var(--ok,#62c167)'; btn.style.borderColor = 'rgba(98,193,103,0.3)';
+                setTimeout(() => { btn.textContent = 'Copy'; btn.style.color = 'var(--text-dim)'; btn.style.borderColor = 'rgba(255,255,255,0.1)'; }, 1200);
+              } catch {
+                btn.textContent = 'Failed'; setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+              }
+            });
+            pre.appendChild(btn);
+          });
+
+          // Make sure the wiki body permits text selection — some
+          // earlier styles may have inherited user-select:none.
+          const wb = container.querySelector('.wiki-body');
+          if (wb) wb.style.userSelect = 'text';
+
+          // ── Mermaid diagrams (defensive — bad syntax shows a note, not a bomb)
+          if (window.mermaid && window.PiPilot?.mermaidSafe) {
+            container.querySelectorAll('pre code.language-mermaid').forEach((code, idx) => {
               const pre = code.closest('pre');
               if (!pre) return;
               const src = code.textContent || '';
               const div = document.createElement('div');
               div.style.cssText = 'margin:12px 0;text-align:center;overflow-x:auto;';
-              const id = 'wiki-mmd-' + Date.now() + '-' + Math.random().toString(36).slice(2,6);
-              try {
-                window.mermaid.render(id, src).then(({ svg }) => { div.innerHTML = svg; pre.replaceWith(div); }).catch(() => {});
-              } catch {}
+              pre.replaceWith(div);
+              window.PiPilot.mermaidSafe.renderInto(div, src, 'wiki-mmd').then(node => {
+                if (node && node.tagName === 'svg' && window.PiPilot?.diagramExport?.attachExportMenu) {
+                  window.PiPilot.diagramExport.attachExportMenu(node, `${pageId}-diagram-${idx + 1}`);
+                }
+              });
             });
           }
-          container.querySelector('#wiki-edit-btn')?.addEventListener('click', () => {
+
+          // ── PDF download (uses shared pdf-export utility) ──
+          container.querySelector('.wiki-pdf-btn')?.addEventListener('click', async () => {
+            const btn = container.querySelector('.wiki-pdf-btn');
+            const label = btn?.querySelector('span');
+            const orig = label?.textContent || '';
+            if (label) label.textContent = 'Generating…';
+            if (btn) btn.disabled = true;
+            try {
+              const node = container.querySelector('.wiki-body');
+              if (window.PiPilot?.pdfExport?.exportNode) {
+                await window.PiPilot.pdfExport.exportNode(node, pageId || title || 'wiki');
+              }
+            } finally {
+              if (label) label.textContent = orig || 'Download PDF';
+              if (btn) btn.disabled = false;
+            }
+          });
+
+          // ── Edit button ──
+          container.querySelector('.wiki-edit-btn')?.addEventListener('click', () => {
             const fp = projectPath + '/.pipilot/wikis/' + pageId + '.md';
             bus.emit('file:open', { path: fp });
           });
+
+          // ── Scroll to anchor if requested ──
+          if (scrollToAnchor) {
+            setTimeout(() => {
+              const target = container.querySelector(`#${CSS.escape(scrollToAnchor)}`);
+              if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
+          }
         },
       });
     } catch (err) { bus.emit('toast:show', { type: 'error', message: err.message }); }
   }
 
   function generateWiki(container, projectPath) {
+    // Show generating banner immediately
+    _wikiGenerating = true;
+    if (container) updateWikiGeneratingBanner(container);
+
     const root = document.getElementById('ide-root');
     if (root) root.classList.remove('chat-collapsed');
     bus.emit('menu:view:toggle-chat');

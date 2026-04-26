@@ -65,9 +65,32 @@
 
 .pp-mst-body { flex:1; overflow-y:auto; padding:14px 18px; display:flex; flex-direction:column; gap:10px; }
 .pp-mst-empty { color:var(--text-dim); font-size:12px; text-align:center; padding:30px 12px; }
-.pp-mst-text { font-size:13px; line-height:1.65; color:var(--text); white-space:pre-wrap; word-wrap:break-word; }
+.pp-mst-text { font-size:13px; line-height:1.65; color:var(--text); word-wrap:break-word; user-select:text; -webkit-user-select:text; }
+.pp-mst-text[data-streaming="1"] { white-space:pre-wrap; }
+.pp-mst-text p { margin:0 0 8px; }
+.pp-mst-text p:last-child { margin-bottom:0; }
+.pp-mst-text strong { color:var(--text-strong); font-weight:600; }
+.pp-mst-text em { color:var(--text-strong); font-style:italic; }
+.pp-mst-text a { color:var(--info); text-decoration:none; border-bottom:1px dotted rgba(108,182,255,0.4); }
+.pp-mst-text a:hover { color:#8ec6ff; border-bottom-color:#8ec6ff; }
 .pp-mst-text code { background:rgba(255,255,255,0.06); padding:1px 5px; border-radius:3px; font-family:var(--font-mono); font-size:12px; color:var(--accent-light,#ffb38a); }
-.pp-mst-text pre { background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.05); padding:8px 10px; border-radius:4px; margin:6px 0; overflow-x:auto; font-family:var(--font-mono); font-size:11.5px; }
+.pp-mst-text pre { position:relative; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.05); padding:10px 12px; border-radius:5px; margin:8px 0; overflow-x:auto; font-family:var(--font-mono); font-size:11.5px; line-height:1.55; }
+.pp-mst-text pre code { background:none; padding:0; color:var(--text-strong); font-size:inherit; }
+.pp-mst-text h1, .pp-mst-text h2, .pp-mst-text h3, .pp-mst-text h4 { color:var(--text-strong); font-weight:600; margin:10px 0 6px; line-height:1.35; }
+.pp-mst-text h1 { font-size:17px; }
+.pp-mst-text h2 { font-size:15px; }
+.pp-mst-text h3, .pp-mst-text h4 { font-size:13.5px; }
+.pp-mst-text ul, .pp-mst-text ol { margin:4px 0 8px; padding-left:22px; }
+.pp-mst-text li { margin:2px 0; }
+.pp-mst-text blockquote { border-left:2px solid var(--accent); padding:2px 0 2px 10px; margin:6px 0; color:var(--text-mid); }
+.pp-mst-text table { border-collapse:collapse; margin:8px 0; font-size:12px; }
+.pp-mst-text th, .pp-mst-text td { border:1px solid var(--border); padding:5px 8px; }
+.pp-mst-text th { background:rgba(255,255,255,0.04); font-weight:600; color:var(--text-strong); }
+.pp-mst-copy { position:absolute; top:6px; right:6px; background:rgba(20,20,26,0.9); border:1px solid rgba(255,255,255,0.1); color:var(--text-dim); cursor:pointer; padding:3px 8px; border-radius:4px; font-size:10.5px; font-family:var(--font-sans); transition:all 0.15s; opacity:0; }
+.pp-mst-text pre:hover .pp-mst-copy { opacity:1; }
+.pp-mst-copy:hover { color:var(--accent-light,#ffb38a); border-color:rgba(255,107,53,0.3); background:rgba(255,107,53,0.1); }
+.pp-mst-copy.copied { color:var(--ok,#62c167); border-color:rgba(98,193,103,0.3); background:rgba(98,193,103,0.1); }
+.pp-mst, .pp-mst-pill, .pp-mst-meta, .pp-mst-name, .pp-mst-pill-name, .pp-mst-pill-preview { user-select:text; -webkit-user-select:text; }
 
 .pp-mst-pill { display:inline-flex; align-items:center; gap:6px; padding:5px 9px; border-radius:6px; background:rgba(0,0,0,0.25); border:1px solid var(--border); font-size:11.5px; align-self:flex-start; max-width:100%; }
 .pp-mst-pill.running { border-color:rgba(255,107,53,0.3); background:rgba(255,107,53,0.06); }
@@ -219,11 +242,32 @@
       rerunBtn.disabled = state === 'running';
     }
 
+    function renderMd(s) {
+      if (!s) return '';
+      try { return window.marked?.parse ? window.marked.parse(s, { breaks: true, gfm: true }) : escapeHtml(s); }
+      catch { return escapeHtml(s); }
+    }
+    function attachCopyButtons(el) {
+      el.querySelectorAll('pre').forEach(pre => {
+        if (pre.querySelector('.pp-mst-copy')) return;
+        const btn = document.createElement('button');
+        btn.className = 'pp-mst-copy';
+        btn.type = 'button';
+        btn.textContent = 'Copy';
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const code = pre.querySelector('code')?.textContent ?? pre.textContent ?? '';
+          try { await navigator.clipboard.writeText(code); btn.textContent = 'Copied'; btn.classList.add('copied'); setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1200); }
+          catch { btn.textContent = 'Failed'; setTimeout(() => { btn.textContent = 'Copy'; }, 1200); }
+        });
+        pre.appendChild(btn);
+      });
+    }
     // text_delta fires per token (dozens of times per second) for live
-    // streaming feel. text fires at block_stop with the canonical body
-    // — we use it as the authoritative replace so any missed deltas
-    // are corrected. Tool calls / errors close out the active text el
-    // so the next text starts a new block.
+    // streaming feel — keep it cheap with textContent. text fires at
+    // block_stop with the canonical body — promote that to full
+    // markdown rendering with copy-to-clipboard buttons on every
+    // fenced block.
     function appendStreamingText(text, kind) {
       if (!text) return;
       if (empty) empty.style.display = 'none';
@@ -236,11 +280,13 @@
       }
       if (kind === 'delta') {
         activeTextEl.dataset.text = (activeTextEl.dataset.text || '') + text;
+        // textContent for streaming speed (no marked parse per token).
         activeTextEl.textContent = activeTextEl.dataset.text;
       } else {
-        // Block finalised — text carries the canonical body.
+        // Block finalised — render as markdown + add copy buttons.
         activeTextEl.dataset.text = text;
-        activeTextEl.textContent = text;
+        activeTextEl.innerHTML = renderMd(text);
+        attachCopyButtons(activeTextEl);
         delete activeTextEl.dataset.streaming;
       }
       scrollToBottom();
