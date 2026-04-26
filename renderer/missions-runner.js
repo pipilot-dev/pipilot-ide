@@ -77,9 +77,11 @@
     }
     const extraEnv = (payload.extraEnv && typeof payload.extraEnv === 'object') ? payload.extraEnv : {};
 
+    // Cloud missions get the OS-temp scratch clone as cwd; local
+    // missions keep their configured project path.
     const targetWorkDir = mission.target?.kind === 'local'
       ? mission.target.projectPath
-      : null;   // cloud: SDK gets no cwd; tools operate via mcp__github__*
+      : (payload.cwdOverride || null);
 
     console.log('[missions-runner] starting', mission.id, mission.name);
 

@@ -373,6 +373,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('missions:changed', fn);
       return () => ipcRenderer.removeListener('missions:changed', fn);
     },
+    onInstallRequired: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('missions:install-required', fn);
+      return () => ipcRenderer.removeListener('missions:install-required', fn);
+    },
   },
 
   settings: {

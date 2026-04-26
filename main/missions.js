@@ -22,6 +22,24 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
+const os = require('os');
+const { execFile } = require('child_process');
+
+// Minimal exec helper for the clone setup. Inherits a copy of
+// process.env merged with extra vars (GH_TOKEN/GITHUB_TOKEN) so the
+// child process is authenticated.
+function execAsync(cmd, args, extraEnv = {}, opts = {}) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    const env = { ...process.env, ...extraEnv };
+    const child = execFile(cmd, args, { env, windowsHide: true, ...opts }, (err, so, se) => {
+      stdout = so || ''; stderr = se || '';
+      resolve({ ok: !err, code: err?.code ?? 0, stdout, stderr, error: err?.message });
+    });
+    setTimeout(() => { try { child.kill(); } catch {} }, opts.timeoutMs || 5 * 60_000);
+  });
+}
 
 const TICK_INTERVAL_MS = 60_000;
 const DEFAULT_COOLDOWN_MS = 5 * 60_000;
@@ -32,10 +50,12 @@ const PERMISSION_PRESETS = {
   'fs-plus-bash':  ['Read','Edit','Write','MultiEdit','Glob','Grep','Bash','BashOutput','KillShell','mcp__pipilot__*'],
   'fs-plus-web':   ['Read','Edit','Write','MultiEdit','Glob','Grep','WebFetch','WebSearch','mcp__pipilot__*','mcp__context7__*'],
   'full':          ['Read','Edit','Write','MultiEdit','Glob','Grep','Bash','BashOutput','KillShell','WebFetch','WebSearch','Agent','mcp__pipilot__*','mcp__context7__*','mcp__playwright__*'],
-  // Cloud preset gets the GitHub MCP, web tools, AND Bash so the agent
-  // can shell out to `gh` (auth pre-injected via GH_TOKEN). No Read/
-  // Edit/Write — cloud-only missions must mutate via MCP or `gh`.
-  'cloud':         ['mcp__github__*','WebFetch','WebSearch','Bash','BashOutput','KillShell','mcp__context7__*'],
+  // Cloud preset: full local toolkit because the agent works on a
+  // throwaway scratch clone (cwd = OS-temp dir), plus GitHub MCP for
+  // remote-only ops (search/issues/PRs) and gh CLI for the push +
+  // PR-open flow. The mission system prompt mandates clone-and-push
+  // for all writes; per-file MCP commits are explicitly forbidden.
+  'cloud':         ['Read','Edit','Write','MultiEdit','Glob','Grep','Bash','BashOutput','KillShell','WebFetch','WebSearch','mcp__github__*','mcp__pipilot__*','mcp__context7__*'],
 };
 
 module.exports = function register(ipcMain, ctx, deps = {}) {
@@ -209,60 +229,57 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     // is needed; we never run `gh auth login`.
     let toolGuide;
     if (isCloud) {
-      const ghLine = ghInfo.installed
-        ? `- The \`gh\` CLI is installed (${ghInfo.version || 'available'}) and pre-authenticated for this run via the GH_TOKEN env var. Run any \`gh ...\` command via Bash — it will use the user's PAT automatically. Do NOT run \`gh auth login\` (it would write to the user's global config; the env-var path is intentionally process-scoped).`
-        : `- The \`gh\` CLI is NOT installed on this machine (auto-install was attempted: ${ghInfo.installMessage || 'unsupported platform'}). Stick to the github MCP tools.`;
       const baseBranch = mission.target.branch || 'main';
-      const branchOrDirect = mission.cloudPr
-        ? `a NEW working branch off of ${baseBranch} (use mcp__github__create_branch). NEVER push directly to ${baseBranch}.`
-        : `the existing branch ${baseBranch}. The user has explicitly opted into direct commits.`;
-      const atomicEditFlow = [
-        `**HARD RULE — atomic commits only.** Never use mcp__github__create_or_update_file. That tool makes one commit per file and pollutes the PR history. Instead, batch ALL file changes from the mission into a SINGLE commit via the Git Data API:`,
-        ``,
-        `Step 1 — Resolve the branch tip:`,
-        `  a) mcp__github__get_ref { ref: "heads/<branch>" } → returns commit sha`,
-        `  b) mcp__github__get_commit { commit_sha } → returns its tree sha (call this BASE_TREE)`,
-        ``,
-        `Step 2 — For each changed file, upload the new content as a blob:`,
-        `  mcp__github__create_blob { content: "<full new file body>", encoding: "utf-8" } → blob sha`,
-        `  (Read the existing file first with mcp__github__get_file_contents so you have the full current body to transform.)`,
-        ``,
-        `Step 3 — Build a single tree containing ALL the changes:`,
-        `  mcp__github__create_tree {`,
-        `    base_tree: BASE_TREE,`,
-        `    tree: [`,
-        `      { path: "src/foo.ts",     mode: "100644", type: "blob", sha: "<new blob sha>" },`,
-        `      { path: "src/bar.ts",     mode: "100644", type: "blob", sha: "<new blob sha>" },`,
-        `      { path: "src/legacy.ts",  mode: "100644", type: "blob", sha: null }   // null deletes`,
-        `    ]`,
-        `  } → new tree sha`,
-        ``,
-        `Step 4 — Make ONE commit with all changes:`,
-        `  mcp__github__create_commit { message: "<descriptive>", tree: <new tree sha>, parents: [<branch tip sha>] } → new commit sha`,
-        ``,
-        `Step 5 — Move the branch ref forward:`,
-        `  mcp__github__update_ref { ref: "heads/<branch>", sha: <new commit sha> }`,
-        ``,
-        `Even for a one-file edit, follow this flow — one commit per mission keeps the PR clean and reviewable. Commit message format: imperative, present tense, max 72 chars on the first line, with a blank line + paragraph body explaining WHY for non-trivial changes.`,
-      ].join('\n');
-      const escapeHatch = `If the change requires running tests or is genuinely large (10+ files / thousands of lines), fall back to: \`gh repo clone\` into the cwd, edit with Read/Edit/Write/MultiEdit, \`git add -A && git commit -m "..." && git push -u origin <branch>\`. ${ghInfo.installed ? '' : '(gh CLI is not installed on this machine — try MCP path first.)'}`;
-      const prStep = mission.cloudPr
-        ? `Step 6 — Open the Pull Request: mcp__github__create_pull_request { title: "[PiPilot Mission] <name>", body: "...", head: "<working branch>", base: "${baseBranch}" }. Title ≤72 chars. Body should explain what changed and why. If the PR already exists from a prior run on the same branch, skip this step.`
-        : `(No PR step — this mission commits directly to ${baseBranch}.)`;
+      const repo = mission.target.repo;
+      const workBranch = `pipilot-mission-${mission.id}`;
+      const scratchDir = ghInfo.scratchDir || `<scratch>`;
+      const prStepIfNeeded = mission.cloudPr
+        ? `gh pr create --title "[PiPilot Mission] ${mission.name.replace(/"/g, '\\"')}" --body "$(cat <<'EOF'\n<describe what changed and why, in markdown. ~3-8 sentences.>\nEOF\n)" --base ${baseBranch} --head ${workBranch}`
+        : `# Direct-commit mode: skip PR creation, the push above already updates ${baseBranch}.`;
+      const branchSetup = mission.cloudPr
+        ? `git checkout -b ${workBranch}    # new branch off ${baseBranch}`
+        : `git checkout ${baseBranch}        # direct-commit mode`;
+      const pushCmd = mission.cloudPr
+        ? `git push -u origin ${workBranch}`
+        : `git push origin ${baseBranch}`;
       toolGuide = [
-        `You have TWO complementary GitHub interfaces:`,
-        `1. **HTTP MCP** at api.githubcopilot.com/mcp — surfaces tools as \`mcp__github__*\`. PREFERRED for all structured ops (reads, branch creation, blob/tree/commit/ref calls, PR open, comments, search).`,
-        `2. **\`gh\` CLI via Bash** — convenient for ad-hoc shell ops, multi-step pipelines, and the rare case where you need a real working tree. ${ghLine.replace(/^- /, '')}`,
+        `**Cloud mission workflow — clone, edit locally, push.**`,
         ``,
-        `Working branch: this mission writes to ${branchOrDirect}`,
+        `You have a clean, isolated git working tree pre-cloned at:`,
+        `  ${scratchDir}`,
+        `which is the cwd you were started in. \`gh\` (${ghInfo.gh?.version || 'installed'}) and \`git\` (${ghInfo.git?.version || 'installed'}) are both on PATH and pre-authenticated via GH_TOKEN — DO NOT run \`gh auth login\` (it would clobber the user's global config; env-var auth is intentionally process-scoped).`,
         ``,
-        atomicEditFlow,
+        `Standard flow — every cloud mission MUST follow this exact shape:`,
         ``,
-        prStep,
+        `1. **Orient.** \`git status\` and \`git log --oneline -5\` to confirm the clone state. The working tree is already on ${baseBranch} at HEAD.`,
         ``,
-        `Escape hatch: ${escapeHatch}`,
+        `2. **Branch.** Create the working branch:`,
+        `   \`\`\`bash`,
+        `   ${branchSetup}`,
+        `   \`\`\``,
         ``,
-        `You do NOT have local filesystem access by default. Read and write the remote via mcp__github__* tools. Cloning is allowed (escape hatch above) but most missions don't need it.`,
+        `3. **Edit.** Use Read/Edit/Write/MultiEdit/Glob/Grep — these operate on the local clone exactly like a normal local mission. Make ALL the file changes the mission requires before committing. Run tests/builds if relevant: \`pnpm install && pnpm test\` (the cloned repo is a real working tree — pnpm/npm/yarn/cargo all work).`,
+        ``,
+        `4. **Commit ONCE.** Stage everything, commit with a single descriptive message:`,
+        `   \`\`\`bash`,
+        `   git add -A`,
+        `   git commit -m "<imperative present-tense subject ≤72 chars>" -m "<blank line then markdown body explaining WHY>"`,
+        `   \`\`\``,
+        `   ONE commit covers the whole mission, no matter how many files changed. Maintainers reviewing PiPilot Mission PRs see a single atomic change, not a stream of "Update X" noise.`,
+        ``,
+        `5. **Push.**`,
+        `   \`\`\`bash`,
+        `   ${pushCmd}`,
+        `   \`\`\``,
+        ``,
+        `6. **${mission.cloudPr ? 'Open a PR' : 'Done'}.** ${mission.cloudPr ? 'Use gh:' : ''}`,
+        `   \`\`\`bash`,
+        `   ${prStepIfNeeded}`,
+        `   \`\`\``,
+        ``,
+        `Reading from the remote without cloning (PR diffs, issue lists, search) — use the GitHub Copilot HTTP MCP at api.githubcopilot.com/mcp via \`mcp__github__*\` tools. Useful for: \`mcp__github__list_pull_requests\`, \`mcp__github__search_code\`, \`mcp__github__list_issues\`, \`mcp__github__get_issue\`, \`mcp__github__add_issue_comment\`. Don't use mcp__github__create_or_update_file — it makes per-file commits, which is exactly what the clone-and-push flow exists to avoid.`,
+        ``,
+        `If you need to abandon (mission is unnecessary), end with: \`Skipped: <reason>\` and DO NOT push or open a PR. The scratch clone will be cleaned up later.`,
       ].join('\n');
     } else {
       const ghLine = ghInfo.hasToken
@@ -329,28 +346,87 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       }
     }
 
-    // Provision gh CLI if helpful for this mission. For cloud missions
-    // we always try; for local missions we only do it if a PAT is set
-    // (so the agent can `gh pr view` against the project's remote).
-    // Result is best-effort — even if install fails, the HTTP MCP path
-    // still works for cloud missions.
-    let ghInfo = { installed: false, hasToken: !!pat, env: pat ? { GH_TOKEN: pat, GITHUB_TOKEN: pat } : {} };
+    // Provision git + gh CLI for missions that need them. Cloud
+    // missions REQUIRE both (clone-and-push is the only path now);
+    // local missions only need them if a PAT is set.
+    let ghInfo = { gh: { installed: false }, git: { installed: false }, hasToken: !!pat, env: pat ? { GH_TOKEN: pat, GITHUB_TOKEN: pat } : {} };
     if (typeof ghEnsure === 'function' && (mission.target?.kind === 'cloud' || pat)) {
       try { ghInfo = { ...ghInfo, ...(await ghEnsure()) }; } catch (err) { console.warn('[missions] ghEnsure failed:', err.message); }
     }
 
-    inFlight.set(mission.id, { startedAt: Date.now() });
+    // Cloud missions need BOTH git + gh — clone-and-push is the only
+    // path. If either is missing, abort with a clear message and tell
+    // the renderer to surface an install modal.
+    if (mission.target?.kind === 'cloud') {
+      const missing = [];
+      if (!ghInfo.git?.installed) missing.push('git');
+      if (!ghInfo.gh?.installed) missing.push('gh');
+      if (missing.length) {
+        const summary = `Cloud missions require ${missing.join(' + ')} on this machine. Install and restart PiPilot to continue.`;
+        await patchStats(mission, { lastRunAt: Date.now(), lastRunStatus: 'error', lastRunMessage: summary, runCount: (mission.runCount || 0) + 1 });
+        await appendLog(mission, 'error', summary);
+        broadcast('missions:status', { id: mission.id, state: 'idle', status: 'error', summary });
+        broadcast('missions:install-required', {
+          missionId: mission.id,
+          missing,
+          links: {
+            git: 'https://git-scm.com/downloads',
+            gh: 'https://cli.github.com/',
+          },
+          ghInstallMessage: ghInfo.ghInstallMessage || null,
+        });
+        return { ok: false, reason: 'missing-cli', missing };
+      }
+
+      // Clone the repo into a fresh OS-temp scratch dir so the agent has
+      // a real working tree to edit. Each run gets its own dir so a
+      // crashed/abandoned previous attempt can never contaminate this
+      // one. Old dirs are best-effort cleaned on a successful run end.
+      const scratchDir = path.join(os.tmpdir(), 'pipilot-missions', mission.id, String(Date.now()));
+      try {
+        await fsp.mkdir(scratchDir, { recursive: true });
+        const repo = mission.target.repo;
+        const branch = mission.target.branch || 'main';
+        // Use gh's clone (handles auth via GH_TOKEN automatically) and
+        // shallow clone for speed — depth=1 is enough for most edits;
+        // the agent can `git fetch --unshallow` if it needs history.
+        const cloneRes = await execAsync('gh', ['repo', 'clone', repo, scratchDir, '--', '--branch', branch, '--depth', '50'], ghInfo.env);
+        if (!cloneRes.ok) {
+          const summary = 'Clone failed: ' + (cloneRes.stderr || cloneRes.error || 'unknown');
+          await patchStats(mission, { lastRunAt: Date.now(), lastRunStatus: 'error', lastRunMessage: summary, runCount: (mission.runCount || 0) + 1 });
+          await appendLog(mission, 'error', summary);
+          broadcast('missions:status', { id: mission.id, state: 'idle', status: 'error', summary });
+          return { ok: false, reason: 'clone-failed', error: summary };
+        }
+        // Configure committer identity for this clone only — uses
+        // --local so it never touches the user's global git config.
+        await execAsync('git', ['-C', scratchDir, 'config', '--local', 'user.name', 'PiPilot Mission'], ghInfo.env);
+        await execAsync('git', ['-C', scratchDir, 'config', '--local', 'user.email', 'mission@pipilot.local'], ghInfo.env);
+        ghInfo.scratchDir = scratchDir;
+      } catch (err) {
+        const summary = 'Failed to prepare scratch clone: ' + (err?.message || err);
+        await patchStats(mission, { lastRunAt: Date.now(), lastRunStatus: 'error', lastRunMessage: summary, runCount: (mission.runCount || 0) + 1 });
+        await appendLog(mission, 'error', summary);
+        broadcast('missions:status', { id: mission.id, state: 'idle', status: 'error', summary });
+        return { ok: false, reason: 'clone-prep-failed', error: summary };
+      }
+    }
+
+    inFlight.set(mission.id, { startedAt: Date.now(), scratchDir: ghInfo.scratchDir || null });
     broadcast('missions:status', { id: mission.id, state: 'running', startedAt: Date.now() });
     broadcast('missions:run-now', {
       mission,
       systemPrompt: buildSystemPrompt(mission, ghInfo),
       allowedTools: buildAllowedTools(mission),
-      githubPat: pat,            // ONLY sent for cloud missions, ONLY at run time
+      githubPat: pat,
       effort: mission.effort || 'medium',
       cloudPr: mission.cloudPr !== false,
-      // Env vars to inject into the agent's bash subprocess (for `gh`).
       extraEnv: ghInfo.env || {},
-      ghInfo: { installed: ghInfo.installed, version: ghInfo.version, installMessage: ghInfo.installMessage },
+      // Cloud missions: cwd of the spawned agent is the cloned scratch
+      // dir, NOT the user's open project. Local missions: use the
+      // configured projectPath as before.
+      cwdOverride: ghInfo.scratchDir || null,
+      ghInfo: { gitInstalled: ghInfo.gitInstalled, ghInstalled: ghInfo.ghInstalled, scratchDir: ghInfo.scratchDir || null },
     });
     return { ok: true };
   }

@@ -47,6 +47,13 @@ async function isGhInstalled() {
   return { installed: true, version: m ? m[1] : 'unknown' };
 }
 
+async function isGitInstalled() {
+  const r = await execCmd('git', ['--version'], { timeoutMs: 4000 });
+  if (!r.ok) return { installed: false };
+  const m = /git version (\S+)/.exec(r.stdout || '');
+  return { installed: true, version: m ? m[1] : 'unknown' };
+}
+
 // Platform-specific install. Returns { ok, message }. Best-effort —
 // many systems will refuse without elevation; we surface that to the UI.
 async function tryInstallGh() {
@@ -94,45 +101,49 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
   const { getSecret } = deps;
 
   // Cache the install check for 60s so back-to-back cloud missions
-  // don't keep hitting `gh --version`.
-  let lastCheck = { at: 0, installed: false, version: null };
+  // don't keep hitting --version on the binaries.
+  let lastCheck = { at: 0, gh: { installed: false }, git: { installed: false } };
   async function check() {
     if (Date.now() - lastCheck.at < 60_000) return lastCheck;
-    const r = await isGhInstalled();
-    lastCheck = { at: Date.now(), ...r };
+    const [gh, git] = await Promise.all([isGhInstalled(), isGitInstalled()]);
+    lastCheck = { at: Date.now(), gh, git };
     return lastCheck;
   }
 
   ipcMain.handle('gh:check', async () => {
-    try { return { ok: true, ...(await check()) }; }
-    catch (err) { return { ok: false, error: err?.message || String(err) }; }
+    try {
+      const r = await check();
+      // Backward-compatible flat shape for callers that only want gh.
+      return { ok: true, installed: r.gh.installed, version: r.gh.version, gh: r.gh, git: r.git };
+    } catch (err) { return { ok: false, error: err?.message || String(err) }; }
   });
 
   ipcMain.handle('gh:install', async () => {
     try {
       const cur = await check();
-      if (cur.installed) return { ok: true, alreadyInstalled: true, ...cur };
+      if (cur.gh.installed) return { ok: true, alreadyInstalled: true, ...cur };
       const r = await tryInstallGh();
-      // Bust cache so the next check sees the new binary.
-      lastCheck = { at: 0, installed: false, version: null };
+      lastCheck.at = 0;
       const after = await check();
-      return { ok: r.ok && after.installed, ...r, ...after };
+      return { ok: r.ok && after.gh.installed, ...r, ...after };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
     }
   });
 
-  // Ensure: combined check + install. Used internally by missions runner
-  // before launching a cloud mission. Returns env vars to inject into
-  // the agent's bash subprocess (always — even if install failed; the
-  // HTTP MCP still works without gh, env vars are harmless when unused).
+  // Ensure: returns the install state of BOTH git and gh, plus the env
+  // vars we want to inject into the agent's bash subprocess. Does NOT
+  // attempt to install git (cross-platform git installs require running
+  // a real installer with elevation — we surface a "please install"
+  // message instead and the renderer modal links to the official
+  // download).
   async function ensureForMission() {
-    const checkResult = await check();
-    let installResult = null;
-    if (!checkResult.installed) {
-      try { installResult = await tryInstallGh(); } catch (err) { installResult = { ok: false, message: err?.message }; }
-      if (installResult?.ok) {
-        lastCheck = { at: 0, installed: false, version: null };
+    const cur = await check();
+    let ghInstallResult = null;
+    if (!cur.gh.installed) {
+      try { ghInstallResult = await tryInstallGh(); } catch (err) { ghInstallResult = { ok: false, message: err?.message }; }
+      if (ghInstallResult?.ok) {
+        lastCheck.at = 0;
         await check();
       }
     }
@@ -142,13 +153,16 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     }
     const env = token ? { GH_TOKEN: token, GITHUB_TOKEN: token } : {};
     return {
-      installed: lastCheck.installed,
-      version: lastCheck.version,
-      installAttempted: !!installResult,
-      installOk: installResult?.ok ?? null,
-      installMessage: installResult?.message ?? null,
+      git: lastCheck.git,
+      gh: lastCheck.gh,
+      ghInstallAttempted: !!ghInstallResult,
+      ghInstallOk: ghInstallResult?.ok ?? null,
+      ghInstallMessage: ghInstallResult?.message ?? null,
       env,
       hasToken: !!token,
+      // Convenience flags for callers.
+      gitInstalled: lastCheck.git.installed,
+      ghInstalled: lastCheck.gh.installed,
     };
   }
 

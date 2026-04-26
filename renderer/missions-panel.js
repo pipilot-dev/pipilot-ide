@@ -1214,6 +1214,60 @@
   window.PiPilot.missions.openPatModal = openPatModal;
 
   // Refresh on broadcasts so the panel stays live.
+  // Install-required modal — surfaces when a cloud mission can't fire
+  // because git or gh isn't on the user's machine.
+  function openInstallRequiredModal(payload) {
+    const missing = Array.isArray(payload?.missing) ? payload.missing : [];
+    const links = payload?.links || {};
+    const items = missing.map(name => `
+      <div class="pp-install-item">
+        <div class="pp-install-name">${escapeHtml(name === 'gh' ? 'GitHub CLI (gh)' : name === 'git' ? 'Git' : name)}</div>
+        <a href="${escapeHtml(links[name] || '')}" data-link="${escapeHtml(links[name] || '')}" class="pp-install-link">${escapeHtml(links[name] || '')}</a>
+      </div>
+    `).join('');
+    const backdrop = document.createElement('div');
+    backdrop.className = 'pp-mission-editor-backdrop';
+    backdrop.innerHTML = `
+      <div class="pp-mission-editor" style="width:480px;">
+        <div class="pp-me-head">
+          <span class="pp-me-title">Install required</span>
+          <button class="pp-me-close" data-act="close">&times;</button>
+        </div>
+        <div class="pp-me-body">
+          <div class="pp-me-help">Cloud missions clone the repo into an OS-temp scratch dir and push back via <code>git</code> + <code>gh</code>. The following ${missing.length === 1 ? 'tool is' : 'tools are'} not on this machine:</div>
+          <div class="pp-install-list">${items}</div>
+          <div class="pp-me-help" style="margin-top:8px;">Install ${missing.length === 1 ? 'it' : 'them'} from the official site${missing.length === 1 ? '' : 's'} above, then <strong>restart PiPilot</strong> so the new binary is on PATH for the agent's bash subprocess. After restart, click <em>Run now</em> on the mission again.</div>
+        </div>
+        <div class="pp-me-foot">
+          <button class="pp-me-btn" data-act="close">Got it</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    const close = () => backdrop.remove();
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    backdrop.querySelectorAll('[data-act="close"]').forEach(b => b.addEventListener('click', close));
+    backdrop.querySelectorAll('[data-link]').forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        try { api.shell?.openExternal?.(a.dataset.link); } catch {}
+      });
+    });
+  }
+
+  if (!document.getElementById('pp-install-styles')) {
+    const s = document.createElement('style');
+    s.id = 'pp-install-styles';
+    s.textContent = `
+.pp-install-list { display:flex; flex-direction:column; gap:8px; margin-top:8px; }
+.pp-install-item { background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:6px; padding:10px 12px; display:flex; flex-direction:column; gap:4px; }
+.pp-install-name { font-size:12px; font-weight:500; color:var(--text-strong); }
+.pp-install-link { font-size:11.5px; color:var(--info,#6cb6ff); text-decoration:none; font-family:var(--font-mono); cursor:pointer; }
+.pp-install-link:hover { text-decoration:underline; }`;
+    document.head.appendChild(s);
+  }
+
+  api.missions.onInstallRequired?.((payload) => openInstallRequiredModal(payload));
+
   api.missions.onStatus((payload) => {
     if (payload?.state === 'running') runningIds.add(payload.id);
     else runningIds.delete(payload.id);
