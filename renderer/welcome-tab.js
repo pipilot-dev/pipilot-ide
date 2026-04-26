@@ -62,9 +62,20 @@
   }
 
   // ── Welcome Tab ──
+  // The welcome tab is intentionally transient: never persisted, never
+  // restored, and always re-mounted on open. Mounting is the only place
+  // we read the diary, so forcing a fresh mount each time guarantees the
+  // resume carousel reflects the latest entries — no stale-tab race.
   function openWelcomeTab() {
     const editor = window.PiPilot?.editor;
     if (!editor) return;
+    // If a stale welcome tab is open, tear it down before opening a new
+    // one so mount() runs again and pulls fresh diary data.
+    try {
+      if (editor.isVirtualTab && editor.isVirtualTab(WELCOME_ID) && typeof editor.closeFile === 'function') {
+        editor.closeFile(WELCOME_ID);
+      }
+    } catch {}
     editor.openVirtualTab({
       id: WELCOME_ID,
       name: 'Welcome',
