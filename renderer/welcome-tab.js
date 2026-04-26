@@ -26,6 +26,34 @@
     return fp;
   }
 
+  function escapeHtmlSafe(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  // Convert a "YYYY-MM-DD HH:MM" string into a relative phrase ("2h ago",
+  // "yesterday", "3 days ago"). Returns null on parse failure.
+  function relativeTimeFromString(s) {
+    if (!s) return null;
+    const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/);
+    if (!m) return null;
+    const t = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime();
+    if (!t || isNaN(t)) return null;
+    const delta = Date.now() - t;
+    if (delta < 0) return 'in the future';
+    const sec = Math.floor(delta / 1000);
+    const min = Math.floor(sec / 60);
+    const hr = Math.floor(min / 60);
+    const day = Math.floor(hr / 24);
+    if (sec < 60) return 'just now';
+    if (min < 60) return `${min} minute${min === 1 ? '' : 's'} ago`;
+    if (hr < 24) return `${hr} hour${hr === 1 ? '' : 's'} ago`;
+    if (day === 1) return 'yesterday';
+    if (day < 7) return `${day} days ago`;
+    if (day < 30) return `${Math.floor(day / 7)} week${Math.floor(day / 7) === 1 ? '' : 's'} ago`;
+    if (day < 365) return `${Math.floor(day / 30)} month${Math.floor(day / 30) === 1 ? '' : 's'} ago`;
+    return `${Math.floor(day / 365)} year${Math.floor(day / 365) === 1 ? '' : 's'} ago`;
+  }
+
   function toAbsoluteFromProject(relPath, projectPath) {
     const root = String(projectPath || '').replace(/\\/g, '/').replace(/\/+$/, '');
     const rel = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
@@ -51,69 +79,294 @@
 
   function buildWelcomeHTML() {
     return `<div class="wt-welcome">
-      <div class="wt-welcome-inner">
-        <div class="wt-welcome-left">
-          <div class="wt-logo">
-            <img src="public/icon.png" width="36" height="36" style="border-radius:8px;" />
-            <span class="wt-logo-text">PiPilot IDE</span>
-          </div>
-
-          <h2 class="wt-section-title">Start</h2>
-          <div class="wt-start-links">
-            <button class="wt-link" data-action="new-file">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 12v6M9 15h6"/></svg>
-              New File
-            </button>
-            <button class="wt-link" data-action="open-folder">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-              Open Folder...
-            </button>
-            <button class="wt-link" data-action="clone-repo">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
-              Clone Git Repository...
-            </button>
-            <button class="wt-link" data-action="new-project">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
-              Generate New Project with AI...
-            </button>
-          </div>
-
-          <h2 class="wt-section-title">Recent</h2>
-          <div class="wt-recent" id="wt-recent-list">Loading...</div>
-        </div>
-
-        <div class="wt-welcome-right">
-          <h2 class="wt-section-title">Walkthroughs</h2>
-          <div class="wt-walkthroughs">
-            <button class="wt-walkthrough-card" data-walkthrough="getting-started">
-              <div class="wt-wk-icon" style="background:linear-gradient(135deg,#0078d4,#00b4d8);">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
-              </div>
-              <div class="wt-wk-info">
-                <div class="wt-wk-title">Get Started with PiPilot</div>
-                <div class="wt-wk-desc">Customize your editor, learn the basics, and start coding</div>
-              </div>
-            </button>
-            <button class="wt-walkthrough-card" data-walkthrough="ai-power">
-              <div class="wt-wk-icon" style="background:linear-gradient(135deg,#FF6B35,#ff9a5c);">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-              </div>
-              <div class="wt-wk-info">
-                <div class="wt-wk-title">AI Power User</div>
-                <div class="wt-wk-desc">Your AI pair programmer to write code faster and smarter</div>
-              </div>
-            </button>
-          </div>
-        </div>
+      <div class="wt-bg" aria-hidden="true">
+        <div class="wt-bg-warm"></div>
+        <div class="wt-bg-cool"></div>
+        <div class="wt-bg-grid"></div>
+        <div class="wt-bg-grain"></div>
+        <div class="wt-bg-vignette"></div>
       </div>
 
-      <div class="wt-footer">
-        <label class="wt-checkbox"><input type="checkbox" id="wt-show-on-startup" checked /> Show welcome page on startup</label>
+      <div class="wt-welcome-inner">
+
+        <header class="wt-hero" style="--wt-anim-delay:0ms;">
+          <span class="wt-eyebrow"><span class="wt-eyebrow-dot"></span>AI · NATIVE · IDE</span>
+          <div class="wt-hero-row">
+            <div class="wt-hero-logo-frame">
+              <img src="public/icon.png" class="wt-hero-logo" />
+              <span class="wt-hero-logo-glow" aria-hidden="true"></span>
+            </div>
+            <div class="wt-hero-text">
+              <h1 class="wt-hero-title">PiPilot<span class="wt-hero-title-mark">.</span></h1>
+              <p class="wt-hero-tagline">An editor that thinks alongside you.</p>
+            </div>
+          </div>
+          <div class="wt-hero-meta">
+            <span class="wt-meta-chip"><span class="wt-meta-led"></span>v1.0.0</span>
+            <span class="wt-meta-sep"></span>
+            <span class="wt-meta-chip">Native Desktop</span>
+            <span class="wt-meta-sep"></span>
+            <span class="wt-meta-chip">AI Agents</span>
+          </div>
+        </header>
+
+        <!-- Resumption: Yesterday Card. Populated async after mount. -->
+        <div class="wt-resume" id="wt-resume-host" hidden></div>
+
+        <div class="wt-main">
+          <div class="wt-col">
+            <section class="wt-section" style="--wt-anim-delay:80ms;">
+              <div class="wt-section-head">
+                <span class="wt-section-num">01</span>
+                <h2 class="wt-section-title">Start</h2>
+                <span class="wt-section-rule"></span>
+              </div>
+              <div class="wt-actions">
+                <button class="wt-action" data-action="new-file">
+                  <span class="wt-action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 12v6M9 15h6"/></svg></span>
+                  <span class="wt-action-label">New File</span>
+                  <span class="wt-action-arrow">→</span>
+                </button>
+                <button class="wt-action" data-action="open-folder">
+                  <span class="wt-action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+                  <span class="wt-action-label">Open Folder</span>
+                  <span class="wt-action-arrow">→</span>
+                </button>
+                <button class="wt-action" data-action="clone-repo">
+                  <span class="wt-action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+                  <span class="wt-action-label">Clone Git Repository</span>
+                  <span class="wt-action-arrow">→</span>
+                </button>
+                <button class="wt-action wt-action-primary" data-action="new-project">
+                  <span class="wt-action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg></span>
+                  <span class="wt-action-label">Generate New Project with AI</span>
+                  <span class="wt-action-arrow">→</span>
+                </button>
+              </div>
+            </section>
+
+            <section class="wt-section" style="--wt-anim-delay:160ms;">
+              <div class="wt-section-head">
+                <span class="wt-section-num">02</span>
+                <h2 class="wt-section-title">Recent</h2>
+                <span class="wt-section-rule"></span>
+              </div>
+              <div class="wt-recent" id="wt-recent-list"><div class="wt-recent-loading">Loading…</div></div>
+            </section>
+          </div>
+
+          <div class="wt-col">
+            <section class="wt-section" style="--wt-anim-delay:120ms;">
+              <div class="wt-section-head">
+                <span class="wt-section-num">03</span>
+                <h2 class="wt-section-title">Walkthroughs</h2>
+                <span class="wt-section-rule"></span>
+              </div>
+              <div class="wt-walkthroughs">
+                <button class="wt-walkthrough-card" data-walkthrough="getting-started">
+                  <div class="wt-wk-icon wt-wk-icon-cool">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+                  </div>
+                  <div class="wt-wk-info">
+                    <div class="wt-wk-title">Get Started with PiPilot</div>
+                    <div class="wt-wk-desc">Customize your editor, learn the basics, and start coding.</div>
+                  </div>
+                  <span class="wt-wk-arrow">→</span>
+                </button>
+                <button class="wt-walkthrough-card" data-walkthrough="ai-power">
+                  <div class="wt-wk-icon wt-wk-icon-warm">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  </div>
+                  <div class="wt-wk-info">
+                    <div class="wt-wk-title">AI Power User</div>
+                    <div class="wt-wk-desc">Your AI pair programmer to write code faster and smarter.</div>
+                  </div>
+                  <span class="wt-wk-arrow">→</span>
+                </button>
+              </div>
+            </section>
+
+            <section class="wt-section" style="--wt-anim-delay:200ms;">
+              <div class="wt-section-head">
+                <span class="wt-section-num">04</span>
+                <h2 class="wt-section-title">Help</h2>
+                <span class="wt-section-rule"></span>
+              </div>
+              <div class="wt-actions">
+                <button class="wt-action" data-action="docs">
+                  <span class="wt-action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg></span>
+                  <span class="wt-action-label">Documentation</span>
+                  <span class="wt-action-arrow">→</span>
+                </button>
+                <button class="wt-action" data-action="shortcuts">
+                  <span class="wt-action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h8M6 16h.01M18 16h.01M10 16h4"/></svg></span>
+                  <span class="wt-action-label">Keyboard Shortcuts</span>
+                  <span class="wt-action-arrow">→</span>
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <footer class="wt-footer" style="--wt-anim-delay:260ms;">
+          <label class="wt-checkbox">
+            <input type="checkbox" id="wt-show-on-startup" checked />
+            <span class="wt-checkbox-box"></span>
+            <span class="wt-checkbox-label">Show welcome page on startup</span>
+          </label>
+          <span class="wt-footer-credit">crafted with care · pipilot</span>
+        </footer>
+
       </div>
     </div>`;
   }
 
+  // Strip the trailing meta footer (`<!-- meta: turns=..., session=... -->`)
+  // and any "Last prompt:" / "Agent summary:" prefixes from older fallback
+  // entries so the Resume Card displays clean prose.
+  function cleanDiarySummary(s) {
+    if (!s) return '';
+    let out = String(s);
+    // Drop comment-style meta footer and anything after it.
+    out = out.replace(/<!--\s*meta:[\s\S]*?-->\s*$/m, '').trim();
+    return out;
+  }
+
+  // Loads recent diary entries into the resume host as a carousel — the
+  // newest entry is shown first (active). Prev/Next buttons + dot
+  // indicators navigate through up to 10 prior entries. Idempotent.
+  async function loadResumeCardInto(container) {
+    if (!container) return;
+    const host = container.querySelector('#wt-resume-host');
+    if (!host) return;
+    const projectPath = state.projectPath;
+    if (!projectPath || !api.diary?.read) {
+      host.hidden = true;
+      host.innerHTML = '';
+      return;
+    }
+    try {
+      const r = await api.diary.read(projectPath, 10);
+      const all = (r?.entries || [])
+        .map(e => ({ ...e, summary: cleanDiarySummary(e?.summary || '') }))
+        .filter(e => e && e.summary);
+      if (!all.length) {
+        host.hidden = true;
+        host.innerHTML = '';
+        return;
+      }
+
+      const renderBody = (s) => {
+        try {
+          return window.marked?.parse
+            ? window.marked.parse(s, { breaks: true, gfm: true })
+            : escapeHtmlSafe(s).replace(/\n+/g, '<br/>');
+        } catch {
+          return escapeHtmlSafe(s).replace(/\n+/g, '<br/>');
+        }
+      };
+
+      const slides = all.map((entry, i) => {
+        const ago = relativeTimeFromString(entry.time) || entry.time;
+        const eyebrow = i === 0 ? 'Resume where you left off' : 'Earlier session';
+        return `
+          <div class="wt-resume-slide" data-idx="${i}" ${i === 0 ? '' : 'aria-hidden="true"'}>
+            <div class="wt-resume-head">
+              <span class="wt-resume-eyebrow">${eyebrow}</span>
+              <span class="wt-resume-time">${escapeHtmlSafe(ago)}</span>
+            </div>
+            <div class="wt-resume-body md-body">${renderBody(entry.summary)}</div>
+          </div>`;
+      }).join('');
+
+      const dots = all.map((_, i) =>
+        `<button type="button" class="wt-resume-dot${i === 0 ? ' active' : ''}" data-idx="${i}" aria-label="Diary entry ${i + 1}"></button>`
+      ).join('');
+
+      const showNav = all.length > 1;
+      host.innerHTML = `
+        <div class="wt-resume-card${showNav ? ' has-carousel' : ''}">
+          <div class="wt-resume-track" data-active="0">${slides}</div>
+          ${showNav ? `
+            <button type="button" class="wt-resume-nav prev" data-nav="prev" aria-label="Previous entry">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <button type="button" class="wt-resume-nav next" data-nav="next" aria-label="Next entry">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <div class="wt-resume-dots">${dots}</div>
+          ` : ''}
+          <div class="wt-resume-actions">
+            <button class="wt-resume-btn" data-action="resume-chat">Open chat</button>
+            <button class="wt-resume-btn ghost" data-action="dismiss-resume">Dismiss</button>
+          </div>
+        </div>`;
+      host.hidden = false;
+      host.style.opacity = ''; host.style.maxHeight = '';
+
+      const card = host.querySelector('.wt-resume-card');
+      const track = host.querySelector('.wt-resume-track');
+      const setActive = (idx) => {
+        const n = all.length;
+        const i = ((idx % n) + n) % n;
+        track.dataset.active = String(i);
+        host.querySelectorAll('.wt-resume-slide').forEach((el, j) => {
+          el.classList.toggle('active', j === i);
+          if (j === i) el.removeAttribute('aria-hidden');
+          else el.setAttribute('aria-hidden', 'true');
+        });
+        host.querySelectorAll('.wt-resume-dot').forEach((el, j) => {
+          el.classList.toggle('active', j === i);
+        });
+      };
+      // Mark first slide active so CSS reveals it.
+      setActive(0);
+
+      if (showNav) {
+        host.querySelector('[data-nav="prev"]')?.addEventListener('click', () => {
+          setActive((parseInt(track.dataset.active, 10) || 0) - 1);
+        });
+        host.querySelector('[data-nav="next"]')?.addEventListener('click', () => {
+          setActive((parseInt(track.dataset.active, 10) || 0) + 1);
+        });
+        host.querySelectorAll('.wt-resume-dot').forEach(d => {
+          d.addEventListener('click', () => setActive(parseInt(d.dataset.idx, 10) || 0));
+        });
+        // Arrow-key navigation when card is focused/hovered.
+        card?.addEventListener('keydown', (e) => {
+          if (e.key === 'ArrowLeft') { e.preventDefault(); setActive((parseInt(track.dataset.active, 10) || 0) - 1); }
+          else if (e.key === 'ArrowRight') { e.preventDefault(); setActive((parseInt(track.dataset.active, 10) || 0) + 1); }
+        });
+        card?.setAttribute('tabindex', '0');
+      }
+
+      host.querySelector('[data-action="resume-chat"]')?.addEventListener('click', () => {
+        bus.emit('menu:view:toggle-chat');
+      });
+      host.querySelector('[data-action="dismiss-resume"]')?.addEventListener('click', () => {
+        host.style.transition = 'opacity 0.2s, max-height 0.3s';
+        host.style.opacity = '0'; host.style.maxHeight = '0';
+        setTimeout(() => { host.hidden = true; host.style.maxHeight = ''; host.style.opacity = ''; host.innerHTML = ''; }, 320);
+      });
+    } catch (err) {
+      console.warn('[welcome] resume card load failed:', err);
+    }
+  }
+
+  // Find the live welcome tab container if one exists, so external
+  // refreshes don't have to know the editor's tab plumbing.
+  function findWelcomeContainer() {
+    return document.querySelector('[data-virtual-tab-id="' + WELCOME_ID + '"], #virtual-' + WELCOME_ID + ', .virtual-' + WELCOME_ID)
+      || document.querySelector('.wt-welcome')?.parentElement
+      || document.querySelector('.wt-welcome');
+  }
+
   async function wireWelcomeEvents(container) {
+    // Initial load when the welcome tab first mounts. If the project
+    // isn't loaded yet (e.g. cold-start before project:opened), this is a
+    // no-op — the project:opened listener below will refresh it.
+    loadResumeCardInto(container);
+
     // Start actions
     container.querySelector('[data-action="new-file"]')?.addEventListener('click', () => bus.emit('menu:file:new-file'));
     container.querySelector('[data-action="open-folder"]')?.addEventListener('click', async () => {
@@ -121,9 +374,10 @@
     });
     container.querySelector('[data-action="clone-repo"]')?.addEventListener('click', () => bus.emit('modal:clone-repo'));
     container.querySelector('[data-action="new-project"]')?.addEventListener('click', () => {
-      // Use the same generate dialog from welcome.js
       window.dispatchEvent(new CustomEvent('pipilot:show-generate-modal'));
     });
+    container.querySelector('[data-action="docs"]')?.addEventListener('click', openDocsTab);
+    container.querySelector('[data-action="shortcuts"]')?.addEventListener('click', openShortcutsTab);
 
     // Walkthroughs
     container.querySelector('[data-walkthrough="getting-started"]')?.addEventListener('click', openGettingStartedTab);
@@ -135,7 +389,7 @@
     if (saved === 'false') cb.checked = false;
     cb?.addEventListener('change', () => localStorage.setItem('pipilot-show-welcome', cb.checked));
 
-    // Recent files in current project
+    // Recent files — show last 5, filter out deleted files
     const list = container.querySelector('#wt-recent-list');
     try {
       const projectPath = state.projectPath;
@@ -144,7 +398,6 @@
       const root = String(projectPath || '').replace(/\\/g, '/').replace(/\/+$/, '');
       const rootPrefix = (root + '/').toLowerCase();
 
-      // Keep only paths that belong to this project, and store as relative paths.
       const recents = parsed
         .map((entry) => {
           const s = String(entry || '').replace(/\\/g, '/');
@@ -154,19 +407,34 @@
           return null;
         })
         .filter(Boolean)
-        .filter((v, i, arr) => arr.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i)
-        .slice(0, 20);
+        .filter((v, i, arr) => arr.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i);
 
-      try { if (projectPath) localStorage.setItem(recentFilesStorageKey(projectPath), JSON.stringify(recents)); } catch {}
+      // Validate files exist on disk, remove deleted ones
+      const validated = [];
+      for (const relPath of recents) {
+        if (validated.length >= 5) break;
+        const fullPath = toAbsoluteFromProject(relPath, projectPath);
+        try {
+          const stat = api?.files?.stat ? await api.files.stat(fullPath) : { size: 1 };
+          const exists = stat && stat.size !== undefined;
+          if (exists) validated.push(relPath);
+        } catch {
+          validated.push(relPath); // keep if we can't check (API unavailable)
+        }
+      }
 
-      if (!projectPath || !recents.length) {
+      // Save cleaned list back
+      try { if (projectPath) localStorage.setItem(recentFilesStorageKey(projectPath), JSON.stringify(validated)); } catch {}
+
+      if (!projectPath || !validated.length) {
         list.innerHTML = '<div class="wt-no-recent">No recently opened files</div>';
       } else {
         list.innerHTML = '';
-        recents.slice(0, 10).forEach(relPath => {
+        validated.forEach(relPath => {
           const rel = String(relPath || '').replace(/\\/g, '/');
           const fullPath = toAbsoluteFromProject(rel, projectPath);
           const name = rel.split(/[\\/]/).pop();
+          const dir = rel.includes('/') ? rel.substring(0, rel.lastIndexOf('/')) : '';
 
           const row = document.createElement('div');
           row.className = 'wt-recent-row';
@@ -174,17 +442,22 @@
           const btn = document.createElement('button');
           btn.className = 'wt-recent-item';
           btn.dataset.path = fullPath;
-          btn.innerHTML = `<span class="wt-recent-name">${name}</span><span class="wt-recent-path">${rel}</span>`;
+          btn.innerHTML = `
+            <span class="wt-recent-item-text">
+              <span class="wt-recent-name">${name}</span>
+              ${dir ? `<span class="wt-recent-path">${dir}</span>` : ''}
+            </span>
+          `;
           btn.addEventListener('click', () => bus.emit('file:open', { path: btn.dataset.path }));
 
           const removeBtn = document.createElement('button');
           removeBtn.className = 'wt-recent-remove';
           removeBtn.title = 'Remove from list';
-          removeBtn.textContent = '×';
+          removeBtn.textContent = '\u00d7';
           removeBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             try {
-              const next = recents.filter(p => String(p).replace(/\\/g, '/') !== rel);
+              const next = validated.filter(p => String(p).replace(/\\/g, '/') !== rel);
               localStorage.setItem(recentFilesStorageKey(projectPath), JSON.stringify(next));
             } catch {}
             row.remove();
@@ -328,63 +601,718 @@
     const s = document.createElement('style');
     s.id = 'welcome-tab-css';
     s.textContent = `
-.wt-welcome { padding: 40px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
-.wt-welcome-inner { display: flex; gap: 60px; flex: 1; max-width: 960px; margin: 0 auto; width: 100%; }
-.wt-welcome-left { flex: 1; min-width: 0; }
-.wt-welcome-right { flex: 1; min-width: 0; }
-.wt-logo { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
-.wt-logo-text { font-size: 20px; font-weight: 600; color: var(--text-strong); }
-.wt-section-title { font-size: 14px; font-weight: 600; color: var(--text-mid); text-transform: uppercase; letter-spacing: 0.06em; margin: 24px 0 12px; }
-.wt-start-links { display: flex; flex-direction: column; gap: 4px; }
-.wt-link {
-  display: flex; align-items: center; gap: 10px; padding: 6px 8px;
-  background: transparent; border: none; color: var(--info); font-size: 13px;
-  cursor: pointer; border-radius: 4px; text-align: left; font-family: inherit;
+/* ─────────────────────────────────────────────────────────────────
+   Welcome Screen — "Editorial Dusk"
+   Atmospheric layered background, refined typography, smooth entry.
+   ───────────────────────────────────────────────────────────────── */
+.wt-welcome {
+  position: relative;
+  min-height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  background: #16161a;
+  font-family: var(--font-sans);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
 }
-.wt-link:hover { background: var(--surface-alt); }
-.wt-link svg { color: var(--text-dim); flex-shrink: 0; }
+
+/* ── Atmospheric background layers ────────────────────────────── */
+.wt-bg { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+.wt-bg-warm,
+.wt-bg-cool {
+  position: absolute;
+  width: 880px;
+  height: 880px;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.42;
+  will-change: transform;
+}
+.wt-bg-warm {
+  top: -360px; right: -260px;
+  background: radial-gradient(circle, rgba(255,107,53,0.55) 0%, rgba(255,107,53,0) 65%);
+  animation: wt-drift-warm 24s ease-in-out infinite alternate;
+}
+.wt-bg-cool {
+  bottom: -380px; left: -240px;
+  background: radial-gradient(circle, rgba(74,144,229,0.4) 0%, rgba(74,144,229,0) 65%);
+  animation: wt-drift-cool 28s ease-in-out infinite alternate;
+}
+@keyframes wt-drift-warm {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(-30px, 25px, 0) scale(1.06); }
+}
+@keyframes wt-drift-cool {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(40px, -20px, 0) scale(1.04); }
+}
+.wt-bg-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse at 50% 30%, black 35%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 30%, black 35%, transparent 80%);
+}
+.wt-bg-grain {
+  position: absolute; inset: 0;
+  opacity: 0.5;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+.wt-bg-vignette {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 0%, transparent 50%, rgba(0,0,0,0.38) 100%);
+}
+
+/* ── Inner wrapper ────────────────────────────────────────────── */
+.wt-welcome-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 80px 56px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 56px;
+}
+@media (max-width: 880px) {
+  .wt-welcome-inner { padding: 56px 28px 32px; gap: 40px; }
+}
+
+/* Entry animation — staggered via --wt-anim-delay per element */
+.wt-hero,
+.wt-section,
+.wt-footer {
+  opacity: 0;
+  transform: translateY(14px);
+  animation: wt-enter 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+  animation-delay: var(--wt-anim-delay, 0ms);
+}
+@keyframes wt-enter {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Hero ─────────────────────────────────────────────────────── */
+.wt-hero { display: flex; flex-direction: column; gap: 22px; }
+
+.wt-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+  backdrop-filter: blur(8px);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  color: var(--accent-light);
+}
+.wt-eyebrow-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255,107,53,0.18), 0 0 14px rgba(255,107,53,0.55);
+  animation: wt-pulse 2.4s ease-in-out infinite;
+}
+@keyframes wt-pulse {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.15); }
+}
+
+.wt-hero-row { display: flex; align-items: flex-end; gap: 20px; }
+.wt-hero-logo-frame {
+  position: relative;
+  width: 64px; height: 64px;
+  flex-shrink: 0;
+}
+.wt-hero-logo {
+  position: relative;
+  z-index: 1;
+  width: 64px; height: 64px;
+  border-radius: 16px;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.08) inset,
+    0 14px 40px rgba(255,107,53,0.35),
+    0 4px 14px rgba(0,0,0,0.5);
+}
+.wt-hero-logo-glow {
+  position: absolute; inset: -10px;
+  border-radius: 22px;
+  background: radial-gradient(circle, rgba(255,107,53,0.45), transparent 70%);
+  filter: blur(18px);
+  opacity: 0.7;
+  z-index: 0;
+  animation: wt-glow 4s ease-in-out infinite alternate;
+}
+@keyframes wt-glow {
+  from { opacity: 0.55; }
+  to   { opacity: 0.85; }
+}
+
+.wt-hero-text { display: flex; flex-direction: column; gap: 4px; padding-bottom: 2px; }
+.wt-hero-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 56px;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 0.95;
+  color: var(--text-strong);
+  background: linear-gradient(180deg, #f5f5f8 0%, #c7c7d0 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.wt-hero-title-mark {
+  -webkit-text-fill-color: var(--accent);
+  color: var(--accent);
+}
+.wt-hero-tagline {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-mid);
+  letter-spacing: 0.005em;
+  font-weight: 400;
+}
+@media (max-width: 880px) {
+  .wt-hero-title { font-size: 44px; }
+  .wt-hero-row { gap: 16px; }
+}
+
+.wt-hero-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.wt-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.wt-meta-led {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 8px rgba(86,211,100,0.7);
+}
+.wt-meta-sep {
+  width: 1px; height: 10px;
+  background: rgba(255,255,255,0.1);
+}
+
+/* ── Resume Card (Yesterday Card) ─────────────────────────────── */
+.wt-resume {
+  margin-top: 8px;
+  animation: wt-enter 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+.wt-resume-card {
+  position: relative;
+  background: linear-gradient(180deg, rgba(255,107,53,0.08), rgba(255,107,53,0.02));
+  border: 1px solid rgba(255,107,53,0.22);
+  border-radius: 12px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  outline: none;
+}
+.wt-resume-card.has-carousel { padding-bottom: 14px; }
+.wt-resume-card:focus-visible { box-shadow: 0 0 0 2px rgba(255,107,53,0.35); }
+.wt-resume-track {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  min-height: 80px;
+}
+.wt-resume-slide {
+  grid-column: 1; grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 0.28s cubic-bezier(0.2,0.7,0.2,1), transform 0.28s cubic-bezier(0.2,0.7,0.2,1);
+}
+.wt-resume-slide.active {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.wt-resume-nav {
+  position: absolute;
+  top: 14px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(20,20,26,0.8);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text-mid);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
+  backdrop-filter: blur(6px);
+  z-index: 2;
+}
+.wt-resume-nav:hover {
+  background: rgba(255,107,53,0.18);
+  border-color: rgba(255,107,53,0.45);
+  color: var(--accent-light);
+  transform: scale(1.06);
+}
+.wt-resume-nav.prev { right: 50px; }
+.wt-resume-nav.next { right: 14px; }
+.wt-resume-dots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.wt-resume-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  background: rgba(255,255,255,0.18);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s, width 0.2s;
+}
+.wt-resume-dot:hover { background: rgba(255,255,255,0.35); }
+.wt-resume-dot.active {
+  background: var(--accent-light, #ffb38a);
+  width: 18px;
+  border-radius: 3px;
+}
+.wt-resume-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.wt-resume-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent-light);
+}
+.wt-resume-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.wt-resume-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+/* Markdown styling inside the resume card — keeps prose readable while
+   matching the IDE palette. Tighter than the chat bubble's md-body. */
+.wt-resume-body p { margin: 0 0 8px; }
+.wt-resume-body p:last-child { margin-bottom: 0; }
+.wt-resume-body strong { color: var(--text-strong); font-weight: 600; }
+.wt-resume-body em { color: var(--text-strong); font-style: italic; }
+.wt-resume-body a { color: var(--info); text-decoration: none; border-bottom: 1px dotted rgba(108,182,255,0.4); }
+.wt-resume-body a:hover { color: #8ec6ff; border-bottom-color: #8ec6ff; }
+.wt-resume-body code:not(pre code) {
+  background: rgba(255,255,255,0.06);
+  color: var(--accent-light);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.wt-resume-body pre {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.05);
+  padding: 8px 10px;
+  border-radius: 4px;
+  margin: 6px 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.wt-resume-body pre code { background: none; color: var(--text-strong); padding: 0; font-size: inherit; }
+.wt-resume-body ul, .wt-resume-body ol { margin: 4px 0 8px; padding-left: 22px; }
+.wt-resume-body li { margin: 2px 0; }
+.wt-resume-body h1, .wt-resume-body h2, .wt-resume-body h3, .wt-resume-body h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  margin: 8px 0 4px;
+}
+.wt-resume-body blockquote {
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+  margin: 6px 0;
+  color: var(--text-mid);
+}
+.wt-resume-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.wt-resume-btn {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+}
+.wt-resume-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.wt-resume-btn.ghost {
+  background: transparent;
+  border-color: rgba(255,255,255,0.1);
+  color: var(--text-mid);
+}
+.wt-resume-btn.ghost:hover { color: var(--text-strong); border-color: rgba(255,255,255,0.18); }
+
+/* ── Two-column main ──────────────────────────────────────────── */
+.wt-main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 56px;
+}
+@media (max-width: 880px) { .wt-main { grid-template-columns: 1fr; gap: 40px; } }
+.wt-col { display: flex; flex-direction: column; gap: 36px; min-width: 0; }
+
+/* ── Section heads ───────────────────────────────────────────── */
+.wt-section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.wt-section-num {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--accent-light);
+  background: rgba(255,107,53,0.08);
+  padding: 3px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,107,53,0.18);
+}
+.wt-section-title {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  margin: 0;
+}
+.wt-section-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.08), rgba(255,255,255,0));
+}
+
+/* ── Action buttons (Start, Help) ─────────────────────────────── */
+.wt-actions { display: flex; flex-direction: column; gap: 6px; }
+.wt-action {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  background: rgba(255,255,255,0.012);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  transition: border-color 0.22s ease, background 0.22s ease, transform 0.22s ease;
+}
+.wt-action:hover {
+  border-color: rgba(255,255,255,0.13);
+  background: rgba(255,255,255,0.028);
+  transform: translateY(-1px);
+}
+.wt-action:active { transform: translateY(0); }
+.wt-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  background: rgba(255,255,255,0.025);
+  color: var(--text-mid);
+  transition: color 0.22s ease, background 0.22s ease;
+}
+.wt-action:hover .wt-action-icon { color: var(--text-strong); background: rgba(255,255,255,0.05); }
+.wt-action-label { color: var(--text); transition: color 0.22s ease; }
+.wt-action:hover .wt-action-label { color: var(--text-strong); }
+.wt-action-arrow {
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  font-size: 14px;
+  transform: translateX(-4px);
+  opacity: 0;
+  transition: transform 0.25s ease, opacity 0.25s ease, color 0.25s ease;
+}
+.wt-action:hover .wt-action-arrow {
+  transform: translateX(0);
+  opacity: 1;
+  color: var(--accent-light);
+}
+.wt-action-primary {
+  background: linear-gradient(180deg, rgba(255,107,53,0.10), rgba(255,107,53,0.04));
+  border-color: rgba(255,107,53,0.25);
+}
+.wt-action-primary .wt-action-icon { color: var(--accent-light); background: rgba(255,107,53,0.12); }
+.wt-action-primary:hover {
+  border-color: rgba(255,107,53,0.45);
+  background: linear-gradient(180deg, rgba(255,107,53,0.16), rgba(255,107,53,0.06));
+}
+.wt-action-primary .wt-action-label { color: var(--text-strong); }
+
+/* ── Recent files ─────────────────────────────────────────────── */
 .wt-recent { display: flex; flex-direction: column; gap: 2px; }
-.wt-recent-row { display: flex; align-items: center; gap: 6px; }
-.wt-recent-item {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
-  padding: 6px 8px; background: transparent; border: none;
-  cursor: pointer; border-radius: 4px; text-align: left; font-family: inherit;
-  min-width: 0;
+.wt-recent-loading {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 10px 4px;
+  letter-spacing: 0.04em;
 }
-.wt-recent-item:hover { background: var(--surface-alt); }
-.wt-recent-name { color: var(--info); font-size: 13px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wt-recent-path { color: var(--text-dim); font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-recent-row {
+  display: flex; align-items: center; gap: 4px;
+  border-radius: 8px;
+  transition: background 0.18s ease;
+}
+.wt-recent-row:hover { background: rgba(255,255,255,0.022); }
+.wt-recent-item {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  column-gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-sans);
+  min-width: 0;
+  border-radius: 8px;
+}
+.wt-recent-item::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+.wt-recent-item:hover::before { background: var(--accent); transform: scale(1.4); }
+.wt-recent-item-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wt-recent-name {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.18s ease;
+}
+.wt-recent-item:hover .wt-recent-name { color: var(--accent-light); }
+.wt-recent-path {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .wt-recent-remove {
   background: transparent;
   border: none;
-  color: var(--text-dim);
-  opacity: 1;
+  color: var(--text-faint);
   cursor: pointer;
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
+  width: 24px; height: 24px;
+  border-radius: 6px;
   flex: 0 0 auto;
-  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  margin-right: 4px;
+  transition: opacity 0.18s ease, color 0.18s ease, background 0.18s ease;
 }
-.wt-recent-remove:hover { background: var(--surface-alt); color: var(--text-strong); }
-.wt-no-recent { color: var(--text-dim); font-size: 12px; padding: 8px; }
+.wt-recent-row:hover .wt-recent-remove { opacity: 1; }
+.wt-recent-remove:hover { color: var(--error); background: rgba(229,83,75,0.1); }
+.wt-no-recent {
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  font-size: 11px;
+  padding: 12px 4px;
+  letter-spacing: 0.02em;
+}
+
+/* ── Walkthrough cards ───────────────────────────────────────── */
+.wt-walkthroughs { display: flex; flex-direction: column; gap: 6px; }
 .wt-walkthrough-card {
-  display: flex; align-items: center; gap: 14px; width: 100%;
-  padding: 14px 16px; background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; cursor: pointer; text-align: left; font-family: inherit;
-  margin-bottom: 8px; transition: border-color 0.15s, background 0.15s;
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.005)),
+    var(--surface);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 9px;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-sans);
+  overflow: hidden;
+  transition: transform 0.28s cubic-bezier(0.2,0.7,0.2,1), border-color 0.22s ease, box-shadow 0.28s ease;
 }
-.wt-walkthrough-card:hover { border-color: var(--accent); background: var(--surface-alt); }
+.wt-walkthrough-card::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(circle at 0% 100%, rgba(255,107,53,0.12), transparent 55%);
+  opacity: 0;
+  transition: opacity 0.32s ease;
+  pointer-events: none;
+}
+.wt-walkthrough-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255,107,53,0.32);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.32), 0 0 0 1px rgba(255,107,53,0.05);
+}
+.wt-walkthrough-card:hover::before { opacity: 1; }
 .wt-wk-icon {
-  width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0;
+  position: relative;
+  width: 30px; height: 30px;
+  border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  color: #fff;
+}
+.wt-wk-icon svg { width: 14px; height: 14px; }
+.wt-wk-icon-cool {
+  background: linear-gradient(135deg, #4a90e2 0%, #1e6cc7 100%);
+  box-shadow: 0 3px 10px rgba(74,144,226,0.3), inset 0 1px 0 rgba(255,255,255,0.18);
+}
+.wt-wk-icon-warm {
+  background: linear-gradient(135deg, #FF8C61 0%, #FF6B35 100%);
+  box-shadow: 0 3px 10px rgba(255,107,53,0.35), inset 0 1px 0 rgba(255,255,255,0.18);
 }
 .wt-wk-info { flex: 1; min-width: 0; }
-.wt-wk-title { font-size: 13px; font-weight: 600; color: var(--text-strong); }
-.wt-wk-desc { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
-.wt-footer { text-align: center; padding: 16px; }
-.wt-checkbox { font-size: 12px; color: var(--text-dim); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-.wt-checkbox input { accent-color: var(--accent); }
+.wt-wk-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text-strong);
+  margin-bottom: 1px;
+  line-height: 1.3;
+}
+.wt-wk-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.wt-wk-arrow {
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  font-size: 13px;
+  transform: translateX(-4px);
+  opacity: 0;
+  transition: opacity 0.28s ease, transform 0.28s ease, color 0.28s ease;
+}
+.wt-walkthrough-card:hover .wt-wk-arrow {
+  opacity: 1;
+  transform: translateX(0);
+  color: var(--accent-light);
+}
+
+/* ── Footer ──────────────────────────────────────────────────── */
+.wt-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-top: 28px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+.wt-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  user-select: none;
+}
+.wt-checkbox input { position: absolute; opacity: 0; pointer-events: none; }
+.wt-checkbox-box {
+  width: 14px; height: 14px;
+  border-radius: 4px;
+  border: 1.5px solid var(--border-hover);
+  background: rgba(255,255,255,0.02);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.wt-checkbox input:checked + .wt-checkbox-box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.wt-checkbox input:checked + .wt-checkbox-box::after {
+  content: '';
+  width: 4px; height: 7px;
+  border-right: 1.5px solid #fff;
+  border-bottom: 1.5px solid #fff;
+  transform: rotate(45deg) translate(-0.5px, -0.5px);
+}
+.wt-checkbox-label { font-size: 12px; color: var(--text-dim); transition: color 0.18s ease; }
+.wt-checkbox:hover .wt-checkbox-label { color: var(--text-mid); }
+.wt-footer-credit {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* ── Reduced motion ──────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .wt-bg-warm, .wt-bg-cool, .wt-eyebrow-dot, .wt-hero-logo-glow { animation: none !important; }
+  .wt-hero, .wt-section, .wt-footer { animation: none !important; opacity: 1; transform: none; }
+}
 
 /* Walkthrough pages */
 .wt-walkthrough { padding: 40px; max-width: 700px; margin: 0 auto; }
@@ -718,13 +1646,13 @@
         </section>
 
         <section class="wt-docs-section">
-          <div class="wt-docs-section-head"><span class="wt-docs-icon">🛠</span><h2 class="wt-docs-title">Agent Tools</h2></div>
+          <div class="wt-docs-section-head"><span class="wt-docs-icon">🛠</span><h2 class="wt-docs-title">AI Capabilities</h2></div>
           <ul class="wt-docs-list">
-            <li><strong>get_diagnostics</strong> — TypeScript and JSON problem detection for fast remediation.</li>
-            <li><strong>project_context</strong> — Framework, dependency, and structure awareness before edits.</li>
-            <li><strong>search_codebase</strong> — Grep, files, symbols, and semantic BM25 search.</li>
-            <li><strong>screenshot_preview</strong> — Visual verification with screenshot capture and DOM context.</li>
-            <li><strong>frontend_design_guide</strong> — Design-token aware UI planning and improvements.</li>
+            <li><strong>Code Analysis</strong> — Detects errors and provides fixes for TypeScript, JSON, and other languages.</li>
+            <li><strong>Project Awareness</strong> — Understands frameworks, dependencies, and project structure for better assistance.</li>
+            <li><strong>Smart Search</strong> — Searches code, files, symbols, and uses semantic understanding across the codebase.</li>
+            <li><strong>Visual Verification</strong> — Captures screenshots and analyzes DOM for UI debugging and improvements.</li>
+            <li><strong>Design Guidance</strong> — Provides design-token aware suggestions for UI planning and enhancements.</li>
           </ul>
         </section>
 
@@ -869,12 +1797,12 @@
                 <div class="wt-about-metric-value">1.0.0</div>
               </div>
               <div class="wt-about-metric">
-                <div class="wt-about-metric-label">Runtime</div>
-                <div class="wt-about-metric-value">Node.js ${typeof process !== 'undefined' ? process.version : ''}</div>
+                <div class="wt-about-metric-label">Build</div>
+                <div class="wt-about-metric-value">Production</div>
               </div>
               <div class="wt-about-metric">
-                <div class="wt-about-metric-label">Stack</div>
-                <div class="wt-about-metric-value">Electron + Ace + Agent SDK</div>
+                <div class="wt-about-metric-label">Edition</div>
+                <div class="wt-about-metric-value">Native Desktop</div>
               </div>
             </div>
 
@@ -905,6 +1833,32 @@
         setTimeout(openWelcomeTab, 300);
       });
     }
+
+    // Whenever a project opens (or switches), refresh the Resume Card
+    // even if the welcome tab is already mounted. Without this, the tab
+    // mounted while no project was loaded keeps the card hidden forever
+    // because openVirtualTab is no-op on existing tabs (no re-mount).
+    bus.on('project:opened', () => {
+      // Try a few times — the welcome tab may be opened ~300ms after
+      // project:opened fires (above), so the container might not exist
+      // yet at the first attempt.
+      let attempts = 0;
+      const tick = () => {
+        const c = findWelcomeContainer();
+        if (c) loadResumeCardInto(c);
+        if (++attempts < 6 && !c) setTimeout(tick, 200);
+      };
+      tick();
+      // And once more after the welcome tab definitely exists.
+      setTimeout(() => {
+        const c = findWelcomeContainer();
+        if (c) loadResumeCardInto(c);
+      }, 600);
+    });
+    bus.on('project:closed', () => {
+      const c = findWelcomeContainer();
+      if (c) loadResumeCardInto(c); // will hide the host since projectPath is now null
+    });
 
     // Handle Help menu items
     bus.on('menu:help:welcome', openWelcomeTab);

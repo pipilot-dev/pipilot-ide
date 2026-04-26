@@ -1814,6 +1814,11 @@
     search_codebase:      S('<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6M8 11h6"/>'),
     screenshot_preview:   S('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>'),
     generate_image:       S('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>'),
+    get_working_directory:S('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 11h18"/>'),
+    project_memory:       S('<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/><circle cx="12" cy="11" r="1.5" fill="currentColor"/>'),
+    run_code:             S('<polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>'),
+    edit_file_patch:      S('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 14l2 2 4-4"/>'),
+    fetch_url:            S('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/><path d="M16 8l4-4M20 4h-3M20 4v3"/>'),
     // Default
     default:        S('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
   };
@@ -1833,6 +1838,7 @@
     search_codebase: 'Search Codebase', screenshot_preview: 'Screenshot',
     generate_image: 'Generate Image', project_memory: 'Memory',
     edit_file_patch: 'Patch File', fetch_url: 'Fetch URL', run_code: 'Run Code',
+    get_working_directory: 'Working Directory',
   };
 
   // Accent colors per tool (matching Vite)
@@ -1842,6 +1848,7 @@
     search_codebase: 'var(--accent)', screenshot_preview: '#56d4dd',
     generate_image: '#56d4dd', project_memory: '#ffd787',
     edit_file_patch: 'var(--accent)', fetch_url: 'var(--info)', run_code: 'var(--ok)',
+    get_working_directory: 'var(--text-mid)',
     Read: 'var(--info)', Glob: 'var(--info)', Grep: 'var(--info)', WebSearch: 'var(--info)',
     Write: 'var(--ok)', Edit: 'var(--accent)', MultiEdit: 'var(--accent)',
     Bash: 'var(--text-mid)', run_in_terminal: 'var(--text-mid)',
@@ -1922,6 +1929,7 @@
       if (filePath) return sanitizePath(filePath);
     }
     // PiPilot custom tools — show meaningful previews
+    if (n === 'get_working_directory') return 'orient';
     if (n === 'get_diagnostics') return input.source ? `source: ${input.source}` : 'all checks';
     if (n === 'search_codebase') return input.query ? `"${input.query}"` : '';
     if (n === 'frontend_design_guide') return input.action || 'scan';
