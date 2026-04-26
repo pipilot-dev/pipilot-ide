@@ -208,6 +208,11 @@
       </nav>
       <div class="titlebar-right">
         <span id="titlebar-status" class="titlebar-status"></span>
+        <button class="titlebar-missions-btn" id="titlebar-missions-btn" title="Missions — scheduled & background agents">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+          <span class="titlebar-missions-label">Missions</span>
+          <span class="titlebar-missions-dot" id="titlebar-missions-dot" hidden></span>
+        </button>
         <button class="titlebar-chat-toggle" id="titlebar-chat-toggle" title="Toggle AI Chat (Ctrl+I)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v.01M8 7v.01M16 7v.01"/></svg>
         </button>
@@ -248,6 +253,10 @@
       </button>
       <button class="activity-btn" data-panel="wiki" title="Wiki">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h6"/></svg>
+      </button>
+      <button class="activity-btn" data-panel="missions" title="Missions">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+        <span class="activity-badge hidden" id="missions-activity-badge" aria-label="Missions running"></span>
       </button>
       <!-- Chat toggle moved to titlebar -->
       <div class="activity-spacer"></div>
@@ -461,6 +470,7 @@
   <script src="renderer/pdf-export.js"></script>
   <script src="renderer/wiki-auto-update.js"></script>
   <script src="renderer/missions-runner.js"></script>
+  <script src="renderer/missions-panel.js"></script>
   <script src="renderer/docs/profiles.js"></script>
   <script src="renderer/docs/codestral-client.js"></script>
   <script src="renderer/docs/resolver.js"></script>
