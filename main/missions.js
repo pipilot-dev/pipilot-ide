@@ -24,6 +24,7 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 const { execFile } = require('child_process');
+const { runMissionAgent } = require('./mission-agent');
 
 // Minimal exec helper for the clone setup. Inherits a copy of
 // process.env merged with extra vars (GH_TOKEN/GITHUB_TOKEN) so the
@@ -62,7 +63,11 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
   const { getSecret, ghEnsure } = deps;
 
   const globalFile = path.join(ctx.userDataPath, 'missions.json');
-  const inFlight = new Map();   // id -> { startedAt }
+  // Per-mission run state. Now driven from main, so this map outlives
+  // any renderer reload — a new renderer can call missions:get-state
+  // and replay the full buffer of events.
+  // id -> { mission, startedAt, agent, events, status, finalText, toolCallCount }
+  const inFlight = new Map();
 
   // ── Storage ───────────────────────────────────────────────────────
 
@@ -417,22 +422,131 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       }
     }
 
-    inFlight.set(mission.id, { startedAt: Date.now(), scratchDir: ghInfo.scratchDir || null });
-    broadcast('missions:status', { id: mission.id, state: 'running', startedAt: Date.now() });
-    broadcast('missions:run-now', {
+    const startedAt = Date.now();
+    const workDir = mission.target?.kind === 'local'
+      ? mission.target.projectPath
+      : (ghInfo.scratchDir || null);
+    const allowedTools = buildAllowedTools(mission);
+    const systemPrompt = buildSystemPrompt(mission, ghInfo);
+
+    // Build per-call MCP servers — github HTTP MCP for cloud missions.
+    let extraMcpServers = null;
+    if (mission.target?.kind === 'cloud' && pat) {
+      extraMcpServers = {
+        github: {
+          type: 'http',
+          url: 'https://api.githubcopilot.com/mcp',
+          headers: { Authorization: 'Bearer ' + pat },
+        },
+      };
+    }
+
+    // Per-run state — owned by main, survives renderer reloads.
+    const runState = {
       mission,
-      systemPrompt: buildSystemPrompt(mission, ghInfo),
-      allowedTools: buildAllowedTools(mission),
-      githubPat: pat,                 // for the HTTP MCP Bearer header
+      startedAt,
+      events: [],          // append-only event log for buffer replay
+      status: 'running',
+      finalText: '',
+      toolCallCount: 0,
+      agent: null,         // filled in just below
+      stopRequested: false,
+    };
+    inFlight.set(mission.id, runState);
+
+    broadcast('missions:status', { id: mission.id, state: 'running', startedAt });
+    broadcast('missions:start', { mission, startedAt });
+    // Bridge to background-mode powerSaveBlocker via the bus mechanism.
+    try {
+      const win = ctx.getWindow?.();
+      if (win && !win.isDestroyed()) win.webContents.send('missions:bg-active', { id: mission.id, active: true });
+    } catch {}
+
+    const onEvent = (evt) => {
+      if (!evt) return;
+      const stamped = { ts: Date.now(), ...evt };
+      runState.events.push(stamped);
+      if (evt.type === 'tool_call') runState.toolCallCount++;
+      if (evt.type === 'text' && typeof evt.text === 'string') runState.finalText += evt.text;
+      // Broadcast every event so any open mission tab streams live.
+      try {
+        const win = ctx.getWindow?.();
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('missions:event', { missionId: mission.id, evt: stamped });
+        }
+      } catch {}
+    };
+
+    // Kick off the agent (does not await — fireMission returns
+    // immediately so the caller / IPC handler isn't blocked for
+    // minutes). The promise resolves when the agent finishes and we
+    // run the post-run finalize.
+    const agentRun = runMissionAgent({
+      missionName: mission.name,
+      missionId: mission.id,
+      prompt: `Run the mission described in your system prompt now. Today's date: ${new Date().toISOString().slice(0,10)}.`,
+      systemPrompt,
+      allowedTools,
       effort: mission.effort || 'medium',
-      cloudPr: mission.cloudPr !== false,
-      // Cloud missions: cwd of the spawned agent is the cloned scratch
-      // dir; the clone's `origin` remote already has the PAT inlined,
-      // so `git push` works without env-var injection.
-      cwdOverride: ghInfo.scratchDir || null,
-      ghInfo: { gitInstalled: ghInfo.gitInstalled, scratchDir: ghInfo.scratchDir || null },
+      workDir,
+      extraMcpServers,
+    }, onEvent);
+    runState.agent = agentRun;
+
+    // Background lifecycle (don't await).
+    agentRun.promise.then(async (outcome) => {
+      try { await finalizeMissionRun(runState, outcome); }
+      catch (err) { console.warn('[missions] finalize failed:', err.message); }
     });
+
     return { ok: true };
+  }
+
+  // Compute final status + write stats + log + broadcast end. Called
+  // exactly once per run.
+  async function finalizeMissionRun(runState, outcome) {
+    const mission = runState.mission;
+    const finalEvent = runState.events.find(e => e.type === 'result') || (outcome && outcome.result) || null;
+    const cleanFinal = (runState.finalText || '').replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim();
+    const tail = cleanFinal.split('\n').slice(-5).join(' ');
+    let status = 'success';
+    let summary = tail.slice(0, 280);
+    if (runState.stopRequested || finalEvent?.subtype === 'aborted') {
+      status = 'stopped'; summary = 'Stopped by user';
+    } else if (finalEvent?.subtype === 'error' || finalEvent?.is_error) {
+      status = 'error'; summary = summary || 'agent reported failure';
+    } else if (/^skipped:/i.test(tail)) {
+      status = 'skipped';
+    } else if (/^failed:/i.test(tail)) {
+      status = 'error';
+    }
+
+    const durationMs = Date.now() - runState.startedAt;
+    runState.status = status;
+
+    await patchStats(mission, {
+      lastRunAt: Date.now(),
+      lastRunStatus: status,
+      lastRunMessage: (summary || '').slice(0, 800),
+      runCount: (mission.runCount || 0) + 1,
+    });
+    await appendLog(mission, status, [
+      `tool calls: ${runState.toolCallCount}`,
+      `duration: ${(durationMs / 1000).toFixed(1)}s`,
+      '',
+      cleanFinal || '(no output)',
+    ].join('\n'));
+
+    broadcast('missions:status', { id: mission.id, state: 'idle', status, summary, durationMs });
+    broadcast('missions:end', { missionId: mission.id, status, summary, durationMs, finalText: cleanFinal });
+    try {
+      const win = ctx.getWindow?.();
+      if (win && !win.isDestroyed()) win.webContents.send('missions:bg-active', { id: mission.id, active: false });
+    } catch {}
+
+    // Keep the run state for a while so a tab opened just after
+    // completion can still replay events. GC after 10 min.
+    setTimeout(() => { inFlight.delete(mission.id); }, 10 * 60_000);
   }
 
   // ── Trigger engine ────────────────────────────────────────────────
@@ -543,31 +657,54 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     }
   });
 
-  // Renderer → main: agent finished. Persist stats + append log.
-  ipcMain.handle('missions:report-run', async (_e, { id, projectPath, status, summary, durationMs, toolCallCount, finalText } = {}) => {
-    try {
-      const list = await readAll(projectPath);
-      const m = list.find((x) => x.id === id);
-      if (!m) return { ok: false, error: 'mission not found' };
-      inFlight.delete(id);
-      await patchStats(m, {
-        lastRunAt: Date.now(),
-        lastRunStatus: status || 'success',
-        lastRunMessage: (summary || '').slice(0, 800),
-        runCount: (m.runCount || 0) + 1,
-      });
-      await appendLog(m, status || 'success', [
-        `tool calls: ${toolCallCount ?? '?'}`,
-        `duration: ${typeof durationMs === 'number' ? (durationMs / 1000).toFixed(1) + 's' : '?'}`,
-        '',
-        finalText || summary || '(no output)',
-      ].join('\n'));
-      broadcast('missions:status', { id, state: 'idle', status: status || 'success', summary, durationMs });
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: err?.message || String(err) };
-    }
+  // Renderer → main: stop a running mission. Aborts the SDK iteration
+  // in main; the post-run finalize will mark status as "stopped".
+  ipcMain.handle('missions:stop', async (_e, { id } = {}) => {
+    const rs = inFlight.get(id);
+    if (!rs) return { ok: false, error: 'mission not running' };
+    rs.stopRequested = true;
+    try { rs.agent?.abort?.(); } catch {}
+    return { ok: true };
   });
+
+  // Renderer → main: replay current state for an open tab. Returns
+  // the run buffer + status so a tab opened mid-run (or after a
+  // renderer reload) can render the full transcript.
+  ipcMain.handle('missions:get-state', async (_e, { id } = {}) => {
+    const rs = inFlight.get(id);
+    if (!rs) return { ok: true, running: false, events: [], status: null };
+    return {
+      ok: true,
+      running: rs.status === 'running',
+      status: rs.status,
+      startedAt: rs.startedAt,
+      events: rs.events.slice(),
+      toolCallCount: rs.toolCallCount,
+    };
+  });
+
+  // List currently-running missions across the whole app — used by the
+  // renderer on cold start / reload to discover anything still in
+  // flight that needs UI for.
+  ipcMain.handle('missions:in-flight-state', async () => {
+    const out = [];
+    for (const [id, rs] of inFlight.entries()) {
+      out.push({
+        id,
+        running: rs.status === 'running',
+        status: rs.status,
+        startedAt: rs.startedAt,
+        toolCallCount: rs.toolCallCount,
+        eventCount: rs.events.length,
+        mission: rs.mission,
+      });
+    }
+    return { ok: true, missions: out };
+  });
+
+  // Legacy: kept so an older renderer build doesn't throw if it still
+  // calls report-run. Main now owns finalization, so this is a no-op.
+  ipcMain.handle('missions:report-run', async () => ({ ok: true, ignored: true }));
 
   ipcMain.handle('missions:read-log', async (_e, { projectPath } = {}) => {
     try {

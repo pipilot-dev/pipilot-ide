@@ -312,22 +312,60 @@
       }
     }
 
-    // Initial-state resolution. Three cases, in priority order:
-    //   1. There's a live buffer (mission ran or is running this session) →
-    //      replay events, render whatever status the buffer carries.
-    //   2. The renderer's in-flight set says it isn't running, AND the
-    //      mission has a lastRunStatus (i.e. previously completed) →
-    //      paint that final status, freeze the duration counter.
-    //   3. Otherwise (never run yet) → idle/never UI.
-    const buf = window.PiPilot?.missions?.runner?.getBuffer?.(mission.id);
+    // Initial-state resolution. Synchronous first pass uses whatever
+    // the runner has cached locally; an async second pass reaches out
+    // to main for the authoritative buffer (covers post-reload replay)
+    // and reapplies any newer events. Mount stays synchronous so its
+    // return-value-as-unmount contract with the editor is preserved.
+    const localBuf = window.PiPilot?.missions?.runner?.getBuffer?.(mission.id);
     const isRunningNow = !!window.PiPilot?.missions?.runner?.isRunning?.(mission.id);
-    if (buf) {
-      for (const evt of buf.events) applyEvent(evt);
-      if (buf.status && buf.status !== 'running') {
-        setStatus(buf.status, buf.status);
+    let appliedFromBuf = false;
+    if (localBuf && (localBuf.events?.length || localBuf.status)) {
+      for (const evt of localBuf.events) applyEvent(evt);
+      appliedFromBuf = true;
+      if (localBuf.status && localBuf.status !== 'running') {
+        setStatus(localBuf.status, localBuf.status);
         clearInterval(durationTimer);
+      } else if (localBuf.startedAt) {
+        const realStart = localBuf.startedAt;
+        tickDuration = () => {
+          const s = Math.floor((Date.now() - realStart) / 1000);
+          durEl.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+        };
+        tickDuration();
       }
-    } else if (!isRunningNow) {
+    }
+    // Async tail: ask main for authoritative state. Useful after a
+    // renderer reload when the local buffer is empty but main still
+    // has the live in-flight or recently-finished run. If we render
+    // from main, also clear the "never run yet" placeholder we may
+    // have set in the synchronous branch.
+    let asyncFilled = false;
+    (async () => {
+      try {
+        const st = await api.missions.getState(mission.id);
+        if (!st?.ok) return;
+        if (!appliedFromBuf && (st.events?.length || st.running)) {
+          asyncFilled = true;
+          // Wipe any "never run" placeholder we put in earlier.
+          body.innerHTML = '<div class="pp-mst-empty" data-role="empty" style="display:none;"></div>';
+          for (const evt of st.events || []) applyEvent(evt);
+          if (!st.running && st.status) {
+            setStatus(st.status, st.status);
+            clearInterval(durationTimer);
+          } else if (st.startedAt) {
+            const realStart = st.startedAt;
+            tickDuration = () => {
+              const s = Math.floor((Date.now() - realStart) / 1000);
+              durEl.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+            };
+            tickDuration();
+            setStatus('running', 'running');
+          }
+        }
+      } catch {}
+    })();
+    if (!appliedFromBuf && !isRunningNow) {
       const last = mission.lastRunStatus;
       if (last) {
         setStatus(last, last);

@@ -357,12 +357,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     save: (scope, projectPath, mission) => ipcRenderer.invoke('missions:save', { scope, projectPath, mission }),
     delete: (scope, projectPath, id) => ipcRenderer.invoke('missions:delete', { scope, projectPath, id }),
     run: (id, projectPath, force) => ipcRenderer.invoke('missions:run', { id, projectPath, force }),
-    reportRun: (payload) => ipcRenderer.invoke('missions:report-run', payload),
+    stop: (id) => ipcRenderer.invoke('missions:stop', { id }),
+    getState: (id) => ipcRenderer.invoke('missions:get-state', { id }),
+    inFlightState: () => ipcRenderer.invoke('missions:in-flight-state'),
     readLog: (projectPath) => ipcRenderer.invoke('missions:read-log', { projectPath }),
-    onRunNow: (handler) => {
+    onEvent: (handler) => {
       const fn = (_e, payload) => { try { handler(payload); } catch {} };
-      ipcRenderer.on('missions:run-now', fn);
-      return () => ipcRenderer.removeListener('missions:run-now', fn);
+      ipcRenderer.on('missions:event', fn);
+      return () => ipcRenderer.removeListener('missions:event', fn);
+    },
+    onStart: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('missions:start', fn);
+      return () => ipcRenderer.removeListener('missions:start', fn);
+    },
+    onEnd: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('missions:end', fn);
+      return () => ipcRenderer.removeListener('missions:end', fn);
+    },
+    onBgActive: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('missions:bg-active', fn);
+      return () => ipcRenderer.removeListener('missions:bg-active', fn);
     },
     onStatus: (handler) => {
       const fn = (_e, payload) => { try { handler(payload); } catch {} };
