@@ -124,6 +124,16 @@
           ],
         }, (evt) => {
           if (!evt) return;
+          // Verbose breadcrumbs so the lifecycle is visible in DevTools.
+          if (evt.type === 'tool_call') {
+            console.log('[wiki-auto-update] tool_call', evt.name, evt.input && Object.keys(evt.input));
+          } else if (evt.type === 'tool_result') {
+            console.log('[wiki-auto-update] tool_result', { isError: evt.isError, len: (evt.content || '').length });
+          } else if (evt.type === 'error') {
+            console.warn('[wiki-auto-update] agent error event', evt.message);
+          } else if (evt.type === 'result') {
+            console.log('[wiki-auto-update] agent result', { subtype: evt.subtype, durationMs: evt.durationMs, isError: evt.is_error });
+          }
           if (evt.type === 'text' && typeof evt.text === 'string') {
             finalText += evt.text;
           } else if (evt.type === 'result' || evt.type === 'error') {
@@ -132,9 +142,11 @@
         });
       });
 
-      const tail = finalText.trim().split('\n').slice(-3).join(' ').toLowerCase();
+      const cleanFinal = finalText.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim();
+      const tail = cleanFinal.split('\n').slice(-5).join(' ').toLowerCase();
       const updated = /updated:\s*\S/.test(tail);
       const skipped = /no wiki (update needed|to update)/.test(tail);
+      console.log('[wiki-auto-update] done', { timedOut, updated, skipped, finalChars: cleanFinal.length, tailPreview: tail.slice(0, 200) });
 
       if (timedOut) {
         bus.emit('toast:show', { type: 'warn', message: 'Wiki auto-update timed out' });
@@ -142,9 +154,11 @@
         bus.emit('toast:show', { type: 'ok', message: 'Wiki updated' });
         bus.emit('wiki:refresh');
       } else if (skipped) {
-        // silent — no toast for no-op runs
+        bus.emit('toast:show', { type: 'info', message: 'Wiki: no update needed' });
+      } else if (!cleanFinal) {
+        bus.emit('toast:show', { type: 'warn', message: 'Wiki agent returned no output' });
       } else {
-        // Treat as completed, refresh just in case the agent edited and forgot the trailer.
+        bus.emit('toast:show', { type: 'info', message: 'Wiki agent finished' });
         bus.emit('wiki:refresh');
       }
     } catch (err) {
