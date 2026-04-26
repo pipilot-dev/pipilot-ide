@@ -5034,6 +5034,7 @@
     const changed = collectChangedFiles(currentAssistantBlocks);
     if (!changed.length) return;
     const summary = lastAssistantTextSummary(currentAssistantBlocks);
+    console.log('[wiki-auto-update] queued', { changedFiles: changed, summaryChars: summary.length });
     bus.emit('wiki:auto-update', {
       projectPath: state.projectPath,
       changedFiles: changed,

@@ -12,8 +12,11 @@
   window.__pipilotWikiAutoUpdateLoaded = true;
 
   const bus = window.PiPilot && window.PiPilot.bus;
-  const api = window.api;
-  if (!bus || !api?.agent?.send) return;
+  const api = (window.PiPilot && window.PiPilot.api) || window.electronAPI;
+  if (!bus || !api?.agent?.send) {
+    console.warn('[wiki-auto-update] bus or api missing — disabled');
+    return;
+  }
 
   let running = false;
   let lastRunAt = 0;
@@ -91,6 +94,7 @@
     if (!projectPath || !Array.isArray(changedFiles) || !changedFiles.length) return;
 
     running = true;
+    console.log('[wiki-auto-update] starting agent', { changedFiles, projectPath });
     bus.emit('wiki:auto-status', { state: 'running' });
 
     const sessionId = '__wiki__' + Date.now();
@@ -114,7 +118,10 @@
           effort: 'low',
           silent: true,
           systemPromptOverride: WIKI_SYSTEM_PROMPT,
-          allowedToolsOverride: ['mcp__pipilot__*'],
+          allowedToolsOverride: [
+            'Read', 'Edit', 'Write', 'Glob', 'Grep', 'MultiEdit',
+            'mcp__pipilot__*',
+          ],
         }, (evt) => {
           if (!evt) return;
           if (evt.type === 'text' && typeof evt.text === 'string') {
