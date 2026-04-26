@@ -65,17 +65,29 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     } catch (err) { return { ok: false, error: err?.message || String(err) }; }
   });
 
+  // Normalise to "owner/name" regardless of what the caller passed
+  // (full URL, git@... ssh form, with/without .git, trailing slashes).
+  function normaliseRepo(repo) {
+    return String(repo || '')
+      .trim()
+      .replace(/^git@github\.com:/i, '')
+      .replace(/^https?:\/\/(?:www\.)?github\.com\//i, '')
+      .replace(/\.git$/i, '')
+      .replace(/\/+$/, '')
+      .replace(/^\/+/, '');
+  }
+
   // Build an HTTPS clone URL with the PAT inlined as the basic-auth
   // username (the GitHub-recommended pattern for PAT push). Returns
-  // null if no PAT is set — caller should branch on that for public
-  // repos vs private.
+  // a public URL if no PAT is set.
   async function authedRepoUrl(repo) {
-    if (typeof getSecret !== 'function') return `https://github.com/${repo}.git`;
+    const slug = normaliseRepo(repo);
+    if (typeof getSecret !== 'function') return `https://github.com/${slug}.git`;
     let pat = null;
     try { pat = await getSecret('githubPat'); } catch {}
-    if (!pat) return `https://github.com/${repo}.git`;
+    if (!pat) return `https://github.com/${slug}.git`;
     // x-access-token is GitHub's documented username for PAT-as-password.
-    return `https://x-access-token:${encodeURIComponent(pat)}@github.com/${repo}.git`;
+    return `https://x-access-token:${encodeURIComponent(pat)}@github.com/${slug}.git`;
   }
 
   // Returns the install state of git + an auth helper. No env injection

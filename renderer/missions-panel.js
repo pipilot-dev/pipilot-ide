@@ -1148,7 +1148,20 @@
     };
     let target;
     if (m.target.kind === 'cloud') {
-      target = { kind: 'cloud', repo: $('#pp-me-repo').value.trim(), branch: $('#pp-me-branch').value.trim() || 'main' };
+      // Normalize whatever the user typed/pasted into a clean
+      // "owner/name". Accepts:
+      //   - owner/name
+      //   - owner/name.git
+      //   - https://github.com/owner/name
+      //   - https://github.com/owner/name.git
+      //   - git@github.com:owner/name.git
+      let raw = ($('#pp-me-repo').value || '').trim();
+      raw = raw.replace(/^git@github\.com:/i, '')
+               .replace(/^https?:\/\/(?:www\.)?github\.com\//i, '')
+               .replace(/\.git$/i, '')
+               .replace(/\/+$/, '')
+               .replace(/^\/+/, '');
+      target = { kind: 'cloud', repo: raw, branch: $('#pp-me-branch').value.trim() || 'main' };
     } else {
       target = { kind: 'local', projectPath: $('#pp-me-projectpath').value.trim() };
     }
