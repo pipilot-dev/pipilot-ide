@@ -100,14 +100,8 @@
     const sessionId = '__wiki__' + Date.now();
     let stream = null;
     let finalText = '';
-    let timedOut = false;
-    const TIMEOUT_MS = 4 * 60 * 1000;
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try { stream && stream.stop && stream.stop(); } catch {}
-    }, TIMEOUT_MS);
-
+    // No timeout — let the wiki agent run until it finishes naturally.
     try {
       await new Promise((resolve) => {
         stream = api.agent.send({
@@ -146,11 +140,9 @@
       const tail = cleanFinal.split('\n').slice(-5).join(' ').toLowerCase();
       const updated = /updated:\s*\S/.test(tail);
       const skipped = /no wiki (update needed|to update)/.test(tail);
-      console.log('[wiki-auto-update] done', { timedOut, updated, skipped, finalChars: cleanFinal.length, tailPreview: tail.slice(0, 200) });
+      console.log('[wiki-auto-update] done', { updated, skipped, finalChars: cleanFinal.length, tailPreview: tail.slice(0, 200) });
 
-      if (timedOut) {
-        bus.emit('toast:show', { type: 'warn', message: 'Wiki auto-update timed out' });
-      } else if (updated) {
+      if (updated) {
         bus.emit('toast:show', { type: 'ok', message: 'Wiki updated' });
         bus.emit('wiki:refresh');
       } else if (skipped) {
@@ -165,7 +157,6 @@
       console.warn('[wiki-auto-update] failed:', err);
       bus.emit('toast:show', { type: 'warn', message: 'Wiki auto-update failed' });
     } finally {
-      try { clearTimeout(timer); } catch {}
       try { stream && stream.dispose && stream.dispose(); } catch {}
       lastRunAt = Date.now();
       running = false;

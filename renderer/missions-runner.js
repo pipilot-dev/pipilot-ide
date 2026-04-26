@@ -35,8 +35,6 @@
     bus.emit('mission:event', { missionId, evt: stamped });
   }
 
-  const TIMEOUT_MS = 6 * 60_000;
-
   api.missions.onRunNow(async (payload) => {
     const mission = payload?.mission;
     if (!mission?.id) return;
@@ -52,14 +50,13 @@
     bus.emit('mission:start', { mission, startedAt });
     let finalText = '';
     let toolCallCount = 0;
-    let timedOut = false;
     let resultEvt = null;
     let finalized = false;       // single-shot guard so stop + result can't both finalize
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try { stream && stream.stop && stream.stop(); } catch {}
-    }, TIMEOUT_MS);
+    // No wall-clock timeout. Missions run until the agent finishes
+    // naturally, hits an upstream API error, or the user clicks Stop.
+    // Long-running refactors / large-clone missions are valid use
+    // cases — killing them midway just produced confused stops.
 
     // Cloud missions: wire the GitHub Copilot HTTP MCP for all
     // GitHub-API ops (PRs, issues, search). The PAT only lives in the
@@ -129,7 +126,6 @@
       console.warn('[missions-runner] failed:', err);
       resultEvt = { type: 'error', message: err?.message || String(err) };
     }
-    clearTimeout(timer);
 
     const cleanFinal = finalText.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim();
     const tail = cleanFinal.split('\n').slice(-5).join(' ');
@@ -137,7 +133,6 @@
     let status = 'success';
     let summary = tail.slice(0, 280);
     if (buf?.stopped || resultEvt?.subtype === 'aborted') { status = 'stopped'; summary = 'Stopped by user'; }
-    else if (timedOut) { status = 'timeout'; summary = 'agent ran past timeout'; }
     else if (resultEvt?.type === 'error') { status = 'error'; summary = resultEvt.message || 'agent error'; }
     else if (resultEvt?.subtype === 'error' || resultEvt?.is_error) { status = 'error'; summary = summary || 'agent reported failure'; }
     else if (/^skipped:/i.test(tail)) { status = 'skipped'; }
