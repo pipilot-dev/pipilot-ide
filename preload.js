@@ -343,6 +343,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listBranches: (repo, refresh) => ipcRenderer.invoke('github:list-branches', { repo, refresh: !!refresh }),
   },
 
+  // ---------- gh CLI provisioning (used by cloud missions) ----------
+  gh: {
+    check: () => ipcRenderer.invoke('gh:check'),
+    install: () => ipcRenderer.invoke('gh:install'),
+    ensureForMission: () => ipcRenderer.invoke('gh:ensure-for-mission'),
+  },
+
   // ---------- Missions (scheduled/reactive background agents) ----------
   missions: {
     list: (projectPath) => ipcRenderer.invoke('missions:list', { projectPath }),

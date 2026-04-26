@@ -227,7 +227,9 @@ app.whenReady().then(() => {
   try { secretsApi = require('./main/secrets')(ipcMain, ctx); } catch (err) { console.error('[secrets] register failed:', err); }
   let githubApi = null;
   try { githubApi = require('./main/github')(ipcMain, ctx, { getSecret: secretsApi?.getSecret }); } catch (err) { console.error('[github] register failed:', err); }
-  try { require('./main/missions')(ipcMain, ctx, { getSecret: secretsApi?.getSecret, githubInvalidate: githubApi?.invalidate }); } catch (err) { console.error('[missions] register failed:', err); }
+  let ghCliApi = null;
+  try { ghCliApi = require('./main/gh-cli')(ipcMain, ctx, { getSecret: secretsApi?.getSecret }); } catch (err) { console.error('[gh-cli] register failed:', err); }
+  try { require('./main/missions')(ipcMain, ctx, { getSecret: secretsApi?.getSecret, githubInvalidate: githubApi?.invalidate, ghEnsure: ghCliApi?.ensureForMission }); } catch (err) { console.error('[missions] register failed:', err); }
 
   createWindow();
 

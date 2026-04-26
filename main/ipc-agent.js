@@ -426,7 +426,7 @@ module.exports = function register(ipcMain, ctx) {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  ipcMain.handle('agent:send', async (event, { streamId, sessionId, projectPath, message, mode, effort, attachments, silent, systemPromptOverride, allowedToolsOverride, extraMcpServers }) => {
+  ipcMain.handle('agent:send', async (event, { streamId, sessionId, projectPath, message, mode, effort, attachments, silent, systemPromptOverride, allowedToolsOverride, extraMcpServers, extraEnv }) => {
     const ch = `agent:event:${streamId}`;
     const isSilent = !!silent;
 
@@ -720,6 +720,7 @@ module.exports = function register(ipcMain, ctx) {
             ENABLE_TOOL_SEARCH: 'auto',
             ...loadConnectorEnvVars(workDir),
             ...loadRuntimeEnvVars(),
+            ...(extraEnv && typeof extraEnv === 'object' ? extraEnv : {}),
           },
           canUseTool: async (toolName, input) => {
             if (toolName === 'AskUserQuestion') {

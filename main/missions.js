@@ -32,11 +32,14 @@ const PERMISSION_PRESETS = {
   'fs-plus-bash':  ['Read','Edit','Write','MultiEdit','Glob','Grep','Bash','BashOutput','KillShell','mcp__pipilot__*'],
   'fs-plus-web':   ['Read','Edit','Write','MultiEdit','Glob','Grep','WebFetch','WebSearch','mcp__pipilot__*','mcp__context7__*'],
   'full':          ['Read','Edit','Write','MultiEdit','Glob','Grep','Bash','BashOutput','KillShell','WebFetch','WebSearch','Agent','mcp__pipilot__*','mcp__context7__*','mcp__playwright__*'],
-  'cloud':         ['mcp__github__*','WebFetch','WebSearch','mcp__context7__*'],
+  // Cloud preset gets the GitHub MCP, web tools, AND Bash so the agent
+  // can shell out to `gh` (auth pre-injected via GH_TOKEN). No Read/
+  // Edit/Write — cloud-only missions must mutate via MCP or `gh`.
+  'cloud':         ['mcp__github__*','WebFetch','WebSearch','Bash','BashOutput','KillShell','mcp__context7__*'],
 };
 
 module.exports = function register(ipcMain, ctx, deps = {}) {
-  const { getSecret } = deps;
+  const { getSecret, ghEnsure } = deps;
 
   const globalFile = path.join(ctx.userDataPath, 'missions.json');
   const inFlight = new Map();   // id -> { startedAt }
@@ -191,16 +194,47 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     return Array.from(allow);
   }
 
-  function buildSystemPrompt(mission) {
+  function buildSystemPrompt(mission, ghInfo = {}) {
     const isCloud = mission.target?.kind === 'cloud';
     const targetDesc = isCloud
       ? `the GitHub repository ${mission.target.repo} on branch ${mission.target.branch || 'main'}`
       : `the local project at ${mission.target.projectPath}`;
-    const editGuide = isCloud
-      ? mission.cloudPr
-        ? `Use the github MCP tools (mcp__github__*) to read files and propose changes via a Pull Request. Steps: create a branch (mcp__github__create_branch), apply file edits via mcp__github__create_or_update_file, then mcp__github__create_pull_request with a clear title and body. NEVER push directly to ${mission.target.branch || 'main'}.`
-        : `Use the github MCP tools (mcp__github__*) to read and edit files directly on branch ${mission.target.branch || 'main'} via mcp__github__create_or_update_file. The user has explicitly opted into direct commits for this mission.`
-      : `Use Read/Edit/Write/Glob/Grep and the pipilot MCP tools to inspect and edit local files.`;
+
+    // Tooling block — different per target. Cloud missions get TWO
+    // ways to talk to GitHub: the official Copilot HTTP MCP at
+    // https://api.githubcopilot.com/mcp (preferred for structured ops:
+    // create_pull_request, search, etc.) AND the gh CLI in Bash (great
+    // for ad-hoc shell ops, gh issue list, gh repo clone, etc.). The
+    // CLI inherits GH_TOKEN from the agent process env so no auth flow
+    // is needed; we never run `gh auth login`.
+    let toolGuide;
+    if (isCloud) {
+      const ghLine = ghInfo.installed
+        ? `- The \`gh\` CLI is installed (${ghInfo.version || 'available'}) and pre-authenticated for this run via the GH_TOKEN env var. Run any \`gh ...\` command via Bash — it will use the user's PAT automatically. Do NOT run \`gh auth login\` (it would write to the user's global config; the env-var path is intentionally process-scoped).`
+        : `- The \`gh\` CLI is NOT installed on this machine (auto-install was attempted: ${ghInfo.installMessage || 'unsupported platform'}). Stick to the github MCP tools.`;
+      const prGuidance = mission.cloudPr
+        ? `- Mutating ops: create a working branch first (mcp__github__create_branch), apply file edits via mcp__github__create_or_update_file, then open a PR with mcp__github__create_pull_request. Title format: "[PiPilot Mission] <name>". Body should describe what changed and why. NEVER push directly to ${mission.target.branch || 'main'}.`
+        : `- Mutating ops: edit files directly on branch ${mission.target.branch || 'main'} via mcp__github__create_or_update_file. The user has explicitly opted into direct commits for this mission.`;
+      toolGuide = [
+        `You have TWO complementary GitHub interfaces:`,
+        `1. **HTTP MCP** at api.githubcopilot.com/mcp — surfaces tools as \`mcp__github__*\`. Use these for structured operations (read repo files, list/search issues + PRs, create branches, create PRs, post comments).`,
+        `2. **\`gh\` CLI via Bash** — convenient for ad-hoc shell ops, status checks, and chaining commands.`,
+        ghLine,
+        prGuidance,
+        `- You do NOT have local filesystem access for this mission. Read and write only via mcp__github__* or via gh CLI commands that operate on the remote.`,
+      ].join('\n');
+    } else {
+      const ghLine = ghInfo.hasToken
+        ? ghInfo.installed
+          ? `- \`gh\` CLI is available and pre-authenticated via GH_TOKEN — useful for inspecting GitHub remotes from inside the local project (e.g. \`gh pr view\`, \`gh issue list\`).`
+          : `- \`gh\` CLI is not installed on this machine; if you need GitHub data, use WebFetch on api.github.com.`
+        : ``;
+      toolGuide = [
+        `Use Read/Edit/Write/Glob/Grep and the pipilot MCP tools to inspect and edit local files.`,
+        ghLine,
+      ].filter(Boolean).join('\n');
+    }
+
     return [
       `You are PiPilot Mission Agent — a focused background agent.`,
       ``,
@@ -211,7 +245,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       String(mission.prompt || '').trim(),
       ``,
       `Tooling guidance:`,
-      editGuide,
+      toolGuide,
       ``,
       `Rules:`,
       `- You are running silently in the background. The user is not watching you stream.`,
@@ -254,15 +288,28 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       }
     }
 
+    // Provision gh CLI if helpful for this mission. For cloud missions
+    // we always try; for local missions we only do it if a PAT is set
+    // (so the agent can `gh pr view` against the project's remote).
+    // Result is best-effort — even if install fails, the HTTP MCP path
+    // still works for cloud missions.
+    let ghInfo = { installed: false, hasToken: !!pat, env: pat ? { GH_TOKEN: pat, GITHUB_TOKEN: pat } : {} };
+    if (typeof ghEnsure === 'function' && (mission.target?.kind === 'cloud' || pat)) {
+      try { ghInfo = { ...ghInfo, ...(await ghEnsure()) }; } catch (err) { console.warn('[missions] ghEnsure failed:', err.message); }
+    }
+
     inFlight.set(mission.id, { startedAt: Date.now() });
     broadcast('missions:status', { id: mission.id, state: 'running', startedAt: Date.now() });
     broadcast('missions:run-now', {
       mission,
-      systemPrompt: buildSystemPrompt(mission),
+      systemPrompt: buildSystemPrompt(mission, ghInfo),
       allowedTools: buildAllowedTools(mission),
       githubPat: pat,            // ONLY sent for cloud missions, ONLY at run time
       effort: mission.effort || 'medium',
       cloudPr: mission.cloudPr !== false,
+      // Env vars to inject into the agent's bash subprocess (for `gh`).
+      extraEnv: ghInfo.env || {},
+      ghInfo: { installed: ghInfo.installed, version: ghInfo.version, installMessage: ghInfo.installMessage },
     });
     return { ok: true };
   }

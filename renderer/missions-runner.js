@@ -60,19 +60,22 @@
       try { stream && stream.stop && stream.stop(); } catch {}
     }, TIMEOUT_MS);
 
-    // Cloud missions need github MCP with the PAT injected. The main
-    // process passes the PAT once on run-now; we forward it via
-    // extraMcpServers, never store it in the renderer.
+    // Cloud missions: wire the GitHub Copilot HTTP MCP. Bearer auth
+    // means we don't spawn npx and the PAT only lives in the
+    // Authorization header for the HTTP request. We also forward
+    // extraEnv (GH_TOKEN/GITHUB_TOKEN) so the Bash tool's `gh` CLI
+    // works without any global config write.
     let extraMcpServers = null;
     if (mission.target?.kind === 'cloud' && payload.githubPat) {
       extraMcpServers = {
         github: {
-          command: 'npx',
-          args: ['-y', '@modelcontextprotocol/server-github'],
-          env: { GITHUB_PERSONAL_ACCESS_TOKEN: payload.githubPat },
+          type: 'http',
+          url: 'https://api.githubcopilot.com/mcp',
+          headers: { Authorization: 'Bearer ' + payload.githubPat },
         },
       };
     }
+    const extraEnv = (payload.extraEnv && typeof payload.extraEnv === 'object') ? payload.extraEnv : {};
 
     const targetWorkDir = mission.target?.kind === 'local'
       ? mission.target.projectPath
@@ -92,6 +95,7 @@
           systemPromptOverride: payload.systemPrompt,
           allowedToolsOverride: payload.allowedTools,
           extraMcpServers,
+          extraEnv,
         }, (evt) => {
           if (!evt) return;
           if (evt.type === 'tool_call') toolCallCount++;
