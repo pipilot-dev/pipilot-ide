@@ -22,6 +22,19 @@
   // (rare, but possible during reconnects), we drop the duplicate.
   const inFlight = new Set();
 
+  // Per-mission event buffer so a tab opened mid-run can replay
+  // everything it missed. Mapped by mission.id -> { mission, events,
+  // status, startedAt, endedAt, stream }.
+  // events: array of { ts, ...evt } so tab renderers can scrub or reflow.
+  const buffers = new Map();
+  function pushEvent(missionId, evt) {
+    const b = buffers.get(missionId);
+    if (!b) return;
+    const stamped = { ts: Date.now(), ...evt };
+    b.events.push(stamped);
+    bus.emit('mission:event', { missionId, evt: stamped });
+  }
+
   const TIMEOUT_MS = 6 * 60_000;
 
   api.missions.onRunNow(async (payload) => {
@@ -33,6 +46,10 @@
     const startedAt = Date.now();
     const sessionId = '__mission__' + mission.id + '__' + startedAt;
     let stream = null;
+
+    // Initialise buffer + announce start so any open tab can attach.
+    buffers.set(mission.id, { mission, events: [], status: 'running', startedAt, endedAt: 0, stream: null });
+    bus.emit('mission:start', { mission, startedAt });
     let finalText = '';
     let toolCallCount = 0;
     let timedOut = false;
@@ -77,16 +94,18 @@
           extraMcpServers,
         }, (evt) => {
           if (!evt) return;
-          if (evt.type === 'tool_call') {
-            toolCallCount++;
-            console.log('[missions-runner]', mission.id, 'tool_call', evt.name);
-          } else if (evt.type === 'text' && typeof evt.text === 'string') {
-            finalText += evt.text;
-          } else if (evt.type === 'result' || evt.type === 'error') {
+          if (evt.type === 'tool_call') toolCallCount++;
+          if (evt.type === 'text' && typeof evt.text === 'string') finalText += evt.text;
+          // Forward EVERY event to the per-mission buffer + bus so
+          // open tabs render the live stream.
+          pushEvent(mission.id, evt);
+          if (evt.type === 'result' || evt.type === 'error') {
             resultEvt = evt;
             resolve();
           }
         });
+        const buf = buffers.get(mission.id);
+        if (buf) buf.stream = stream;
       });
     } catch (err) {
       console.warn('[missions-runner] failed:', err);
@@ -106,6 +125,11 @@
 
     const durationMs = Date.now() - startedAt;
     inFlight.delete(mission.id);
+
+    // Update buffer + announce end so open tabs can switch to "done" UI.
+    const buf = buffers.get(mission.id);
+    if (buf) { buf.status = status; buf.endedAt = Date.now(); }
+    bus.emit('mission:end', { missionId: mission.id, status, summary, durationMs, finalText: cleanFinal });
 
     try { stream && stream.dispose && stream.dispose(); } catch {}
 
@@ -198,7 +222,25 @@
     bus.emit('toast:show', { type: 'info', message: `BugBot: ${items.length} finding${items.length === 1 ? '' : 's'}` });
   }
 
+  // Stop a running mission. We can only abort our own renderer-side
+  // stream — main-process state is updated via missions:report-run
+  // when the agent stream ends naturally, so we synthesize a final
+  // event by stopping the stream (the SDK abort triggers a 'result'
+  // event with subtype:'aborted').
+  function stopMission(missionId) {
+    const buf = buffers.get(missionId);
+    if (!buf || !buf.stream) return false;
+    try { buf.stream.stop?.(); } catch {}
+    bus.emit('toast:show', { type: 'info', message: 'Mission stop requested' });
+    return true;
+  }
+
   window.PiPilot = window.PiPilot || {};
   window.PiPilot.missions = window.PiPilot.missions || {};
-  window.PiPilot.missions.runner = { inFlightCount: () => inFlight.size };
+  window.PiPilot.missions.runner = {
+    inFlightCount: () => inFlight.size,
+    isRunning: (id) => inFlight.has(id),
+    getBuffer: (id) => buffers.get(id) || null,
+    stopMission,
+  };
 })();

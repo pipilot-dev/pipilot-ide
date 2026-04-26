@@ -373,10 +373,16 @@
         <button class="pp-mission-btn danger" data-act="delete">Delete</button>
       </div>
     `;
-    card.querySelector('[data-act="run"]').addEventListener('click', () => runNow(m));
-    card.querySelector('[data-act="edit"]').addEventListener('click', () => openEditor(m));
-    card.querySelector('[data-act="toggle"]').addEventListener('click', () => toggleEnabled(m));
-    card.querySelector('[data-act="delete"]').addEventListener('click', () => deleteMission(m));
+    card.querySelector('[data-act="run"]').addEventListener('click', (e) => { e.stopPropagation(); runNow(m); });
+    card.querySelector('[data-act="edit"]').addEventListener('click', (e) => { e.stopPropagation(); openEditor(m); });
+    card.querySelector('[data-act="toggle"]').addEventListener('click', (e) => { e.stopPropagation(); toggleEnabled(m); });
+    card.querySelector('[data-act="delete"]').addEventListener('click', (e) => { e.stopPropagation(); deleteMission(m); });
+    // Click anywhere else on the card → open the stream tab. Always
+    // useful: live view if running, replay of last events if idle.
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', () => {
+      try { window.PiPilot?.missions?.openStreamTab?.(m); } catch (err) { console.warn(err); }
+    });
     return card;
   }
 
@@ -919,6 +925,8 @@
       list.querySelector('[data-pick="folder"]')?.addEventListener('mousedown', async (e) => {
         e.preventDefault();
         list.hidden = true;
+        list.innerHTML = '';
+        try { input.blur(); } catch {}
         try {
           const picked = await api.pickFolder();
           if (picked) {
@@ -934,6 +942,8 @@
           input.value = p;
           m.target.projectPath = p;
           list.hidden = true;
+          list.innerHTML = '';
+          try { input.blur(); } catch {}
         });
       });
     }
@@ -1065,6 +1075,10 @@
       m.target.repo = fullName;
       repoInput.value = fullName;
       repoList.hidden = true;
+      repoList.innerHTML = '';
+      // Drop focus so re-focus is intentional — otherwise a focus
+      // bounce after the mousedown can re-open the list immediately.
+      try { repoInput.blur(); } catch {}
       await loadBranches(fullName);
     }
 
