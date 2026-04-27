@@ -583,7 +583,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     const workDir = mission.target?.kind === 'local'
       ? mission.target.projectPath
       : (ghInfo.scratchDir || null);
-    const allowedTools = buildAllowedTools(mission);
+    let allowedTools = buildAllowedTools(mission);
     const systemPrompt = buildSystemPrompt(mission, ghInfo);
 
     // Build per-call MCP servers — github HTTP MCP for cloud missions.
@@ -596,6 +596,19 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
           headers: { Authorization: 'Bearer ' + pat },
         },
       };
+    }
+
+    // Auto-elevate: if any MCP server is wired up for this run, make
+    // sure `mcp__<server>__*` is in allowedTools. Without this, the
+    // SDK registers the server but the agent's tool gating refuses
+    // every call to it ("I don't have access to mcp__github__…").
+    // Mirrors the pattern Pipilot Cloud uses.
+    if (extraMcpServers && typeof extraMcpServers === 'object') {
+      const allowSet = new Set(allowedTools);
+      for (const serverKey of Object.keys(extraMcpServers)) {
+        allowSet.add('mcp__' + serverKey + '__*');
+      }
+      allowedTools = Array.from(allowSet);
     }
 
     // Per-run state — owned by main, survives renderer reloads.

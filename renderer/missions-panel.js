@@ -821,6 +821,17 @@
         m.target = kind === 'cloud'
           ? { kind: 'cloud', repo: m.target?.repo || '', branch: m.target?.branch || 'main' }
           : { kind: 'local', projectPath: m.target?.projectPath || state?.projectPath || '' };
+        // When switching to Cloud, default the permissions preset to
+        // 'cloud' (which includes Bash + the github MCP allowlist) so
+        // BugBot-style fs-only presets don't accidentally lock out
+        // mcp__github__* calls. Don't downgrade if the user already
+        // picked something more permissive (full).
+        if (kind === 'cloud' && !['cloud', 'full'].includes(m.permissions?.preset)) {
+          m.permissions = { ...m.permissions, preset: 'cloud' };
+          // Reflect on the dropdown if it's mounted.
+          const permSel = body.querySelector('#pp-me-perm');
+          if (permSel && 'value' in permSel) permSel.value = 'cloud';
+        }
         body.querySelectorAll('#pp-me-target-tabs .pp-me-tab').forEach(t => t.classList.toggle('active', t === tab));
         body.querySelector('#pp-me-target-body').innerHTML = renderTargetBody(m);
         body.querySelector('#pp-me-cloud-pr-field').style.display = kind === 'cloud' ? '' : 'none';
