@@ -63,7 +63,7 @@
 .pp-mst-name { flex:1; font-size:14px; font-weight:600; color:var(--text-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .pp-mst-meta { font-size:11px; color:var(--text-dim); font-family:var(--font-mono); display:flex; gap:10px; flex-wrap:wrap; }
 
-.pp-mst-body { flex:1; overflow-y:auto; padding:14px 18px; display:flex; flex-direction:column; gap:10px; }
+.pp-mst-body { flex:1 1 0; min-height:0; overflow-y:auto; overflow-x:hidden; padding:14px 18px; display:flex; flex-direction:column; gap:10px; }
 .pp-mst-empty { color:var(--text-dim); font-size:12px; text-align:center; padding:30px 12px; }
 .pp-mst-text { font-size:13px; line-height:1.65; color:var(--text); word-wrap:break-word; user-select:text; -webkit-user-select:text; }
 .pp-mst-text[data-streaming="1"] { white-space:pre-wrap; }
@@ -743,7 +743,7 @@
         container.appendChild(head);
         const body = document.createElement('div');
         body.className = 'pp-mst-log md-body';
-        body.style.cssText = 'flex:1;margin:0;padding:18px 24px;font-family:var(--font-sans);font-size:13px;line-height:1.65;color:var(--text);overflow:auto;';
+        body.style.cssText = 'flex:1 1 0;min-height:0;margin:0;padding:18px 24px;font-family:var(--font-sans);font-size:13px;line-height:1.65;color:var(--text);overflow:auto;';
         const renderMarkdown = (md) => {
           if (window.marked?.parse) {
             try { return window.marked.parse(md, { breaks: true, gfm: true }); } catch {}
@@ -1001,7 +1001,7 @@
       container.style.cssText = 'width:100%;height:100%;background:var(--bg,#16161a);display:flex;flex-direction:column;overflow:hidden;';
       container.innerHTML = `
         <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-mid);font-family:var(--font-mono);flex-shrink:0;" data-role="head">Loading ${escapeHtml(absPath)}…</div>
-        <div style="flex:1;overflow:auto;padding:10px 16px;font-family:var(--font-mono);font-size:11.5px;" data-role="body"></div>
+        <div style="flex:1 1 0;min-height:0;overflow:auto;padding:10px 16px;font-family:var(--font-mono);font-size:11.5px;" data-role="body"></div>
       `;
       const head = container.querySelector('[data-role="head"]');
       const bodyEl = container.querySelector('[data-role="body"]');
@@ -1035,7 +1035,7 @@
       container.style.cssText = 'width:100%;height:100%;background:var(--bg,#16161a);display:flex;flex-direction:column;overflow:hidden;';
       container.innerHTML = `
         <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-mid);font-family:var(--font-mono);flex-shrink:0;">${escapeHtml(absPath)}</div>
-        <div style="flex:1;overflow:auto;padding:14px 18px;" data-role="body"></div>
+        <div style="flex:1 1 0;min-height:0;overflow:auto;padding:14px 18px;" data-role="body"></div>
       `;
       const bodyEl = container.querySelector('[data-role="body"]');
       let raw = '';
@@ -1061,7 +1061,10 @@
 .pp-bf-title { font-size:14px; font-weight:600; color:var(--text-strong); }
 .pp-bf-sub { font-size:11.5px; color:var(--text-mid); margin-top:3px; font-family:var(--font-mono); }
 .pp-bf-actions { display:flex; gap:6px; }
-.pp-bf-body { flex:1; overflow:auto; padding:14px 18px 24px; display:flex; flex-direction:column; gap:14px; }
+/* min-height:0 is the classic flex-overflow fix — without it the
+   default min-height:auto lets the body grow past its parent and
+   the inner overflow:auto never kicks in. */
+.pp-bf-body { flex:1 1 0; min-height:0; overflow-y:auto; overflow-x:hidden; padding:14px 18px 24px; display:flex; flex-direction:column; gap:14px; }
 .pp-bf-empty { text-align:center; color:var(--text-dim); padding:30px 12px; font-size:12px; }
 .pp-bf-pill { display:inline-block; padding:1px 7px; border-radius:9px; font-size:10px; font-family:var(--font-mono); font-weight:500; letter-spacing:0.04em; vertical-align:1px; margin:0 2px; }
 .pp-bf-pill.err { background:rgba(229,83,75,0.12); color:var(--error,#e5534b); border:1px solid rgba(229,83,75,0.32); }
