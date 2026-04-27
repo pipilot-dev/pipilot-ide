@@ -128,31 +128,142 @@
 .pp-missions-empty { padding:24px 12px; text-align:center; color:var(--text-dim); font-size:12px; line-height:1.6; }
 .pp-missions-empty strong { display:block; color:var(--text-mid); font-size:13px; margin-bottom:4px; }
 
-.pp-mission-card { background:var(--surface, #1c1c21); border:1px solid var(--border); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; transition:border-color 0.15s; }
-.pp-mission-card:hover { border-color:rgba(255,255,255,0.16); }
-.pp-mission-card.disabled { opacity:0.55; }
-.pp-mission-card.running { border-color:var(--accent); box-shadow:0 0 0 1px rgba(255,107,53,0.2); }
-.pp-mission-row1 { display:flex; align-items:center; gap:8px; }
-.pp-mission-name { flex:1; font-size:12.5px; font-weight:500; color:var(--text-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.pp-mission-status-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
-.pp-mission-status-dot.success { background:var(--ok, #62c167); }
-.pp-mission-status-dot.error { background:var(--error, #e5534b); }
-.pp-mission-status-dot.skipped { background:var(--text-dim); }
-.pp-mission-status-dot.timeout { background:#e0a04a; }
-.pp-mission-status-dot.running { background:var(--info, #6cb6ff); animation:pp-mission-pulse 1.4s ease-in-out infinite; }
-.pp-mission-status-dot.never { background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); }
-@keyframes pp-mission-pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+/* Mission card — compact, sidebar-width-aware. Layout:
+   row 1: status dot + name (truncates) + run/stop icon
+   row 2: target badge + trigger + relative time (single line, ellipsis)
+   row 3 (only on hover OR for the active card): full action icons
+   row 4 (only when last run errored): clamped one-line message */
+.pp-mission-card {
+  background: var(--surface, #1c1c21);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.15s, background 0.15s;
+  min-width: 0;
+}
+.pp-mission-card:hover { border-color: rgba(255,107,53,0.28); background: rgba(255,107,53,0.025); }
+.pp-mission-card.disabled { opacity: 0.55; }
+.pp-mission-card.running { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(255,107,53,0.18); background: rgba(255,107,53,0.04); }
 
-.pp-mission-meta { display:flex; gap:10px; font-size:10.5px; color:var(--text-dim); font-family:var(--font-mono); flex-wrap:wrap; }
-.pp-mission-msg { font-size:10.5px; color:var(--text-mid); font-family:var(--font-mono); line-height:1.45; max-height:3.6em; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; word-break:break-word; }
-.pp-mission-card.error .pp-mission-msg { color:var(--error,#e5534b); opacity:0.85; }
-.pp-mission-meta span { display:flex; align-items:center; gap:3px; }
-.pp-mission-actions { display:flex; gap:6px; margin-top:2px; }
-.pp-mission-btn { background:transparent; border:1px solid rgba(255,255,255,0.1); color:var(--text-mid); padding:3px 9px; border-radius:5px; font-size:10.5px; cursor:pointer; transition:all 0.15s; }
-.pp-mission-btn:hover { background:rgba(255,255,255,0.05); color:var(--text-strong); border-color:rgba(255,255,255,0.18); }
-.pp-mission-btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
-.pp-mission-btn.primary:hover { background:var(--accent-hover); }
-.pp-mission-btn.danger:hover { background:rgba(229,83,75,0.15); color:var(--error); border-color:rgba(229,83,75,0.4); }
+.pp-mission-row1 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.pp-mission-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.005em;
+}
+.pp-mission-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.pp-mission-status-dot.success  { background: var(--ok, #62c167); box-shadow: 0 0 0 2px rgba(98,193,103,0.12); }
+.pp-mission-status-dot.error    { background: var(--error, #e5534b); box-shadow: 0 0 0 2px rgba(229,83,75,0.15); }
+.pp-mission-status-dot.skipped  { background: var(--text-dim); }
+.pp-mission-status-dot.timeout  { background: #e0a04a; box-shadow: 0 0 0 2px rgba(224,160,74,0.15); }
+.pp-mission-status-dot.stopped  { background: var(--error, #e5534b); opacity: 0.6; }
+.pp-mission-status-dot.running  { background: var(--info, #6cb6ff); animation: pp-mission-pulse 1.4s ease-in-out infinite; box-shadow: 0 0 0 2px rgba(108,182,255,0.18); }
+.pp-mission-status-dot.never    { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18); }
+@keyframes pp-mission-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Quick-run icon button at the right of row 1 — primary action */
+.pp-mission-quick {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s;
+}
+.pp-mission-quick:hover { background: rgba(255,107,53,0.14); color: var(--accent-light, #ffb38a); }
+.pp-mission-quick.running { color: var(--info, #6cb6ff); }
+.pp-mission-quick.running svg { animation: pp-mission-spin 1s linear infinite; }
+@keyframes pp-mission-spin { to { transform: rotate(360deg); } }
+
+/* Single-line meta — target · trigger · time. Truncates as a unit. */
+.pp-mission-meta {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  letter-spacing: 0.01em;
+}
+.pp-mission-meta .sep { opacity: 0.5; margin: 0 5px; }
+.pp-mission-meta .target { color: var(--text-mid); }
+
+/* Last error message — single-line clamp, full on hover via title */
+.pp-mission-msg {
+  font-size: 10.5px;
+  color: var(--text-mid);
+  font-family: var(--font-mono);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.pp-mission-card.error-card .pp-mission-msg { color: var(--error, #e5534b); opacity: 0.85; }
+
+/* Hover-revealed action row — slim icon buttons, only visible when
+   the user moves over the card so the default state stays compact. */
+.pp-mission-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 2px;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.18s ease, opacity 0.15s ease;
+}
+.pp-mission-card:hover .pp-mission-actions,
+.pp-mission-card:focus-within .pp-mission-actions { max-height: 26px; opacity: 1; }
+.pp-mission-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all 0.12s;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.pp-mission-btn:hover {
+  background: rgba(255,255,255,0.05);
+  color: var(--text-strong);
+  border-color: rgba(255,255,255,0.12);
+}
+.pp-mission-btn.danger:hover {
+  background: rgba(229,83,75,0.12);
+  color: var(--error);
+  border-color: rgba(229,83,75,0.35);
+}
+.pp-mission-btn svg { width: 11px; height: 11px; }
 
 /* ── Editor modal ───────────────────────────────────────────── */
 .pp-mission-editor-backdrop { position:fixed; inset:0; background:rgba(8,8,12,0.6); backdrop-filter:blur(4px); z-index:9000; display:flex; align-items:center; justify-content:center; padding:20px; animation:pp-mission-fade 0.18s ease-out; }
@@ -352,40 +463,88 @@
     for (const m of cachedMissions) list.appendChild(renderCard(m));
   }
 
+  // Tiny SVG icons used in the action row + quick-run button.
+  const ICON = {
+    play:    '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
+    spin:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>',
+    edit:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>',
+    pause:   '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
+    enable:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="9 12 11 14 15 10"/></svg>',
+    trash:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
+  };
+
   function renderCard(m) {
     const card = document.createElement('div');
     const isRunning = runningIds.has(m.id);
-    const statusClass = isRunning ? 'running' : (m.lastRunStatus || 'never');
-    card.className = 'pp-mission-card' + (m.enabled ? '' : ' disabled') + (isRunning ? ' running' : '');
+    const last = m.lastRunStatus;
+    const statusClass = isRunning ? 'running' : (last || 'never');
+    const isError = !isRunning && (last === 'error' || last === 'timeout');
+    card.className = 'pp-mission-card'
+      + (m.enabled ? '' : ' disabled')
+      + (isRunning ? ' running' : '')
+      + (isError ? ' error-card' : '');
+    card.title = `${m.name} — ${last || 'never run'}`;
+
+    const target = describeTargetCompact(m.target);
+    const trigger = describeTrigger(m.trigger);
+    const when = m.lastRunAt ? relativeTime(m.lastRunAt) : null;
+    const metaParts = [
+      `<span class="target">${escapeHtml(target)}</span>`,
+      trigger ? `<span class="sep">·</span><span>${escapeHtml(trigger)}</span>` : '',
+      when    ? `<span class="sep">·</span><span>${escapeHtml(when)}</span>` : '',
+    ].filter(Boolean).join('');
+
     card.innerHTML = `
       <div class="pp-mission-row1">
-        <span class="pp-mission-status-dot ${statusClass}" title="${escapeHtml(m.lastRunStatus || 'never run')}"></span>
+        <span class="pp-mission-status-dot ${statusClass}" title="${escapeHtml(last || 'never run')}"></span>
         <span class="pp-mission-name">${escapeHtml(m.name)}</span>
+        <button class="pp-mission-quick ${isRunning ? 'running' : ''}" data-act="${isRunning ? 'stop' : 'run'}" title="${isRunning ? 'Stop' : 'Run now'}">
+          ${isRunning ? ICON.spin : ICON.play}
+        </button>
       </div>
-      <div class="pp-mission-meta">
-        <span>${escapeHtml(describeTarget(m.target))}</span>
-        <span>· ${escapeHtml(describeTrigger(m.trigger))}</span>
-        <span>· ran ${m.runCount || 0}× · ${escapeHtml(relativeTime(m.lastRunAt))}</span>
-      </div>
+      <div class="pp-mission-meta">${metaParts}</div>
       ${m.lastRunMessage ? `<div class="pp-mission-msg" title="${escapeHtml(m.lastRunMessage)}">${escapeHtml(m.lastRunMessage)}</div>` : ''}
       <div class="pp-mission-actions">
-        <button class="pp-mission-btn primary" data-act="run" ${isRunning ? 'disabled' : ''}>${isRunning ? 'Running…' : 'Run now'}</button>
-        <button class="pp-mission-btn" data-act="edit">Edit</button>
-        <button class="pp-mission-btn" data-act="toggle">${m.enabled ? 'Disable' : 'Enable'}</button>
-        <button class="pp-mission-btn danger" data-act="delete">Delete</button>
+        <button class="pp-mission-btn" data-act="edit"   title="Edit">${ICON.edit}</button>
+        <button class="pp-mission-btn" data-act="toggle" title="${m.enabled ? 'Disable' : 'Enable'}">${m.enabled ? ICON.pause : ICON.enable}</button>
+        <button class="pp-mission-btn danger" data-act="delete" title="Delete">${ICON.trash}</button>
       </div>
     `;
-    card.querySelector('[data-act="run"]').addEventListener('click', (e) => { e.stopPropagation(); runNow(m); });
-    card.querySelector('[data-act="edit"]').addEventListener('click', (e) => { e.stopPropagation(); openEditor(m); });
-    card.querySelector('[data-act="toggle"]').addEventListener('click', (e) => { e.stopPropagation(); toggleEnabled(m); });
-    card.querySelector('[data-act="delete"]').addEventListener('click', (e) => { e.stopPropagation(); deleteMission(m); });
-    // Click anywhere else on the card → open the stream tab. Always
-    // useful: live view if running, replay of last events if idle.
+
+    const stop = (e) => { e.stopPropagation(); };
+    const quick = card.querySelector('.pp-mission-quick');
+    quick.addEventListener('click', (e) => {
+      stop(e);
+      if (isRunning) {
+        api.missions.stop(m.id).catch(() => {});
+      } else {
+        runNow(m);
+      }
+    });
+    card.querySelector('[data-act="edit"]').addEventListener('click', (e)   => { stop(e); openEditor(m); });
+    card.querySelector('[data-act="toggle"]').addEventListener('click', (e) => { stop(e); toggleEnabled(m); });
+    card.querySelector('[data-act="delete"]').addEventListener('click', (e) => { stop(e); deleteMission(m); });
+    // Click anywhere else on the card → open the stream tab.
     card.style.cursor = 'pointer';
     card.addEventListener('click', () => {
       try { window.PiPilot?.missions?.openStreamTab?.(m); } catch (err) { console.warn(err); }
     });
     return card;
+  }
+
+  // Sidebar-friendly target description — drops the protocol and
+  // owner so the repo/path stays readable in narrow widths.
+  function describeTargetCompact(target) {
+    if (!target) return '?';
+    if (target.kind === 'cloud') {
+      const repo = target.repo || '?';
+      const branch = target.branch && target.branch !== 'main' ? '@' + target.branch : '';
+      // Show owner/repo (last two segments) — strip any leading URL bits.
+      const slug = repo.replace(/^https?:\/\/(www\.)?github\.com\//i, '').replace(/\.git$/i, '');
+      return '☁ ' + slug + branch;
+    }
+    const parts = String(target.projectPath || '').split(/[\\/]/);
+    return '📁 ' + (parts[parts.length - 1] || target.projectPath || '?');
   }
 
   async function runNow(m) {
