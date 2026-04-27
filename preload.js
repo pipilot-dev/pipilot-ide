@@ -358,7 +358,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     delete: (scope, projectPath, id) => ipcRenderer.invoke('missions:delete', { scope, projectPath, id }),
     run: (id, projectPath, force) => ipcRenderer.invoke('missions:run', { id, projectPath, force }),
     stop: (id) => ipcRenderer.invoke('missions:stop', { id }),
-    sendMessage: (id, message) => ipcRenderer.invoke('missions:send-message', { id, message }),
+    sendMessage: (id, message, projectPath) => ipcRenderer.invoke('missions:send-message', { id, message, projectPath }),
     getState: (id) => ipcRenderer.invoke('missions:get-state', { id }),
     inFlightState: () => ipcRenderer.invoke('missions:in-flight-state'),
     listRuns: (id) => ipcRenderer.invoke('missions:list-runs', { id }),

@@ -568,7 +568,7 @@
       inputEl.value = '';
       autoGrow();
       try {
-        const r = await api.missions.sendMessage(mission.id, text);
+        const r = await api.missions.sendMessage(mission.id, text, window.PiPilot?.state?.projectPath || null);
         if (!r?.ok) {
           bus.emit('toast:show', { type: 'warn', message: r?.error || 'Could not send message' });
         } else if (r.queued) {

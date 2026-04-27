@@ -596,8 +596,13 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       if (win && !win.isDestroyed()) win.webContents.send('missions:bg-active', { id: mission.id, active: true });
     } catch {}
 
-    // Drive the first turn.
-    const initialUserMsg = `Run the mission described in your system prompt now. Today's date: ${new Date().toISOString().slice(0,10)}.`;
+    // Drive the first turn. If the caller supplied initialUserMessage
+    // (i.e. user typed in the mission tab on a never-run mission), use
+    // that as the turn-0 user message so it shows up in conversation
+    // history instead of the canned "run the mission now" prompt.
+    const initialUserMsg = (opts.initialUserMessage && String(opts.initialUserMessage).trim())
+      ? String(opts.initialUserMessage).trim()
+      : `Run the mission described in your system prompt now. Today's date: ${new Date().toISOString().slice(0,10)}.`;
     return startTurn(runState, initialUserMsg);
   }
 
@@ -934,19 +939,34 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
   //   - in-flight running:   queue the message, drains after current turn
   //   - in-flight idle:      kick off a new turn immediately
   //   - GC'd from memory:    reconstruct runState from disk and resume
-  ipcMain.handle('missions:send-message', async (_e, { id, message } = {}) => {
+  ipcMain.handle('missions:send-message', async (_e, { id, message, projectPath } = {}) => {
     if (!id || !message || !String(message).trim()) {
       return { ok: false, error: 'id and non-empty message required' };
     }
     let rs = inFlight.get(id);
     if (!rs) {
-      // Reconstruct from disk if the runState was GC'd.
-      try { rs = await reconstructRunStateFromDisk(id); }
-      catch (err) { return { ok: false, error: 'could not resume: ' + (err?.message || err) }; }
-      if (!rs) return { ok: false, error: 'mission has no prior runs to resume — start with Run now' };
-      inFlight.set(id, rs);
+      // Try to reconstruct from disk if the runState was GC'd or the
+      // app restarted but a prior persisted run exists.
+      try { rs = await reconstructRunStateFromDisk(id); } catch {}
+      if (rs) {
+        inFlight.set(id, rs);
+      } else {
+        // No prior run on disk (mission was created before persistence
+        // shipped, or has genuinely never run). Fall through to a fresh
+        // fireMission with the user's message as the initial prompt.
+        try {
+          const list = await readAll(projectPath || null);
+          const m = list.find((x) => x.id === id);
+          if (!m) return { ok: false, error: 'mission not found' };
+          const r = await fireMission(m, { force: true, initialUserMessage: String(message) });
+          if (!r?.ok) return { ok: false, error: r?.reason || r?.error || 'could not start mission' };
+          return { ok: true, queued: false, started: true };
+        } catch (err) {
+          return { ok: false, error: 'could not start: ' + (err?.message || err) };
+        }
+      }
     }
-    // Running → queue. Idle → start now.
+    // Running → queue. Idle → start a follow-up turn now.
     if (rs.status === 'running') {
       rs.pendingMessages.push(String(message));
       broadcast('missions:queued', { missionId: id, queueLength: rs.pendingMessages.length });
