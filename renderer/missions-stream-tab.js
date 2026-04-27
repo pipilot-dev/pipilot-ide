@@ -112,6 +112,28 @@
 
 .pp-mst-event-time { font-size:10px; color:var(--text-dim); font-family:var(--font-mono); margin-right:6px; opacity:0.6; }
 
+/* Streaming indicator — same look as the chat panel's working dots
+   + shimmer text. Lives at the bottom of pp-mst-body while the
+   agent is running, hidden when status is terminal. */
+.pp-mst-stream { display:none; align-items:center; gap:3px; padding:8px 2px 2px; }
+.pp-mst.is-running .pp-mst-stream { display:flex; }
+.pp-mst-stream .pp-mst-dot { width:6px; height:6px; border-radius:50%; background:var(--info,#6cb6ff); animation:pp-mst-pulse 1.4s ease-in-out infinite; display:inline-block; flex-shrink:0; }
+.pp-mst-stream .pp-mst-dot:nth-child(2) { animation-delay:0.2s; }
+.pp-mst-stream .pp-mst-dot:nth-child(3) { animation-delay:0.4s; }
+@keyframes pp-mst-pulse {
+  0%, 80%, 100% { opacity:0.3; transform:scale(0.8); }
+  40% { opacity:1; transform:scale(1.2); }
+}
+.pp-mst-stream-text {
+  font-size:11px; font-weight:500; margin-left:6px; letter-spacing:0.05em;
+  background: linear-gradient(90deg, var(--text,#b0b0b8) 0%, var(--text,#b0b0b8) 30%, var(--accent,#FF6B35) 50%, var(--text,#b0b0b8) 70%, var(--text,#b0b0b8) 100%);
+  background-size:200% 100%;
+  -webkit-background-clip:text; background-clip:text;
+  -webkit-text-fill-color:transparent; color:transparent;
+  animation:pp-mst-shimmer 2s linear infinite;
+}
+@keyframes pp-mst-shimmer { from { background-position:200% 0; } to { background-position:-200% 0; } }
+
 .pp-mst-foot { padding:8px 14px; border-top:1px solid var(--border); display:flex; align-items:center; gap:6px; flex-shrink:0; background:var(--surface,#1c1c21); flex-wrap:wrap; }
 .pp-mst-foot-spacer { flex:1; }
 .pp-mst-input-row { display:flex; align-items:flex-end; gap:8px; padding:10px 14px 12px; border-top:1px solid var(--border); background:var(--surface,#1c1c21); flex-shrink:0; }
@@ -206,6 +228,10 @@
       <div class="pp-mst-body" data-role="body">
         <div class="pp-mst-empty" data-role="empty">Waiting for the agent to begin…</div>
       </div>
+      <div class="pp-mst-stream" data-role="stream">
+        <span class="pp-mst-dot"></span><span class="pp-mst-dot"></span><span class="pp-mst-dot"></span>
+        <span class="pp-mst-stream-text" data-role="stream-text">Working...</span>
+      </div>
       <div class="pp-mst-foot">
         <button class="pp-mst-btn danger" data-act="stop">⏹ Stop</button>
         <button class="pp-mst-btn" data-act="log">📄 Log</button>
@@ -251,18 +277,26 @@
     durationTimer = setInterval(tickDuration, 1000);
     tickDuration();
 
+    const streamTextEl = root.querySelector('[data-role="stream-text"]');
     function setStatus(state, label) {
-      statusEl.classList.remove('running', 'success', 'error', 'timeout', 'stopped', 'skipped');
-      // Map outcome status names to visual classes (success/error/etc).
+      statusEl.classList.remove('running', 'success', 'error', 'timeout', 'stopped', 'skipped', 'preparing');
       const visualClass = state === 'success' ? 'success'
-        : state === 'running' ? 'running'
+        : state === 'running' || state === 'preparing' ? 'running'
         : state === 'timeout' ? 'timeout'
         : 'error';
       statusEl.classList.add(visualClass);
-      const icon = state === 'running' ? SVG.spin : (state === 'success' ? SVG.ok : SVG.err);
+      const icon = (state === 'running' || state === 'preparing') ? SVG.spin
+        : state === 'success' ? SVG.ok : SVG.err;
       statusEl.innerHTML = `${icon} <span data-role="status-label">${escapeHtml(label || state)}</span>`;
-      stopBtn.disabled = state !== 'running';
-      rerunBtn.disabled = state === 'running';
+      stopBtn.disabled = state !== 'running' && state !== 'preparing';
+      rerunBtn.disabled = state === 'running' || state === 'preparing';
+      // Toggle the chat-panel-style streaming indicator at the
+      // bottom of the body while a turn is in flight.
+      const isLive = state === 'running' || state === 'preparing';
+      root.classList.toggle('is-running', isLive);
+      if (streamTextEl) {
+        streamTextEl.textContent = state === 'preparing' ? 'Preparing workspace...' : 'Working...';
+      }
     }
 
     function renderMd(s) {
@@ -536,6 +570,10 @@
 
     const offStatus = api.missions.onStatus((payload) => {
       if (payload?.id !== mission.id) return;
+      if (payload.state === 'preparing') {
+        setStatus('preparing', 'preparing');
+        return;
+      }
       if (payload.state === 'running') {
         setStatus('running', 'running');
         return;
@@ -958,14 +996,21 @@
   async function openJsonlTab(absPath, mission) {
     const id = 'pipilot://jsonl/' + (mission.id || 'g') + ':' + absPath;
     openVirtualReadonlyTab({ id, name: absPath.split(/[\\/]/).pop(), icon: '📋' }, async (container) => {
-      container.style.cssText = 'width:100%;height:100%;background:var(--bg,#16161a);overflow:auto;font-family:var(--font-mono);font-size:11.5px;padding:14px 16px;';
-      container.innerHTML = `<div style="color:var(--text-dim);">Loading ${escapeHtml(absPath)}…</div>`;
+      // Flex column so the header doesn't push content off-screen
+      // and the table area scrolls independently.
+      container.style.cssText = 'width:100%;height:100%;background:var(--bg,#16161a);display:flex;flex-direction:column;overflow:hidden;';
+      container.innerHTML = `
+        <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-mid);font-family:var(--font-mono);flex-shrink:0;" data-role="head">Loading ${escapeHtml(absPath)}…</div>
+        <div style="flex:1;overflow:auto;padding:10px 16px;font-family:var(--font-mono);font-size:11.5px;" data-role="body"></div>
+      `;
+      const head = container.querySelector('[data-role="head"]');
+      const bodyEl = container.querySelector('[data-role="body"]');
       let raw = '';
       try {
         const r = await api.files.read(absPath);
         raw = r?.content || (typeof r === 'string' ? r : '');
       } catch (err) {
-        container.innerHTML = `<div style="color:var(--error);">Read failed: ${escapeHtml(err?.message || String(err))}</div>`;
+        bodyEl.innerHTML = `<div style="color:var(--error);">Read failed: ${escapeHtml(err?.message || String(err))}</div>`;
         return;
       }
       const rows = [];
@@ -975,11 +1020,11 @@
         try { const o = JSON.parse(t); rows.push(o); Object.keys(o || {}).forEach(k => cols.add(k)); } catch {}
       }
       const colList = Array.from(cols);
-      if (!rows.length) { container.innerHTML = `<div style="color:var(--text-dim);">Empty or unparseable JSONL.</div>`; return; }
-      const head = '<tr>' + colList.map(c => `<th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);color:var(--text-mid);font-weight:600;">${escapeHtml(c)}</th>`).join('') + '</tr>';
-      const bodyRows = rows.map(r => '<tr>' + colList.map(c => `<td style="padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.04);vertical-align:top;color:var(--text);">${escapeHtml(typeof r[c] === 'object' ? JSON.stringify(r[c]) : (r[c] ?? ''))}</td>`).join('') + '</tr>').join('');
-      container.innerHTML = `<div style="color:var(--text-mid);font-size:11px;margin-bottom:8px;">${rows.length} record${rows.length === 1 ? '' : 's'} · ${colList.length} columns · ${escapeHtml(absPath)}</div>` +
-        `<table style="width:100%;border-collapse:collapse;">${head}${bodyRows}</table>`;
+      if (!rows.length) { bodyEl.innerHTML = `<div style="color:var(--text-dim);">Empty or unparseable JSONL.</div>`; return; }
+      head.textContent = `${rows.length} record${rows.length === 1 ? '' : 's'} · ${colList.length} columns · ${absPath}`;
+      const headRow = '<tr>' + colList.map(c => `<th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);color:var(--text-mid);font-weight:600;position:sticky;top:0;background:var(--bg,#16161a);">${escapeHtml(c)}</th>`).join('') + '</tr>';
+      const bodyRows = rows.map(r => '<tr>' + colList.map(c => `<td style="padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.04);vertical-align:top;color:var(--text);max-width:380px;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(typeof r[c] === 'object' ? JSON.stringify(r[c]) : (r[c] ?? ''))}</td>`).join('') + '</tr>').join('');
+      bodyEl.innerHTML = `<table style="width:100%;border-collapse:collapse;">${headRow}${bodyRows}</table>`;
     });
   }
 
@@ -987,18 +1032,23 @@
   async function openJsonTab(absPath, mission) {
     const id = 'pipilot://json/' + (mission.id || 'g') + ':' + absPath;
     openVirtualReadonlyTab({ id, name: absPath.split(/[\\/]/).pop(), icon: '🧾' }, async (container) => {
-      container.style.cssText = 'width:100%;height:100%;background:var(--bg,#16161a);overflow:auto;padding:14px 16px;font-family:var(--font-mono);font-size:11.5px;line-height:1.55;color:var(--text);';
+      container.style.cssText = 'width:100%;height:100%;background:var(--bg,#16161a);display:flex;flex-direction:column;overflow:hidden;';
+      container.innerHTML = `
+        <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-mid);font-family:var(--font-mono);flex-shrink:0;">${escapeHtml(absPath)}</div>
+        <div style="flex:1;overflow:auto;padding:14px 18px;" data-role="body"></div>
+      `;
+      const bodyEl = container.querySelector('[data-role="body"]');
       let raw = '';
       try {
         const r = await api.files.read(absPath);
         raw = r?.content || (typeof r === 'string' ? r : '');
       } catch (err) {
-        container.innerHTML = `<div style="color:var(--error);">Read failed: ${escapeHtml(err?.message || String(err))}</div>`;
+        bodyEl.innerHTML = `<div style="color:var(--error);">Read failed: ${escapeHtml(err?.message || String(err))}</div>`;
         return;
       }
       let pretty = raw;
       try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch {}
-      container.innerHTML = `<pre style="margin:0;white-space:pre-wrap;word-wrap:break-word;">${escapeHtml(pretty)}</pre>`;
+      bodyEl.innerHTML = `<pre style="margin:0;white-space:pre-wrap;word-wrap:break-word;font-family:var(--font-mono);font-size:11.5px;line-height:1.55;color:var(--text);">${escapeHtml(pretty)}</pre>`;
     });
   }
 

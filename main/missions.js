@@ -153,6 +153,14 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
   // and replay the full buffer of events.
   // id -> { mission, startedAt, agent, events, status, finalText, toolCallCount, _persistQueue, _persistTimer, _persistFile }
   const inFlight = new Map();
+  // missionId -> { startedAt, pendingMessages: [] }
+  // Set at the top of fireMission BEFORE any awaits so a send-message
+  // arriving during the setup phase (PAT check / git ensure / clone /
+  // auth.cfg write — typically 5-30s) can be queued instead of
+  // racing to start a duplicate mission run. Cleared once the run
+  // moves into inFlight, OR on an early-return from fireMission
+  // (PAT missing, clone failed, etc.).
+  const preparing = new Map();
 
   // ── Disk persistence ──────────────────────────────────────────
   // Each run gets one JSONL file at:
@@ -552,9 +560,18 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
   async function fireMission(mission, opts = {}) {
     if (!mission.enabled && !opts.force) return { ok: false, reason: 'disabled' };
     if (inFlight.has(mission.id)) return { ok: false, reason: 'already-running' };
+    if (preparing.has(mission.id)) return { ok: false, reason: 'preparing' };
     if (!opts.force && mission.cooldownMs && Date.now() - (mission.lastRunAt || 0) < mission.cooldownMs) {
       return { ok: false, reason: 'cooldown' };
     }
+    // Reserve the mission id BEFORE any awaits so concurrent
+    // send-message calls during clone / setup queue against this
+    // entry instead of racing into a second fireMission.
+    preparing.set(mission.id, { startedAt: Date.now(), pendingMessages: [] });
+    // Tell the renderer setup is in progress — UI flips status pill
+    // to "Preparing..." so the user knows the mission is active even
+    // before the agent loop starts.
+    broadcast('missions:status', { id: mission.id, state: 'preparing', startedAt: Date.now() });
 
     let pat = null;
     if (mission.target?.kind === 'cloud') {
@@ -564,6 +581,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         await patchStats(mission, { lastRunAt: Date.now(), lastRunStatus: 'error', lastRunMessage: summary, runCount: (mission.runCount || 0) + 1 });
         await appendLog(mission, 'error', summary);
         broadcast('missions:status', { id: mission.id, state: 'idle', status: 'error', summary });
+        preparing.delete(mission.id);
         return { ok: false, reason: 'no-pat' };
       }
     }
@@ -587,6 +605,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
           missing: ['git'],
           links: { git: 'https://git-scm.com/downloads' },
         });
+        preparing.delete(mission.id);
         return { ok: false, reason: 'missing-git' };
       }
 
@@ -618,6 +637,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
           await patchStats(mission, { lastRunAt: Date.now(), lastRunStatus: 'error', lastRunMessage: summary, runCount: (mission.runCount || 0) + 1 });
           await appendLog(mission, 'error', summary);
           broadcast('missions:status', { id: mission.id, state: 'idle', status: 'error', summary });
+          preparing.delete(mission.id);
           return { ok: false, reason: 'clone-failed', error: summary };
         }
         // Committer identity for this clone only — `--local` writes to
@@ -636,6 +656,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         await patchStats(mission, { lastRunAt: Date.now(), lastRunStatus: 'error', lastRunMessage: summary, runCount: (mission.runCount || 0) + 1 });
         await appendLog(mission, 'error', summary);
         broadcast('missions:status', { id: mission.id, state: 'idle', status: 'error', summary });
+        preparing.delete(mission.id);
         return { ok: false, reason: 'clone-prep-failed', error: summary };
       }
     }
@@ -701,6 +722,15 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       cloudPr: false,
       githubPat: null,         // remembered (for re-clone on cloud follow-ups)
     };
+    // Drain any messages typed during the preparing phase — append
+    // them to runState.pendingMessages so they fire as follow-up
+    // turns after turn 0 completes. Then evict the preparing entry.
+    const prep = preparing.get(mission.id);
+    if (prep && Array.isArray(prep.pendingMessages) && prep.pendingMessages.length) {
+      runState.pendingMessages.push(...prep.pendingMessages);
+    }
+    preparing.delete(mission.id);
+
     inFlight.set(mission.id, runState);
     persistInit(runState);
 
@@ -1073,6 +1103,15 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
   ipcMain.handle('missions:send-message', async (_e, { id, message, projectPath } = {}) => {
     if (!id || !message || !String(message).trim()) {
       return { ok: false, error: 'id and non-empty message required' };
+    }
+    // Mission is in the setup phase (clone / auth.cfg / etc.) — queue
+    // the message against the preparing entry. It'll be drained into
+    // pendingMessages when the run transitions to in-flight.
+    const prep = preparing.get(id);
+    if (prep) {
+      prep.pendingMessages.push(String(message));
+      broadcast('missions:queued', { missionId: id, queueLength: prep.pendingMessages.length });
+      return { ok: true, queued: true, queueLength: prep.pendingMessages.length, phase: 'preparing' };
     }
     let rs = inFlight.get(id);
     if (!rs) {
