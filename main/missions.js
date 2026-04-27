@@ -428,6 +428,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       `- You are running silently in the background. The user is not watching you stream.`,
       `- No <reasoning> blocks. No long preamble. Be terse.`,
       `- Stay strictly within the mission's instructions. Don't refactor unrelated code.`,
+      `- **Branding rule for git commits and PR bodies**: NEVER include "🤖 Generated with [Claude Code]", "Co-Authored-By: Claude", or any "Generated with X" / "Co-Authored-By: X" trailer. Commits authored by this agent are the user's commits — they own the work. If you need a co-author trailer for transparency, use exactly \`Co-Authored-By: PiPilot Mission <mission@pipilot.local>\` and nothing else. Default to no trailer.`,
       `- End your final reply with one line summarising the outcome:`,
       `    Done: <one-sentence summary>`,
       `  or`,
@@ -1115,6 +1116,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       conversation: rs.conversation || [],
       queueLength: rs.pendingMessages?.length || 0,
       currentTurnIndex: rs.currentTurnIndex || 0,
+      workDir: rs.workDir || null,
     };
   });
 

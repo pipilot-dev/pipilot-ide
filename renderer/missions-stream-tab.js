@@ -104,6 +104,11 @@
 .pp-mst-pill-name { font-weight:500; color:var(--text-strong); font-family:var(--font-mono); font-size:11px; }
 .pp-mst-pill-sep { color:var(--text-dim); }
 .pp-mst-pill-preview { color:var(--text-mid); font-family:var(--font-mono); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:480px; }
+.pp-mst-pill-clickable { cursor:pointer; }
+.pp-mst-pill-clickable:hover { border-color:rgba(255,107,53,0.45); background:rgba(255,107,53,0.07); }
+.pp-mst-pill-clickable:hover .pp-mst-pill-name { color:var(--accent-light,#ffb38a); }
+.pp-mst-pill-open { color:var(--text-dim); font-size:13px; margin-left:auto; padding-left:6px; opacity:0.6; transition:all 0.15s; }
+.pp-mst-pill-clickable:hover .pp-mst-pill-open { color:var(--accent-light,#ffb38a); opacity:1; transform:translateY(-1px); }
 
 .pp-mst-event-time { font-size:10px; color:var(--text-dim); font-family:var(--font-mono); margin-right:6px; opacity:0.6; }
 
@@ -212,7 +217,7 @@
           class="pp-mst-input"
           data-role="input"
           rows="1"
-          placeholder="Send a follow-up message to this mission… (Enter to send, Shift+Enter for newline)"></textarea>
+          placeholder="Reply to this mission…"></textarea>
         <button class="pp-mst-btn primary pp-mst-send" data-act="send">Send</button>
       </div>
       <div class="pp-mst-queue" data-role="queue" hidden></div>
@@ -281,11 +286,22 @@
         pre.appendChild(btn);
       });
     }
-    // text_delta fires per token (dozens of times per second) for live
-    // streaming feel — keep it cheap with textContent. text fires at
-    // block_stop with the canonical body — promote that to full
-    // markdown rendering with copy-to-clipboard buttons on every
-    // fenced block.
+    // Live markdown rendering — same approach the chat panel uses.
+    // Every text_delta accumulates into dataset.text and re-renders
+    // the WHOLE block as markdown. Cheap enough for streaming because
+    // the block typically stays under a few KB; render is rAF-throttled
+    // so we never reflow more than once per frame.
+    let _renderRaf = null;
+    function flushMd(el) {
+      _renderRaf = null;
+      if (!el || !el.isConnected) return;
+      el.innerHTML = renderMd(el.dataset.text || '');
+      attachCopyButtons(el);
+    }
+    function scheduleMd(el) {
+      if (_renderRaf) return;
+      _renderRaf = requestAnimationFrame(() => flushMd(el));
+    }
     function appendStreamingText(text, kind) {
       if (!text) return;
       if (empty) empty.style.display = 'none';
@@ -298,13 +314,13 @@
       }
       if (kind === 'delta') {
         activeTextEl.dataset.text = (activeTextEl.dataset.text || '') + text;
-        // textContent for streaming speed (no marked parse per token).
-        activeTextEl.textContent = activeTextEl.dataset.text;
+        scheduleMd(activeTextEl);
       } else {
-        // Block finalised — render as markdown + add copy buttons.
+        // Final block — replace with canonical body and render once
+        // immediately (no rAF defer, so the next event lands on a
+        // settled DOM).
         activeTextEl.dataset.text = text;
-        activeTextEl.innerHTML = renderMd(text);
-        attachCopyButtons(activeTextEl);
+        flushMd(activeTextEl);
         delete activeTextEl.dataset.streaming;
       }
       scrollToBottom();
@@ -312,15 +328,33 @@
 
     function appendToolCall(call) {
       if (empty) empty.style.display = 'none';
-      activeTextEl = null;   // close any open text block
+      activeTextEl = null;
       const pill = document.createElement('div');
       pill.className = 'pp-mst-pill running';
       pill.dataset.toolId = call.id || ('t-' + Math.random().toString(36).slice(2));
+      // File-mutating tools get a clickable pill — opens the file in
+      // a structured viewer (BugBot findings, etc.) or in the editor.
+      const path = call.input?.file_path || call.input?.filepath || call.input?.path || call.input?.target_file;
+      const fileTools = new Set(['Write','Edit','MultiEdit','create_file','edit_file','write_file','edit_file_patch']);
+      const baseToolName = (call.name || '').replace(/^mcp__[a-zA-Z0-9_-]+__/, '');
+      const isFileTool = fileTools.has(call.name) || fileTools.has(baseToolName);
+      if (path && isFileTool) {
+        pill.classList.add('pp-mst-pill-clickable');
+        pill.dataset.filePath = path;
+        pill.title = 'Open ' + path;
+      }
       pill.innerHTML = `
         <span class="pp-mst-pill-icon">${SVG.spin}</span>
         <span class="pp-mst-pill-name">${escapeHtml(call.name || 'tool')}</span>
         ${call.input ? `<span class="pp-mst-pill-sep">·</span><span class="pp-mst-pill-preview">${escapeHtml(previewFor(call.name, call.input))}</span>` : ''}
+        ${path && isFileTool ? `<span class="pp-mst-pill-open" aria-hidden="true">↗</span>` : ''}
       `;
+      if (path && isFileTool) {
+        pill.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openWrittenFile(path, mission);
+        });
+      }
       body.appendChild(pill);
       toolElById.set(pill.dataset.toolId, pill);
       toolCount++;
@@ -712,9 +746,304 @@
     });
   }
 
+  // ── Open a file written by a mission ────────────────────────────
+  // Routes:
+  //   - .pipilot/bug-findings.jsonl → structured BugBot viewer
+  //   - .jsonl  → generic JSONL table viewer
+  //   - .json / .md / source — open in editor
+  async function openWrittenFile(filePath, mission) {
+    const sep = (filePath.includes('\\') ? '\\' : '/');
+    const baseName = filePath.split(/[\\/]/).pop();
+
+    // Resolve absolute path. For local missions it's projectPath +
+    // path; for cloud it's workDir (the scratch clone). We ask main
+    // for the latest workDir so cloud missions just work.
+    let absPath = filePath;
+    const isAbs = /^([a-zA-Z]:\\|\/|\\\\)/.test(filePath);
+    if (!isAbs) {
+      let workDir = mission.target?.kind === 'local' ? mission.target.projectPath : null;
+      if (!workDir) {
+        try {
+          const st = await api.missions.getState(mission.id);
+          if (st?.workDir) workDir = st.workDir;
+        } catch {}
+      }
+      if (workDir) {
+        const trimmed = filePath.replace(/^[.\\/]+/, '');
+        absPath = workDir.replace(/[\\/]+$/, '') + sep + trimmed;
+      }
+    }
+
+    // BugBot findings → structured viewer
+    if (baseName === 'bug-findings.jsonl' || /\.bug-findings\.jsonl$/.test(baseName)) {
+      return openBugFindingsTab(absPath, mission);
+    }
+    // Other JSONL → generic table viewer
+    if (baseName.endsWith('.jsonl')) {
+      return openJsonlTab(absPath, mission);
+    }
+    // JSON → pretty-printed
+    if (baseName.endsWith('.json')) {
+      return openJsonTab(absPath, mission);
+    }
+    // Anything else → editor
+    try {
+      const editor = window.PiPilot?.editor;
+      if (editor?.openFile) await editor.openFile(absPath);
+    } catch (err) {
+      bus.emit('toast:show', { type: 'warn', message: 'Could not open file: ' + (err?.message || err) });
+    }
+  }
+
+  // Generic helper: open a virtual tab and render arbitrary content
+  // into it. Returns the container so callers can keep populating
+  // asynchronously.
+  function openVirtualReadonlyTab({ id, name, icon = '📋' }, render) {
+    const editor = window.PiPilot?.editor;
+    if (!editor?.openVirtualTab) return null;
+    editor.openVirtualTab({
+      id,
+      name,
+      icon,
+      mount: (container) => {
+        try { render(container); } catch (err) {
+          container.innerHTML = `<div style="padding:24px;color:var(--error);font-family:var(--font-mono);font-size:12px;">Render failed: ${escapeHtml(err?.message || String(err))}</div>`;
+        }
+        return () => {};
+      },
+    });
+  }
+
+  // ── BugBot findings viewer ─────────────────────────────────────
+  // Reads the JSONL, groups by file path, sorts by severity (errors
+  // first), renders each finding as a card with severity dot, line:col
+  // anchor (clickable → jumps to the file), code label, and message.
+  async function openBugFindingsTab(absPath, mission) {
+    const id = 'pipilot://bugbot-findings/' + (mission.id || 'global') + ':' + absPath;
+    openVirtualReadonlyTab({ id, name: 'Bug findings · ' + (mission?.name || 'BugBot'), icon: '🐛' }, async (container) => {
+      container.style.cssText = 'width:100%;height:100%;background:var(--bg,#16161a);overflow:hidden;display:flex;flex-direction:column;';
+      container.innerHTML = `
+        <div class="pp-bf-head">
+          <div>
+            <div class="pp-bf-title">🐛 Bug findings</div>
+            <div class="pp-bf-sub" data-role="sub">Loading…</div>
+          </div>
+          <div class="pp-bf-actions">
+            <button class="pp-mst-btn" data-act="reveal">📂 Reveal file</button>
+            <button class="pp-mst-btn" data-act="reload">↻ Reload</button>
+          </div>
+        </div>
+        <div class="pp-bf-body" data-role="body"></div>
+      `;
+      const sub = container.querySelector('[data-role="sub"]');
+      const bodyEl = container.querySelector('[data-role="body"]');
+
+      async function load() {
+        bodyEl.innerHTML = `<div class="pp-bf-empty">Reading…</div>`;
+        let raw = '';
+        try {
+          const r = await api.files.read(absPath);
+          raw = r?.content || (typeof r === 'string' ? r : '');
+        } catch (err) {
+          bodyEl.innerHTML = `<div class="pp-bf-empty">Couldn't read file: ${escapeHtml(err?.message || String(err))}</div>`;
+          return;
+        }
+        if (!raw.trim()) {
+          bodyEl.innerHTML = `<div class="pp-bf-empty">Findings file exists but is empty.</div>`;
+          sub.textContent = '0 findings';
+          return;
+        }
+        const items = [];
+        for (const line of raw.split(/\r?\n/)) {
+          const t = line.trim(); if (!t) continue;
+          try {
+            const o = JSON.parse(t);
+            if (o && o.path && o.message) items.push(o);
+          } catch {}
+        }
+        if (!items.length) {
+          bodyEl.innerHTML = `<div class="pp-bf-empty">File is JSONL but no valid finding records.</div>`;
+          return;
+        }
+        const sevOrder = { error: 0, warning: 1, info: 2 };
+        const groups = new Map();
+        for (const it of items) {
+          const list = groups.get(it.path) || [];
+          list.push(it);
+          groups.set(it.path, list);
+        }
+        for (const list of groups.values()) {
+          list.sort((a, b) => (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9) || (a.line || 0) - (b.line || 0));
+        }
+        const counts = {
+          error: items.filter(i => i.severity === 'error').length,
+          warning: items.filter(i => i.severity === 'warning').length,
+          info: items.filter(i => i.severity === 'info').length,
+        };
+        sub.innerHTML = `<span class="pp-bf-pill err">${counts.error} error${counts.error === 1 ? '' : 's'}</span> · <span class="pp-bf-pill warn">${counts.warning} warning${counts.warning === 1 ? '' : 's'}</span> · <span class="pp-bf-pill info">${counts.info} info</span> · ${items.length} total in ${groups.size} file${groups.size === 1 ? '' : 's'}`;
+        bodyEl.innerHTML = '';
+        for (const [filePath, list] of groups.entries()) {
+          const group = document.createElement('div');
+          group.className = 'pp-bf-group';
+          const errN = list.filter(i => i.severity === 'error').length;
+          const warnN = list.filter(i => i.severity === 'warning').length;
+          group.innerHTML = `
+            <div class="pp-bf-group-head">
+              <span class="pp-bf-file" data-act="open-file" data-path="${escapeHtml(filePath)}">${escapeHtml(filePath)}</span>
+              <span class="pp-bf-group-counts">${errN ? `<span class="pp-bf-pill err">${errN}E</span>` : ''}${warnN ? `<span class="pp-bf-pill warn">${warnN}W</span>` : ''}<span class="pp-bf-pill total">${list.length}</span></span>
+            </div>
+            <div class="pp-bf-items"></div>
+          `;
+          const itemsHost = group.querySelector('.pp-bf-items');
+          for (const it of list) {
+            const card = document.createElement('div');
+            card.className = 'pp-bf-card sev-' + (it.severity || 'info');
+            card.innerHTML = `
+              <span class="pp-bf-sev-dot"></span>
+              <div class="pp-bf-card-body">
+                <div class="pp-bf-card-head">
+                  <span class="pp-bf-loc" data-act="open-line" data-path="${escapeHtml(it.path)}" data-line="${it.line || 1}">${escapeHtml(filePath.split(/[\\/]/).pop())}:${it.line || 1}${it.column ? ':' + it.column : ''}</span>
+                  ${it.code ? `<span class="pp-bf-code">${escapeHtml(it.code)}</span>` : ''}
+                </div>
+                <div class="pp-bf-msg">${escapeHtml(it.message || '')}</div>
+              </div>`;
+            itemsHost.appendChild(card);
+          }
+          bodyEl.appendChild(group);
+        }
+        // Wire click → jump to file
+        bodyEl.querySelectorAll('[data-act="open-file"]').forEach(el => {
+          el.addEventListener('click', () => {
+            tryOpenFromMission(el.dataset.path, null, mission);
+          });
+        });
+        bodyEl.querySelectorAll('[data-act="open-line"]').forEach(el => {
+          el.addEventListener('click', () => {
+            const line = parseInt(el.dataset.line || '1', 10);
+            tryOpenFromMission(el.dataset.path, line, mission);
+          });
+        });
+      }
+      container.querySelector('[data-act="reload"]').addEventListener('click', load);
+      container.querySelector('[data-act="reveal"]').addEventListener('click', () => {
+        try { api.shell?.showItemInFolder?.(absPath); } catch {}
+      });
+      load();
+    });
+  }
+
+  async function tryOpenFromMission(filePath, line, mission) {
+    if (!filePath) return;
+    const isAbs = /^([a-zA-Z]:\\|\/|\\\\)/.test(filePath);
+    let abs = filePath;
+    if (!isAbs) {
+      let workDir = mission.target?.kind === 'local' ? mission.target.projectPath : null;
+      if (!workDir) {
+        try { const st = await api.missions.getState(mission.id); if (st?.workDir) workDir = st.workDir; } catch {}
+      }
+      if (workDir) {
+        const sep = workDir.includes('\\') ? '\\' : '/';
+        abs = workDir.replace(/[\\/]+$/, '') + sep + filePath.replace(/^[.\\/]+/, '');
+      }
+    }
+    try {
+      const editor = window.PiPilot?.editor;
+      if (editor?.openFile) await editor.openFile(abs, { line: line || undefined });
+    } catch (err) {
+      bus.emit('toast:show', { type: 'warn', message: 'Could not open: ' + (err?.message || err) });
+    }
+  }
+
+  // ── Generic JSONL table viewer ─────────────────────────────────
+  async function openJsonlTab(absPath, mission) {
+    const id = 'pipilot://jsonl/' + (mission.id || 'g') + ':' + absPath;
+    openVirtualReadonlyTab({ id, name: absPath.split(/[\\/]/).pop(), icon: '📋' }, async (container) => {
+      container.style.cssText = 'width:100%;height:100%;background:var(--bg,#16161a);overflow:auto;font-family:var(--font-mono);font-size:11.5px;padding:14px 16px;';
+      container.innerHTML = `<div style="color:var(--text-dim);">Loading ${escapeHtml(absPath)}…</div>`;
+      let raw = '';
+      try {
+        const r = await api.files.read(absPath);
+        raw = r?.content || (typeof r === 'string' ? r : '');
+      } catch (err) {
+        container.innerHTML = `<div style="color:var(--error);">Read failed: ${escapeHtml(err?.message || String(err))}</div>`;
+        return;
+      }
+      const rows = [];
+      const cols = new Set();
+      for (const line of raw.split(/\r?\n/)) {
+        const t = line.trim(); if (!t) continue;
+        try { const o = JSON.parse(t); rows.push(o); Object.keys(o || {}).forEach(k => cols.add(k)); } catch {}
+      }
+      const colList = Array.from(cols);
+      if (!rows.length) { container.innerHTML = `<div style="color:var(--text-dim);">Empty or unparseable JSONL.</div>`; return; }
+      const head = '<tr>' + colList.map(c => `<th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);color:var(--text-mid);font-weight:600;">${escapeHtml(c)}</th>`).join('') + '</tr>';
+      const bodyRows = rows.map(r => '<tr>' + colList.map(c => `<td style="padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.04);vertical-align:top;color:var(--text);">${escapeHtml(typeof r[c] === 'object' ? JSON.stringify(r[c]) : (r[c] ?? ''))}</td>`).join('') + '</tr>').join('');
+      container.innerHTML = `<div style="color:var(--text-mid);font-size:11px;margin-bottom:8px;">${rows.length} record${rows.length === 1 ? '' : 's'} · ${colList.length} columns · ${escapeHtml(absPath)}</div>` +
+        `<table style="width:100%;border-collapse:collapse;">${head}${bodyRows}</table>`;
+    });
+  }
+
+  // ── JSON viewer (pretty-print + copy) ─────────────────────────
+  async function openJsonTab(absPath, mission) {
+    const id = 'pipilot://json/' + (mission.id || 'g') + ':' + absPath;
+    openVirtualReadonlyTab({ id, name: absPath.split(/[\\/]/).pop(), icon: '🧾' }, async (container) => {
+      container.style.cssText = 'width:100%;height:100%;background:var(--bg,#16161a);overflow:auto;padding:14px 16px;font-family:var(--font-mono);font-size:11.5px;line-height:1.55;color:var(--text);';
+      let raw = '';
+      try {
+        const r = await api.files.read(absPath);
+        raw = r?.content || (typeof r === 'string' ? r : '');
+      } catch (err) {
+        container.innerHTML = `<div style="color:var(--error);">Read failed: ${escapeHtml(err?.message || String(err))}</div>`;
+        return;
+      }
+      let pretty = raw;
+      try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch {}
+      container.innerHTML = `<pre style="margin:0;white-space:pre-wrap;word-wrap:break-word;">${escapeHtml(pretty)}</pre>`;
+    });
+  }
+
+  // ── BugBot findings viewer styles ──────────────────────────────
+  if (!document.getElementById('pp-bf-styles')) {
+    const s = document.createElement('style');
+    s.id = 'pp-bf-styles';
+    s.textContent = `
+.pp-bf-head { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:14px; flex-shrink:0; }
+.pp-bf-title { font-size:14px; font-weight:600; color:var(--text-strong); }
+.pp-bf-sub { font-size:11.5px; color:var(--text-mid); margin-top:3px; font-family:var(--font-mono); }
+.pp-bf-actions { display:flex; gap:6px; }
+.pp-bf-body { flex:1; overflow:auto; padding:14px 18px 24px; display:flex; flex-direction:column; gap:14px; }
+.pp-bf-empty { text-align:center; color:var(--text-dim); padding:30px 12px; font-size:12px; }
+.pp-bf-pill { display:inline-block; padding:1px 7px; border-radius:9px; font-size:10px; font-family:var(--font-mono); font-weight:500; letter-spacing:0.04em; vertical-align:1px; margin:0 2px; }
+.pp-bf-pill.err { background:rgba(229,83,75,0.12); color:var(--error,#e5534b); border:1px solid rgba(229,83,75,0.32); }
+.pp-bf-pill.warn { background:rgba(224,160,74,0.12); color:#e0a04a; border:1px solid rgba(224,160,74,0.32); }
+.pp-bf-pill.info { background:rgba(108,182,255,0.12); color:var(--info,#6cb6ff); border:1px solid rgba(108,182,255,0.32); }
+.pp-bf-pill.total { background:rgba(255,255,255,0.06); color:var(--text-mid); border:1px solid rgba(255,255,255,0.12); }
+.pp-bf-group { background:var(--surface,#1c1c21); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+.pp-bf-group-head { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:rgba(255,255,255,0.02); border-bottom:1px solid var(--border); }
+.pp-bf-file { font-family:var(--font-mono); font-size:12px; color:var(--text-strong); cursor:pointer; transition:color 0.12s; }
+.pp-bf-file:hover { color:var(--accent-light,#ffb38a); text-decoration:underline; }
+.pp-bf-group-counts { display:flex; align-items:center; gap:4px; }
+.pp-bf-items { display:flex; flex-direction:column; }
+.pp-bf-card { display:flex; gap:10px; padding:10px 14px; border-bottom:1px solid rgba(255,255,255,0.04); align-items:flex-start; }
+.pp-bf-card:last-child { border-bottom:none; }
+.pp-bf-sev-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; margin-top:6px; }
+.pp-bf-card.sev-error .pp-bf-sev-dot { background:var(--error,#e5534b); box-shadow:0 0 0 3px rgba(229,83,75,0.15); }
+.pp-bf-card.sev-warning .pp-bf-sev-dot { background:#e0a04a; box-shadow:0 0 0 3px rgba(224,160,74,0.15); }
+.pp-bf-card.sev-info .pp-bf-sev-dot { background:var(--info,#6cb6ff); box-shadow:0 0 0 3px rgba(108,182,255,0.15); }
+.pp-bf-card-body { flex:1; min-width:0; }
+.pp-bf-card-head { display:flex; align-items:center; gap:8px; margin-bottom:3px; }
+.pp-bf-loc { font-family:var(--font-mono); font-size:11px; color:var(--accent-light,#ffb38a); cursor:pointer; }
+.pp-bf-loc:hover { text-decoration:underline; }
+.pp-bf-code { font-family:var(--font-mono); font-size:10px; padding:1px 6px; border-radius:4px; background:rgba(255,255,255,0.06); color:var(--text-mid); letter-spacing:0.04em; }
+.pp-bf-msg { font-size:12.5px; line-height:1.55; color:var(--text); user-select:text; }
+`;
+    document.head.appendChild(s);
+  }
+
   // Public API
   window.PiPilot = window.PiPilot || {};
   window.PiPilot.missions = window.PiPilot.missions || {};
   window.PiPilot.missions.openStreamTab = openMissionTab;
   window.PiPilot.missions.openLog = openMissionLog;
+  window.PiPilot.missions.openWrittenFile = openWrittenFile;
 })();
