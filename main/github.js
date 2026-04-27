@@ -109,11 +109,48 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     }
   });
 
-  // Verify the connection — used by the PAT modal too.
+  // Verify the connection — used by the PAT modal too. Reads
+  // X-OAuth-Scopes from the response so we can warn about missing
+  // `repo` scope (private repos won't clone with public_repo only).
   ipcMain.handle('github:whoami', async () => {
     try {
-      const u = await authedFetch('/user');
-      return { ok: true, login: u.login, name: u.name, avatar: u.avatar_url };
+      const pat = await getSecret('githubPat');
+      if (!pat) return { ok: false, error: 'GitHub not connected', status: 0 };
+      const res = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: 'token ' + pat,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'PiPilot-IDE',
+        },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        return { ok: false, error: `GitHub ${res.status}: ${text.slice(0, 200) || res.statusText}`, status: res.status };
+      }
+      const u = await res.json();
+      // X-OAuth-Scopes only populates for classic PATs. Fine-grained
+      // PATs return an empty header — we infer their kind from token
+      // prefix (github_pat_).
+      const scopesHeader = res.headers.get('x-oauth-scopes') || '';
+      const scopes = scopesHeader.split(',').map(s => s.trim()).filter(Boolean);
+      const fineGrained = String(pat).startsWith('github_pat_');
+      // For classic PATs we want `repo` for private repo access.
+      // `public_repo` only covers public repos. Fine-grained tokens
+      // are checked per-repo by GitHub's permission system, so we
+      // can't pre-assess them here — surface a friendly note.
+      const canPrivate = fineGrained
+        ? null   // unknown — depends on per-repo permissions
+        : scopes.includes('repo');
+      return {
+        ok: true,
+        login: u.login,
+        name: u.name,
+        avatar: u.avatar_url,
+        scopes,
+        fineGrained,
+        canAccessPrivate: canPrivate,
+      };
     } catch (err) {
       return { ok: false, error: err?.message || String(err), status: err?.status };
     }

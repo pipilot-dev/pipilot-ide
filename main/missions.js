@@ -633,7 +633,17 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
             .replace(/https:\/\/[^@]+@/g, 'https://***@');
           const lines = sanitised.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
           const lastError = lines.reverse().find(l => /^(fatal|error|remote):/i.test(l)) || lines[0] || sanitised;
-          const summary = 'Clone failed: ' + lastError.slice(0, 800);
+          // Detect the common private-repo-permission case so we can
+          // give a clearer hint than git's raw "Repository not found".
+          let summary = 'Clone failed: ' + lastError.slice(0, 800);
+          if (/Repository not found|404|403/i.test(lastError)) {
+            summary += '\n\nIf this is a PRIVATE repo: your PAT may lack access. ' +
+              'Classic PATs need `repo` scope. Fine-grained PATs need this exact repo selected ' +
+              'with Contents: Read/Write + Pull Requests: Read/Write permissions.';
+          } else if (/authentication failed|401|bad credentials/i.test(lastError)) {
+            summary += '\n\nThe PAT was rejected by GitHub — it may be expired or revoked. ' +
+              'Regenerate at github.com/settings/tokens and reconnect via Missions → Connect GitHub.';
+          }
           await patchStats(mission, { lastRunAt: Date.now(), lastRunStatus: 'error', lastRunMessage: summary, runCount: (mission.runCount || 0) + 1 });
           await appendLog(mission, 'error', summary);
           broadcast('missions:status', { id: mission.id, state: 'idle', status: 'error', summary });

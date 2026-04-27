@@ -558,11 +558,15 @@
         <div class="pp-me-body">
           <div class="pp-me-field">
             <label class="pp-me-label">Personal access token</label>
-            <input class="pp-me-input" type="password" id="pp-pat-input" placeholder="ghp_..." autocomplete="off" />
+            <input class="pp-me-input" type="password" id="pp-pat-input" placeholder="ghp_... or github_pat_..." autocomplete="off" />
             <div class="pp-me-help">
-              Used by cloud missions to read/edit GitHub repositories.
-              Stored encrypted via your OS keychain (DPAPI on Windows, Keychain on macOS).
-              Required scopes: <code>repo</code> (and <code>workflow</code> if missions touch CI files).
+              Used by cloud missions to read/clone/push GitHub repositories.
+              Stored at <code>${escapeHtml(typeof process !== 'undefined' ? '' : '')}~/PiPilot/connectors.jsonl</code>.<br/>
+              <strong>For private repos you need:</strong>
+              <ul style="margin:4px 0 0;padding-left:18px;">
+                <li><strong>Classic PAT</strong> — <code>repo</code> scope (full control)</li>
+                <li><strong>Fine-grained PAT</strong> — Repository access: select the repos. Permissions: Contents <em>Read & Write</em>, Pull Requests <em>Read & Write</em>, Metadata <em>Read</em></li>
+              </ul>
             </div>
           </div>
           <div class="pp-me-help">
@@ -598,13 +602,37 @@
       const tok = input.value.trim();
       errEl.textContent = '';
       if (!tok) { errEl.textContent = 'Token required'; return; }
-      // Verify against api.github.com/user
+      // Verify directly first to fail fast with a clear error.
       try {
-        const res = await fetch('https://api.github.com/user', { headers: { Authorization: 'token ' + tok, 'User-Agent': 'PiPilot' } });
-        if (!res.ok) { errEl.textContent = `GitHub rejected the token (${res.status})`; return; }
+        const scopesRes = await fetch('https://api.github.com/user', {
+          headers: { Authorization: 'token ' + tok, 'User-Agent': 'PiPilot', Accept: 'application/vnd.github+json' },
+        });
+        if (!scopesRes.ok) {
+          errEl.textContent = `GitHub rejected the token (${scopesRes.status})`;
+          return;
+        }
+        const scopesHeader = scopesRes.headers.get('x-oauth-scopes') || '';
+        const scopes = scopesHeader.split(',').map(s => s.trim()).filter(Boolean);
+        const fineGrained = tok.startsWith('github_pat_');
+        // Block classic PATs without `repo` scope — they can't clone
+        // private repos. Fine-grained tokens are gated per-repo by
+        // GitHub itself; we let those through and let the actual
+        // clone surface a clear 403 if a specific repo isn't granted.
+        if (!fineGrained && scopes.length && !scopes.includes('repo')) {
+          const hasPublicOnly = scopes.includes('public_repo');
+          errEl.textContent = hasPublicOnly
+            ? 'Token has only public_repo scope — private repos won\'t work. Regenerate with the full `repo` scope.'
+            : 'Token is missing the `repo` scope — required for cloning. Regenerate at github.com/settings/tokens.';
+          return;
+        }
         await api.secrets.set('githubPat', tok);
         patIsSet = true;
-        bus.emit('toast:show', { type: 'ok', message: 'GitHub connected' });
+        // Friendly success message that names the user + scope situation.
+        const userInfo = await scopesRes.json().catch(() => ({}));
+        const note = fineGrained
+          ? '(fine-grained — make sure each target repo grants Contents: Read/Write + Pull Requests: Read/Write)'
+          : `(scopes: ${scopes.join(', ') || '?'})`;
+        bus.emit('toast:show', { type: 'ok', message: `GitHub connected as ${userInfo.login || 'user'} ${note}` });
         close();
         renderPanel(panelContainer);
       } catch (err) {
