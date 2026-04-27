@@ -107,8 +107,18 @@
 
 .pp-mst-event-time { font-size:10px; color:var(--text-dim); font-family:var(--font-mono); margin-right:6px; opacity:0.6; }
 
-.pp-mst-foot { padding:10px 16px; border-top:1px solid var(--border); display:flex; align-items:center; gap:8px; flex-shrink:0; background:var(--surface,#1c1c21); }
+.pp-mst-foot { padding:8px 14px; border-top:1px solid var(--border); display:flex; align-items:center; gap:6px; flex-shrink:0; background:var(--surface,#1c1c21); flex-wrap:wrap; }
 .pp-mst-foot-spacer { flex:1; }
+.pp-mst-input-row { display:flex; align-items:flex-end; gap:8px; padding:10px 14px 12px; border-top:1px solid var(--border); background:var(--surface,#1c1c21); flex-shrink:0; }
+.pp-mst-input { flex:1; resize:none; background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:8px; padding:9px 12px; color:var(--text-strong); font-family:var(--font-sans); font-size:13px; line-height:1.5; outline:none; transition:border-color 0.15s; min-height:38px; max-height:160px; }
+.pp-mst-input:focus { border-color:var(--accent); }
+.pp-mst-input::placeholder { color:var(--text-dim); }
+.pp-mst-send { align-self:flex-end; }
+.pp-mst-queue { padding:6px 14px 8px; border-top:1px dashed rgba(108,182,255,0.3); background:rgba(108,182,255,0.05); font-size:11px; color:var(--info,#6cb6ff); font-family:var(--font-mono); display:flex; align-items:center; gap:6px; }
+.pp-mst-queue strong { color:var(--info,#6cb6ff); font-weight:600; }
+.pp-mst-msg { padding:8px 12px; margin:6px 0; border-radius:8px; font-size:13px; line-height:1.55; max-width:78%; align-self:flex-end; background:rgba(255,107,53,0.12); border:1px solid rgba(255,107,53,0.28); color:var(--text-strong); }
+.pp-mst-msg.user { align-self:flex-end; }
+.pp-mst-msg-head { font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent-light,#ffb38a); font-family:var(--font-mono); margin-bottom:3px; opacity:0.7; }
 .pp-mst-btn { background:transparent; border:1px solid var(--border); color:var(--text-mid); padding:6px 14px; border-radius:6px; font-size:12px; cursor:pointer; transition:all 0.15s; font-family:var(--font-sans); display:flex; align-items:center; gap:6px; }
 .pp-mst-btn:hover { background:rgba(255,255,255,0.05); color:var(--text-strong); border-color:rgba(255,255,255,0.18); }
 .pp-mst-btn.danger:hover { background:rgba(229,83,75,0.12); color:var(--error); border-color:rgba(229,83,75,0.4); }
@@ -192,12 +202,20 @@
         <div class="pp-mst-empty" data-role="empty">Waiting for the agent to begin…</div>
       </div>
       <div class="pp-mst-foot">
-        <button class="pp-mst-btn danger" data-act="stop">⏹ Stop mission</button>
-        <button class="pp-mst-btn" data-act="log">📄 Open log file</button>
-        <div class="pp-mst-foot-spacer"></div>
-        <button class="pp-mst-btn" data-act="edit">⚙ Edit mission</button>
-        <button class="pp-mst-btn primary" data-act="rerun">↻ Run again</button>
+        <button class="pp-mst-btn danger" data-act="stop">⏹ Stop</button>
+        <button class="pp-mst-btn" data-act="log">📄 Log</button>
+        <button class="pp-mst-btn" data-act="edit">⚙ Edit</button>
+        <button class="pp-mst-btn" data-act="rerun">↻ Run again</button>
       </div>
+      <div class="pp-mst-input-row">
+        <textarea
+          class="pp-mst-input"
+          data-role="input"
+          rows="1"
+          placeholder="Send a follow-up message to this mission… (Enter to send, Shift+Enter for newline)"></textarea>
+        <button class="pp-mst-btn primary pp-mst-send" data-act="send">Send</button>
+      </div>
+      <div class="pp-mst-queue" data-role="queue" hidden></div>
     `;
     container.appendChild(root);
 
@@ -469,6 +487,19 @@
     // that abort the mission before the renderer ever sees a stream).
     // missions:status fires with { state: 'idle', status: 'error', summary }
     // from fireMission's early-return path.
+    const offQueued = api.missions.onQueued?.((payload) => {
+      if (payload?.missionId !== mission.id) return;
+      updateQueue(payload.queueLength || 0);
+    }) || (() => {});
+    const offTurnEnd = api.missions.onTurnEnd?.((payload) => {
+      if (payload?.missionId !== mission.id) return;
+      // Between turns: reset the in-flight text element + clear queue
+      // visually (it'll be repopulated by the next missions:queued
+      // payload if more remain).
+      activeTextEl = null;
+      updateQueue(0);
+    }) || (() => {});
+
     const offStatus = api.missions.onStatus((payload) => {
       if (payload?.id !== mission.id) return;
       if (payload.state === 'running') {
@@ -508,10 +539,58 @@
     });
     root.querySelector('[data-act="log"]').addEventListener('click', () => openMissionLog(mission));
 
+    // ── Follow-up message input ───────────────────────────────────
+    const inputEl = root.querySelector('[data-role="input"]');
+    const sendBtn = root.querySelector('[data-act="send"]');
+    const queueEl = root.querySelector('[data-role="queue"]');
+    function autoGrow() {
+      if (!inputEl) return;
+      inputEl.style.height = 'auto';
+      inputEl.style.height = Math.min(160, inputEl.scrollHeight) + 'px';
+    }
+    inputEl?.addEventListener('input', autoGrow);
+    inputEl?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFollowUp(); }
+    });
+    sendBtn?.addEventListener('click', sendFollowUp);
+    async function sendFollowUp() {
+      const text = (inputEl?.value || '').trim();
+      if (!text) return;
+      // Optimistic render of the user message at the bottom of the body.
+      activeTextEl = null;
+      if (empty) empty.style.display = 'none';
+      const msg = document.createElement('div');
+      msg.className = 'pp-mst-msg user';
+      msg.innerHTML = `<div class="pp-mst-msg-head">You</div><div></div>`;
+      msg.lastElementChild.textContent = text;
+      body.appendChild(msg);
+      scrollToBottom();
+      inputEl.value = '';
+      autoGrow();
+      try {
+        const r = await api.missions.sendMessage(mission.id, text);
+        if (!r?.ok) {
+          bus.emit('toast:show', { type: 'warn', message: r?.error || 'Could not send message' });
+        } else if (r.queued) {
+          updateQueue(r.queueLength);
+        }
+      } catch (err) {
+        bus.emit('toast:show', { type: 'warn', message: 'Send failed: ' + (err?.message || err) });
+      }
+    }
+    function updateQueue(n) {
+      if (!queueEl) return;
+      if (!n) { queueEl.hidden = true; queueEl.textContent = ''; return; }
+      queueEl.hidden = false;
+      queueEl.innerHTML = `<strong>${n}</strong> message${n === 1 ? '' : 's'} queued — will send when current turn ends`;
+    }
+
     const dispose = () => {
       try { offEvent(); } catch {}
       try { offEnd(); } catch {}
       try { offStatus && offStatus(); } catch {}
+      try { offQueued && offQueued(); } catch {}
+      try { offTurnEnd && offTurnEnd(); } catch {}
       clearInterval(durationTimer);
       openTabs.delete(mission.id);
     };

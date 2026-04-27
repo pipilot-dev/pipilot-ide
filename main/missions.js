@@ -551,38 +551,93 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     }
 
     // Per-run state — owned by main, survives renderer reloads.
+    // Each "turn" is one user message + one agent run. The mission
+    // tab can queue messages while a turn is in flight; they drain
+    // sequentially when the current turn ends. Conversation history
+    // is injected into each follow-up turn's prompt so the agent
+    // maintains context across the whole mission lifetime.
     const runState = {
       mission,
       startedAt,
-      workDir,             // remembered so finalize can read findings from the right path
-      events: [],          // append-only event log for buffer replay
+      workDir,
+      events: [],
       status: 'running',
       finalText: '',
       toolCallCount: 0,
-      agent: null,         // filled in just below
+      agent: null,
       stopRequested: false,
+      // Multi-turn extensions:
+      conversation: [],        // [{ role: 'user'|'assistant', content, ts, turnIndex }]
+      currentTurnIndex: 0,
+      currentTurnFinalText: '',
+      currentTurnToolCount: 0,
+      currentTurnEventStart: 0,
+      pendingMessages: [],     // user messages typed while a turn is running
+      systemPrompt: null,      // remembered for follow-up turns
+      allowedTools: null,
+      extraMcpServers: null,
+      cloudPr: false,
+      githubPat: null,         // remembered (for re-clone on cloud follow-ups)
     };
     inFlight.set(mission.id, runState);
     persistInit(runState);
 
+    // Remember everything a follow-up turn will need.
+    runState.systemPrompt = systemPrompt;
+    runState.allowedTools = allowedTools;
+    runState.extraMcpServers = extraMcpServers;
+    runState.cloudPr = mission.cloudPr !== false;
+    runState.githubPat = pat;
+
     broadcast('missions:status', { id: mission.id, state: 'running', startedAt });
     broadcast('missions:start', { mission, startedAt });
-    // Bridge to background-mode powerSaveBlocker via the bus mechanism.
     try {
       const win = ctx.getWindow?.();
       if (win && !win.isDestroyed()) win.webContents.send('missions:bg-active', { id: mission.id, active: true });
     } catch {}
 
+    // Drive the first turn.
+    const initialUserMsg = `Run the mission described in your system prompt now. Today's date: ${new Date().toISOString().slice(0,10)}.`;
+    return startTurn(runState, initialUserMsg);
+  }
+
+  // Run a single conversational turn for an existing runState. Used
+  // both for the initial mission run AND for follow-up messages a
+  // user sends after the first turn finishes (or queues while it's
+  // running). Each turn has its own SDK call but inherits the
+  // workspace + conversation context.
+  function startTurn(runState, userMessage) {
+    const turnIndex = runState.currentTurnIndex;
+    runState.status = 'running';
+    runState.currentTurnFinalText = '';
+    runState.currentTurnToolCount = 0;
+    runState.currentTurnEventStart = runState.events.length;
+    // Record user message in conversation + persist as a turn-start record.
+    const userEntry = { role: 'user', content: userMessage, ts: Date.now(), turnIndex };
+    runState.conversation.push(userEntry);
+    runState._persistQueue?.push(JSON.stringify({ kind: 'turn-start', turnIndex, userMessage, startedAt: Date.now() }));
+    persistFlushSoon(runState);
+
+    // Build the prompt — first turn uses the original mission prompt,
+    // follow-ups inject the prior turns as context above the new ask.
+    const promptText = turnIndex === 0
+      ? userMessage
+      : buildFollowUpPrompt(runState, userMessage);
+
+    const mission = runState.mission;
     const onEvent = (evt) => {
       if (!evt) return;
-      const stamped = { ts: Date.now(), ...evt };
+      const stamped = { ts: Date.now(), turnIndex, ...evt };
       runState.events.push(stamped);
-      if (evt.type === 'tool_call') runState.toolCallCount++;
-      if (evt.type === 'text' && typeof evt.text === 'string') runState.finalText += evt.text;
-      // Persist to disk so the run survives forever (reloads, restarts,
-      // multi-day-later replay). Batched flush every 250ms.
+      if (evt.type === 'tool_call') {
+        runState.toolCallCount++;
+        runState.currentTurnToolCount++;
+      }
+      if (evt.type === 'text' && typeof evt.text === 'string') {
+        runState.finalText += evt.text;
+        runState.currentTurnFinalText += evt.text;
+      }
       persistAppend(runState, stamped);
-      // Broadcast every event so any open mission tab streams live.
       try {
         const win = ctx.getWindow?.();
         if (win && !win.isDestroyed()) {
@@ -591,49 +646,109 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       } catch {}
     };
 
-    // Kick off the agent (does not await — fireMission returns
-    // immediately so the caller / IPC handler isn't blocked for
-    // minutes). The promise resolves when the agent finishes and we
-    // run the post-run finalize.
     const agentRun = runMissionAgent({
       missionName: mission.name,
       missionId: mission.id,
-      prompt: `Run the mission described in your system prompt now. Today's date: ${new Date().toISOString().slice(0,10)}.`,
-      systemPrompt,
-      allowedTools,
+      prompt: promptText,
+      systemPrompt: runState.systemPrompt,
+      allowedTools: runState.allowedTools,
       effort: mission.effort || 'medium',
-      workDir,
-      extraMcpServers,
+      workDir: runState.workDir,
+      extraMcpServers: runState.extraMcpServers,
     }, onEvent);
     runState.agent = agentRun;
 
-    // Background lifecycle (don't await).
     agentRun.promise.then(async (outcome) => {
-      try { await finalizeMissionRun(runState, outcome); }
-      catch (err) { console.warn('[missions] finalize failed:', err.message); }
+      try { await finalizeTurn(runState, outcome); }
+      catch (err) { console.warn('[missions] finalize-turn failed:', err.message); }
     });
 
-    return { ok: true };
+    return { ok: true, turnIndex };
   }
 
-  // Compute final status + write stats + log + broadcast end. Called
-  // exactly once per run.
-  async function finalizeMissionRun(runState, outcome) {
+  // Compose the prompt for a follow-up turn: include the conversation
+  // so far so the agent has full context, then the latest user ask.
+  function buildFollowUpPrompt(runState, userMessage) {
+    const lines = ['## Conversation so far'];
+    for (const msg of runState.conversation.slice(0, -1)) {
+      const head = msg.role === 'user' ? '### User' : '### You (assistant)';
+      lines.push(head);
+      lines.push((msg.content || '').slice(0, 6000));
+      lines.push('');
+    }
+    lines.push('## New user message');
+    lines.push(userMessage);
+    lines.push('');
+    lines.push('Continue the mission. Use the conversation above as context — same workspace, same constraints.');
+    return lines.join('\n');
+  }
+
+  // Finalize a single TURN — record assistant reply in the
+  // conversation, write a turn-end record, and either drain the
+  // queued message (start the next turn) or transition the mission
+  // to idle/ready.
+  async function finalizeTurn(runState, outcome) {
     const mission = runState.mission;
-    const finalEvent = runState.events.find(e => e.type === 'result') || (outcome && outcome.result) || null;
-    const cleanFinal = (runState.finalText || '').replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim();
+    const turnIndex = runState.currentTurnIndex;
+    const finalEvent = runState.events.slice(runState.currentTurnEventStart).find(e => e.type === 'result') || (outcome && outcome.result) || null;
+    const cleanFinal = (runState.currentTurnFinalText || '').replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim();
     const tail = cleanFinal.split('\n').slice(-5).join(' ');
     let status = 'success';
     let summary = tail.slice(0, 280);
-    if (runState.stopRequested || finalEvent?.subtype === 'aborted') {
-      status = 'stopped'; summary = 'Stopped by user';
-    } else if (finalEvent?.subtype === 'error' || finalEvent?.is_error) {
-      status = 'error'; summary = summary || 'agent reported failure';
-    } else if (/^skipped:/i.test(tail)) {
-      status = 'skipped';
-    } else if (/^failed:/i.test(tail)) {
-      status = 'error';
+    if (runState.stopRequested || finalEvent?.subtype === 'aborted') { status = 'stopped'; summary = 'Stopped by user'; }
+    else if (finalEvent?.subtype === 'error' || finalEvent?.is_error) { status = 'error'; summary = summary || 'agent reported failure'; }
+    else if (/^skipped:/i.test(tail)) { status = 'skipped'; }
+    else if (/^failed:/i.test(tail)) { status = 'error'; }
+
+    // Push assistant turn to the conversation history.
+    runState.conversation.push({
+      role: 'assistant',
+      content: cleanFinal,
+      ts: Date.now(),
+      turnIndex,
+      status,
+    });
+    // Persist turn-end marker.
+    runState._persistQueue?.push(JSON.stringify({
+      kind: 'turn-end',
+      turnIndex,
+      status,
+      summary,
+      finalText: cleanFinal,
+      toolCallCount: runState.currentTurnToolCount,
+      endedAt: Date.now(),
+    }));
+    persistFlushNow(runState);
+
+    runState.stopRequested = false;
+    runState.agent = null;
+
+    // If the user typed a message during this turn, drain it as the
+    // next turn immediately. Otherwise transition to idle/ready.
+    if (runState.pendingMessages.length > 0) {
+      const next = runState.pendingMessages.shift();
+      runState.currentTurnIndex = turnIndex + 1;
+      // Tell open tabs the previous turn closed cleanly so the UI
+      // can reset its in-flight indicators between turns.
+      broadcast('missions:turn-end', { missionId: mission.id, turnIndex, status, summary });
+      startTurn(runState, next);
+      return;
     }
+
+    // No queued follow-up — finalize the mission run for stats / UI.
+    await finalizeMissionRun(runState, { status, summary, finalEvent, cleanFinal });
+  }
+
+  // Mission has gone fully idle (no in-flight turn, no queued
+  // messages). Update stats, append log, broadcast end. The runState
+  // sticks around in inFlight for a while so follow-up messages can
+  // resume the same conversation without a fresh fireMission.
+  async function finalizeMissionRun(runState, outcomeShape) {
+    const mission = runState.mission;
+    // Use the per-turn outcome that finalizeTurn passed in.
+    const status = outcomeShape?.status || 'success';
+    const summary = outcomeShape?.summary || '';
+    const cleanFinal = outcomeShape?.cleanFinal || '';
 
     const durationMs = Date.now() - runState.startedAt;
     runState.status = status;
@@ -814,12 +929,162 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     return { ok: true };
   });
 
+  // Renderer → main: send a follow-up user message to a mission.
+  // Three states the mission can be in:
+  //   - in-flight running:   queue the message, drains after current turn
+  //   - in-flight idle:      kick off a new turn immediately
+  //   - GC'd from memory:    reconstruct runState from disk and resume
+  ipcMain.handle('missions:send-message', async (_e, { id, message } = {}) => {
+    if (!id || !message || !String(message).trim()) {
+      return { ok: false, error: 'id and non-empty message required' };
+    }
+    let rs = inFlight.get(id);
+    if (!rs) {
+      // Reconstruct from disk if the runState was GC'd.
+      try { rs = await reconstructRunStateFromDisk(id); }
+      catch (err) { return { ok: false, error: 'could not resume: ' + (err?.message || err) }; }
+      if (!rs) return { ok: false, error: 'mission has no prior runs to resume — start with Run now' };
+      inFlight.set(id, rs);
+    }
+    // Running → queue. Idle → start now.
+    if (rs.status === 'running') {
+      rs.pendingMessages.push(String(message));
+      broadcast('missions:queued', { missionId: id, queueLength: rs.pendingMessages.length });
+      return { ok: true, queued: true, queueLength: rs.pendingMessages.length };
+    }
+    rs.currentTurnIndex = (rs.currentTurnIndex || 0) + 1;
+    broadcast('missions:status', { id, state: 'running', startedAt: Date.now() });
+    broadcast('missions:start', { mission: rs.mission, startedAt: Date.now() });
+    try {
+      const win = ctx.getWindow?.();
+      if (win && !win.isDestroyed()) win.webContents.send('missions:bg-active', { id, active: true });
+    } catch {}
+    startTurn(rs, String(message));
+    return { ok: true, queued: false };
+  });
+
+  // Reconstruct a usable runState from the latest .jsonl on disk so a
+  // mission whose runState was GC'd can still receive follow-ups
+  // without re-running everything from scratch.
+  async function reconstructRunStateFromDisk(missionId) {
+    const runs = await listRunsOnDisk(missionId);
+    if (!runs.length) return null;
+    const latest = await loadRunFromDisk(runs[0].file);
+    if (!latest?.ok || !latest.meta) return null;
+    const mission = latest.meta.mission;
+    if (!mission) return null;
+    // Rebuild conversation from turn-start/turn-end records by
+    // walking the events in disk-order.
+    const conversation = [];
+    let lastTurnIndex = -1;
+    let inTurn = -1;
+    let assistantText = '';
+    // Re-read raw to access kind discriminator in order.
+    const raw = await fsp.readFile(runs[0].file, 'utf8');
+    for (const line of raw.split(/\r?\n/)) {
+      const t = line.trim(); if (!t) continue;
+      try {
+        const obj = JSON.parse(t);
+        if (obj.kind === 'turn-start') {
+          conversation.push({ role: 'user', content: obj.userMessage || '', ts: obj.startedAt || Date.now(), turnIndex: obj.turnIndex });
+          inTurn = obj.turnIndex;
+          assistantText = '';
+          lastTurnIndex = Math.max(lastTurnIndex, obj.turnIndex);
+        } else if (obj.kind === 'event' && obj.evt?.type === 'text' && typeof obj.evt.text === 'string') {
+          assistantText += obj.evt.text;
+        } else if (obj.kind === 'turn-end') {
+          conversation.push({
+            role: 'assistant',
+            content: (obj.finalText || assistantText || '').replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim(),
+            ts: obj.endedAt || Date.now(),
+            turnIndex: obj.turnIndex,
+            status: obj.status,
+          });
+          inTurn = -1;
+        }
+      } catch {}
+    }
+
+    // Make sure the workspace still exists for resumption. For local
+    // missions, projectPath is permanent. For cloud missions the
+    // scratch clone may have been swept by the OS — re-clone.
+    let workDir = null;
+    if (mission.target?.kind === 'local') {
+      workDir = mission.target.projectPath;
+    } else if (mission.target?.kind === 'cloud') {
+      // Try the historical scratch dir first.
+      const histDir = path.join(os.tmpdir(), 'pipilot-missions', mission.id, String(latest.meta.startedAt));
+      try {
+        await fsp.access(histDir);
+        workDir = histDir;
+      } catch {
+        // Re-clone fresh.
+        let pat = null;
+        try { pat = typeof getSecret === 'function' ? await getSecret('githubPat') : null; } catch {}
+        if (!pat) throw new Error('GitHub PAT no longer configured — connect in Settings to resume cloud missions');
+        const fresh = path.join(os.tmpdir(), 'pipilot-missions', mission.id, String(Date.now()));
+        await fsp.mkdir(fresh, { recursive: true });
+        const repo = mission.target.repo;
+        const branch = mission.target.branch || 'main';
+        const url = `https://x-access-token:${encodeURIComponent(pat)}@github.com/${repo}.git`;
+        const cloneRes = await execAsync('git', ['clone', '--branch', branch, '--depth', '50', url, fresh]);
+        if (!cloneRes.ok) throw new Error('Re-clone failed for resume');
+        await execAsync('git', ['-C', fresh, 'config', '--local', 'user.name', 'PiPilot Mission']);
+        await execAsync('git', ['-C', fresh, 'config', '--local', 'user.email', 'mission@pipilot.local']);
+        workDir = fresh;
+      }
+    }
+
+    // Build a partial runState that startTurn can drive.
+    const rebuilt = {
+      mission,
+      startedAt: Date.now(),     // a NEW start for the resumed turn
+      workDir,
+      events: [],                // fresh events for the new turn (history persists on disk anyway)
+      status: 'idle',
+      finalText: '',
+      toolCallCount: 0,
+      agent: null,
+      stopRequested: false,
+      conversation,
+      currentTurnIndex: lastTurnIndex,   // next turn = +1
+      currentTurnFinalText: '',
+      currentTurnToolCount: 0,
+      currentTurnEventStart: 0,
+      pendingMessages: [],
+      // System prompt + permissions — recompute since they depend on
+      // current ghInfo state (gh installed? scratch dir present?).
+      systemPrompt: buildSystemPrompt(mission, { gitInstalled: true, gitVersion: 'resumed', scratchDir: workDir }),
+      allowedTools: buildAllowedTools(mission),
+      extraMcpServers: null,
+      cloudPr: mission.cloudPr !== false,
+      githubPat: null,
+      _persistFile: null, _persistQueue: [], _persistTimer: null,
+    };
+    if (mission.target?.kind === 'cloud') {
+      let pat = null;
+      try { pat = typeof getSecret === 'function' ? await getSecret('githubPat') : null; } catch {}
+      if (pat) {
+        rebuilt.githubPat = pat;
+        rebuilt.extraMcpServers = {
+          github: { type: 'http', url: 'https://api.githubcopilot.com/mcp', headers: { Authorization: 'Bearer ' + pat } },
+        };
+      }
+    }
+    // Append to the existing run file rather than starting a new one
+    // — keeps the conversation history in one place.
+    rebuilt._persistFile = runs[0].file;
+    rebuilt._persistQueue = [];
+    rebuilt._persistTimer = null;
+    return rebuilt;
+  }
+
   // Renderer → main: replay current state for an open tab. Returns
   // the run buffer + status so a tab opened mid-run (or after a
   // renderer reload) can render the full transcript.
   ipcMain.handle('missions:get-state', async (_e, { id } = {}) => {
     const rs = inFlight.get(id);
-    if (!rs) return { ok: true, running: false, events: [], status: null };
+    if (!rs) return { ok: true, running: false, events: [], status: null, conversation: [], queueLength: 0 };
     return {
       ok: true,
       running: rs.status === 'running',
@@ -827,6 +1092,9 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       startedAt: rs.startedAt,
       events: rs.events.slice(),
       toolCallCount: rs.toolCallCount,
+      conversation: rs.conversation || [],
+      queueLength: rs.pendingMessages?.length || 0,
+      currentTurnIndex: rs.currentTurnIndex || 0,
     };
   });
 

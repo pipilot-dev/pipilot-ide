@@ -358,6 +358,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     delete: (scope, projectPath, id) => ipcRenderer.invoke('missions:delete', { scope, projectPath, id }),
     run: (id, projectPath, force) => ipcRenderer.invoke('missions:run', { id, projectPath, force }),
     stop: (id) => ipcRenderer.invoke('missions:stop', { id }),
+    sendMessage: (id, message) => ipcRenderer.invoke('missions:send-message', { id, message }),
     getState: (id) => ipcRenderer.invoke('missions:get-state', { id }),
     inFlightState: () => ipcRenderer.invoke('missions:in-flight-state'),
     listRuns: (id) => ipcRenderer.invoke('missions:list-runs', { id }),
@@ -382,6 +383,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const fn = (_e, payload) => { try { handler(payload); } catch {} };
       ipcRenderer.on('missions:bg-active', fn);
       return () => ipcRenderer.removeListener('missions:bg-active', fn);
+    },
+    onTurnEnd: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('missions:turn-end', fn);
+      return () => ipcRenderer.removeListener('missions:turn-end', fn);
+    },
+    onQueued: (handler) => {
+      const fn = (_e, payload) => { try { handler(payload); } catch {} };
+      ipcRenderer.on('missions:queued', fn);
+      return () => ipcRenderer.removeListener('missions:queued', fn);
     },
     onStatus: (handler) => {
       const fn = (_e, payload) => { try { handler(payload); } catch {} };
