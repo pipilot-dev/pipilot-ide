@@ -1727,11 +1727,103 @@
 
   function appendAssistantText(text) {
     const wrap = ensureAssistantMessage();
+    // Defensive extractor: when the model regresses to a text-format
+    // tool call (`<mcp__pipilot__reason>{json}</tool_call>` or
+    // similar), pull each match out of the chunk, route the JSON's
+    // `thought` field through addCotStep, and let the normal text
+    // pipeline see only the leftover prose. Same treatment for any
+    // `<reasoning>...{json}...</reasoning>` envelope wrapping JSON
+    // instead of plain markdown — unwrap to just the thought content.
+    const sanitised = extractMalformedReasoningCalls(text, wrap);
     // Strip <reasoning>...</reasoning> regions and stream them into the CoT
     // panel; only the surrounding non-reasoning prose hits the markdown body.
-    const cleanText = feedReasoningParser(wrap, text);
+    const cleanText = feedReasoningParser(wrap, sanitised);
     if (cleanText) writeCleanTextToBody(wrap, cleanText);
     scrollToBottom();
+  }
+
+  // Look for known-bad reasoning emissions in a streamed text chunk
+  // and route them into the Chain of Thought UI synchronously.
+  // Returns the chunk with each match removed.
+  //
+  // Patterns we accept:
+  //   <mcp__pipilot__reason>{json}</tool_call>
+  //   <mcp__pipilot__reason>{json}</mcp__pipilot__reason>
+  //   <tool_use name="mcp__pipilot__reason">{json}</tool_use>
+  //   <reason>{json}</reason>
+  //
+  // The JSON is optionally wrapped in a code fence — we strip ``` if
+  // present. We extract the `thought` field, fall back to `text`, and
+  // last-resort use the entire JSON if neither is present.
+  const MALFORMED_REASON_RES = [
+    /<mcp__pipilot__reason\s*>([\s\S]*?)<\/(?:tool_call|mcp__pipilot__reason)>/g,
+    /<tool_use\s+name=["']mcp__pipilot__reason["']\s*>([\s\S]*?)<\/tool_use>/g,
+    /<reason\s*>([\s\S]*?)<\/reason>/g,
+  ];
+  function extractMalformedReasoningCalls(chunk, wrap) {
+    if (!chunk || chunk.indexOf('<') === -1) return chunk;
+    let out = chunk;
+    for (const re of MALFORMED_REASON_RES) {
+      out = out.replace(re, (_match, payload) => {
+        const parsed = parseReasonPayload(payload);
+        if (!parsed) return '';   // drop noise
+        injectSyntheticReasoningStep(wrap, parsed);
+        return '';
+      });
+    }
+    return out;
+  }
+
+  function parseReasonPayload(raw) {
+    if (!raw) return null;
+    // Strip optional ```json fences and surrounding whitespace.
+    let s = String(raw).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    // The model sometimes nests two JSON objects with a stray }} —
+    // try the simplest extract first.
+    let obj = null;
+    try { obj = JSON.parse(s); } catch {}
+    if (!obj) {
+      // Last resort: pluck the FIRST balanced { … } region.
+      const start = s.indexOf('{');
+      if (start === -1) return null;
+      let depth = 0;
+      for (let i = start; i < s.length; i++) {
+        const c = s[i];
+        if (c === '{') depth++;
+        else if (c === '}') { depth--; if (depth === 0) {
+          try { obj = JSON.parse(s.slice(start, i + 1)); } catch {}
+          break;
+        } }
+      }
+    }
+    if (!obj || typeof obj !== 'object') return null;
+    const thought = (typeof obj.thought === 'string' && obj.thought)
+      || (typeof obj.text === 'string' && obj.text)
+      || JSON.stringify(obj, null, 2);
+    return {
+      thought,
+      kind: typeof obj.kind === 'string' ? obj.kind : null,
+      step: typeof obj.step === 'number' ? obj.step : null,
+      totalSteps: typeof obj.totalSteps === 'number' ? obj.totalSteps : null,
+    };
+  }
+
+  function injectSyntheticReasoningStep(wrap, parsed) {
+    sequentialThinkingCount++;
+    const kind = parsed.kind ? parsed.kind.charAt(0).toUpperCase() + parsed.kind.slice(1) : 'Note';
+    const label = parsed.step
+      ? `${kind} ${parsed.step}${parsed.totalSteps ? '/' + parsed.totalSteps : ''}`
+      : kind;
+    addCotStep(wrap, {
+      iconName: 'brain',
+      label,
+      descriptionHTML: renderMarkdown(parsed.thought || ''),
+      toolId: 'synthetic-reason-' + sequentialThinkingCount,
+    });
+    currentAssistantBlocks.push({
+      type: 'thinking',
+      text: parsed.thought || '',
+    });
   }
 
   function writeCleanTextToBody(wrap, cleanText) {
@@ -2770,6 +2862,21 @@
     if (!text) return;
     wrap._reasoningAccum = (wrap._reasoningAccum || '') + text;
     if (!wrap._reasoningDescEl) return;
+    // If the accumulated text starts to look like a JSON envelope
+    // (the model emitting {"kind":..., "thought":...} inside the
+    // reasoning tag), unwrap it on the fly — render only the
+    // `thought` field as markdown. This kicks in only once the JSON
+    // looks closeable so we don't fight partial-stream parses.
+    let render = wrap._reasoningAccum;
+    const trimmed = render.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        const obj = JSON.parse(trimmed);
+        if (obj && typeof obj === 'object' && typeof obj.thought === 'string') {
+          render = obj.thought;
+        }
+      } catch {}
+    }
     // Render reasoning as markdown so headings, bullets, tables, code blocks,
     // and inline code light up exactly like assistant text. Re-rendering on
     // every chunk is fine — partial markdown (mid-fence, mid-list) is what
@@ -2777,8 +2884,8 @@
     // arrives. Mark this region so attached helpers (copy buttons, mermaid)
     // can run on the same nodes the main body uses.
     wrap._reasoningDescEl.classList.add('md-body');
-    wrap._reasoningDescEl.dataset.text = wrap._reasoningAccum;
-    wrap._reasoningDescEl.innerHTML = renderMarkdown(wrap._reasoningAccum);
+    wrap._reasoningDescEl.dataset.text = render;
+    wrap._reasoningDescEl.innerHTML = renderMarkdown(render);
     try {
       attachCopyButtons(wrap._reasoningDescEl);
       wrapOverflowingContent(wrap._reasoningDescEl);
