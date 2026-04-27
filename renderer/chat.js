@@ -2317,23 +2317,39 @@
     const lower = name.toLowerCase();
     return lower.includes('sequentialthinking') || lower.includes('sequential_thinking');
   }
+  // Our own pipilot reason tool — same routing path as the legacy
+  // sequential-thinking MCP, but cleanly typed and always available.
+  function isPipilotReason(name) {
+    return name === 'mcp__pipilot__reason' || name === 'reason';
+  }
 
   function appendToolCard(call) {
     const wrap = ensureAssistantMessage();
     const isMcp = call.kind === 'mcp_tool_use' || (call.name && call.name.startsWith('mcp__'));
     const isSubAgent = isSubAgentTool(call.name);
     const isSeqThinking = isSequentialThinking(call.name);
+    const isReason = isPipilotReason(call.name);
     const isTerminal = call.name === 'run_in_terminal';
 
-    // Sequential-thinking tool → add as a step in the ChainOfThought block
-    if (isSeqThinking) {
+    // Sequential-thinking OR our pipilot reason tool → render in CoT.
+    if (isSeqThinking || isReason) {
       sequentialThinkingCount++;
-      const totalSteps = (call.input && call.input.totalThoughts) || '?';
-      const stepNum = (call.input && call.input.thoughtNumber) || sequentialThinkingCount;
-      const thoughtText = (call.input && call.input.thought) || '';
+      const input = call.input || {};
+      const thoughtText = input.thought || '';
+      let label;
+      if (isReason) {
+        const kind = input.kind ? String(input.kind).charAt(0).toUpperCase() + String(input.kind).slice(1) : 'Note';
+        label = input.step
+          ? `${kind} ${input.step}${input.totalSteps ? '/' + input.totalSteps : ''}`
+          : kind;
+      } else {
+        const totalSteps = input.totalThoughts || '?';
+        const stepNum = input.thoughtNumber || sequentialThinkingCount;
+        label = `Thinking ${stepNum}/${totalSteps}`;
+      }
       addCotStep(wrap, {
         iconName: 'brain',
-        label: `Thinking ${stepNum}/${totalSteps}`,
+        label,
         descriptionHTML: renderMarkdown(thoughtText),
         toolId: call.id,
       });

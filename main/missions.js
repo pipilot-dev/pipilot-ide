@@ -521,6 +521,9 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     return [
       `You are PiPilot Mission Agent — a focused background agent.`,
       ``,
+      `## Reasoning rule (read first)`,
+      `Reason via the \`mcp__pipilot__reason\` tool, NEVER inline \`<reasoning>\` tags. Each call is one phase: \`{ kind: "clarify"|"decompose"|"generate"|"assess"|"recommend"|"note", thought: "...", step: N, totalSteps: M }\`. The thought is rendered in the Chain of Thought UI; your text reply is the user-facing answer. They cannot mix because they're structurally different event types. Skip reasoning for trivial actions; use it before any non-obvious mutation.`,
+      ``,
       `Mission: "${mission.name}"`,
       `Target: ${targetDesc}`,
       ``,
@@ -532,7 +535,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       ``,
       `Rules:`,
       `- You are running silently in the background. The user is not watching you stream.`,
-      `- No <reasoning> blocks. No long preamble. Be terse.`,
+      `- No \`<reasoning>\` inline tags. Use the \`mcp__pipilot__reason\` tool for any thinking. No long preamble. Be terse.`,
       `- Stay strictly within the mission's instructions. Don't refactor unrelated code.`,
       `- **Branding & attribution rule — applies to EVERY piece of text you author on the user's behalf**: NEVER include "🤖 Generated with [Claude Code]", "Co-Authored-By: Claude", or any other "Generated with X" / "Co-Authored-By: X" trailer learned from external CLI tools.`,
       ``,
