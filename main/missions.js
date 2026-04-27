@@ -42,6 +42,49 @@ function execAsync(cmd, args, extraEnv = {}, opts = {}) {
   });
 }
 
+// Resilient git clone for cloud missions. Two well-known Windows
+// failure modes show up as "schannel: server closed abruptly
+// (missing close_notify)" or "RPC failed; curl … HTTP/2 stream …
+// reset" — both caused by HTTP/2 multiplexing on Windows Schannel
+// against github.com. Mitigations baked in:
+//   - http.version=HTTP/1.1     forces 1.1 over 2 (reliable everywhere)
+//   - http.postBuffer=524288000 raise the buffer to 500MB (handles
+//                               larger initial packs without RPC reset)
+//   - GIT_HTTP_LOW_SPEED_LIMIT=0 disable abort on slow networks
+// Plus one retry on transient TLS/network errors (schannel reset,
+// curl 18/56, RPC failed). We also clean the partial clone dir
+// between attempts so the second clone starts fresh.
+async function cloneWithRetry(url, branch, targetDir) {
+  const baseArgs = [
+    '-c', 'http.version=HTTP/1.1',
+    '-c', 'http.postBuffer=524288000',
+    'clone',
+    '--branch', branch,
+    '--depth', '50',
+    url, targetDir,
+  ];
+  const env = {
+    GIT_HTTP_LOW_SPEED_LIMIT: '0',
+    GIT_HTTP_LOW_SPEED_TIME: '0',
+    GIT_TERMINAL_PROMPT: '0',
+  };
+  const TRANSIENT = /(schannel|close_notify|RPC failed|curl 18|curl 56|curl 35|early EOF|stream reset|HTTP\/2)/i;
+
+  let attempt = await execAsync('git', baseArgs, env, { timeoutMs: 4 * 60_000 });
+  if (attempt.ok) return attempt;
+  if (!TRANSIENT.test((attempt.stderr || '') + ' ' + (attempt.error || ''))) return attempt;
+
+  // Wipe the partial clone (if any) before retry so git doesn't
+  // refuse with "already exists and is not empty".
+  try { await fsp.rm(targetDir, { recursive: true, force: true }); } catch {}
+  try { await fsp.mkdir(targetDir, { recursive: true }); } catch {}
+
+  // Tiny backoff helps when the upstream burped.
+  await new Promise(r => setTimeout(r, 1500));
+  attempt = await execAsync('git', baseArgs, env, { timeoutMs: 4 * 60_000 });
+  return attempt;
+}
+
 const TICK_INTERVAL_MS = 60_000;
 const DEFAULT_COOLDOWN_MS = 5 * 60_000;
 const LOG_FILE = 'missions.log.md';
@@ -504,7 +547,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         const repo = mission.target.repo;
         const branch = mission.target.branch || 'main';
         const url = ghInfo.cloneUrl || `https://github.com/${repo}.git`;
-        const cloneRes = await execAsync('git', ['clone', '--branch', branch, '--depth', '50', url, scratchDir]);
+        const cloneRes = await cloneWithRetry(url, branch, scratchDir);
         if (!cloneRes.ok) {
           // Sanitise the error so we never leak the PAT in the log.
           // Pull the LAST non-empty line from stderr — git's last
@@ -1052,7 +1095,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         const repo = mission.target.repo;
         const branch = mission.target.branch || 'main';
         const url = `https://x-access-token:${encodeURIComponent(pat)}@github.com/${repo}.git`;
-        const cloneRes = await execAsync('git', ['clone', '--branch', branch, '--depth', '50', url, fresh]);
+        const cloneRes = await cloneWithRetry(url, branch, fresh);
         if (!cloneRes.ok) throw new Error('Re-clone failed for resume');
         await execAsync('git', ['-C', fresh, 'config', '--local', 'user.name', 'PiPilot Mission']);
         await execAsync('git', ['-C', fresh, 'config', '--local', 'user.email', 'mission@pipilot.local']);
