@@ -323,13 +323,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ---------- Settings ----------
-  // ---------- Secrets (encrypted at rest via safeStorage) ----------
+  // ---------- Connector credentials (plain JSONL at <home>/PiPilot) ----------
+  // Two scopes: global (follows user across projects) and project
+  // (per-project override stored at <projectPath>/.pipilot/connectors.jsonl).
+  // Project value wins over global on key collisions during read.
   secrets: {
-    status: () => ipcRenderer.invoke('secrets:status'),
-    has: (key) => ipcRenderer.invoke('secrets:has', { key }),
-    get: (key) => ipcRenderer.invoke('secrets:get', { key }),
-    set: (key, value) => ipcRenderer.invoke('secrets:set', { key, value }),
-    delete: (key) => ipcRenderer.invoke('secrets:delete', { key }),
+    status: (projectPath) => ipcRenderer.invoke('secrets:status', { projectPath }),
+    has: (key, projectPath) => ipcRenderer.invoke('secrets:has', { key, projectPath }),
+    get: (key, projectPath) => ipcRenderer.invoke('secrets:get', { key, projectPath }),
+    // scope: 'global' (default) or 'project' (requires projectPath)
+    set: (key, value, opts) => ipcRenderer.invoke('secrets:set', { key, value, ...(opts || {}) }),
+    delete: (key, opts) => ipcRenderer.invoke('secrets:delete', { key, ...(opts || {}) }),
+    list: (projectPath) => ipcRenderer.invoke('secrets:list', { projectPath }),
     onChanged: (handler) => {
       const fn = (_e, payload) => { try { handler(payload); } catch {} };
       ipcRenderer.on('secrets:changed', fn);
