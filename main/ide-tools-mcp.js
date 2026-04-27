@@ -17,17 +17,12 @@ function buildIdeTools(sdk) {
 
   return [
     sdk.tool('reason',
-      'Record one phase of your private thinking. Each call is structurally separate from your text reply, so reasoning and the user-facing answer can never get mixed up. The IDE renders these calls in a collapsed Chain of Thought panel — they are NOT shown in the chat body. Call this BEFORE producing your text reply, once per phase (clarify → decompose → generate → assess → recommend). Then write your normal markdown reply as text. The tool returns a short ack — ignore it.',
+      'Record your private thinking in ONE call before producing your text reply. Pass the full reasoning as a single `thought` field — synthesize all your analysis (clarify, options, tradeoffs, decision) into one structured markdown block. Do NOT make multiple reason calls per turn. The IDE renders the call in a collapsed Chain of Thought panel separate from your reply. After the call, write your user-facing answer as normal markdown text. The tool returns a short ack — ignore it.',
       {
-        thought: z.string().describe('The reasoning for this phase. Use markdown (headings, lists, code fences, tables). Be structured, not flat prose.'),
-        kind: z.enum(['clarify', 'decompose', 'generate', 'assess', 'recommend', 'note']).optional().describe('Which phase of the 5-step pattern this is. Use "note" for ad-hoc thoughts that don\'t fit a phase.'),
-        step: z.number().int().optional().describe('Sequential step number, 1-based.'),
-        totalSteps: z.number().int().optional().describe('Total expected steps in this reasoning chain.'),
+        thought: z.string().describe('The complete reasoning for this turn as a single markdown block. Use ## headings to delineate sections (Clarify / Options / Decision / Plan), bulleted lists, pipe tables, inline code, fenced code blocks, **bold** for the chosen approach. Treat this like a short engineering note an experienced reader could skim in 15 seconds.'),
       },
-      async (args) => {
-        const label = args?.kind ? args.kind : 'note';
-        const step = args?.step ? `step ${args.step}${args?.totalSteps ? '/' + args.totalSteps : ''}` : '';
-        return { content: [{ type: 'text', text: `Reasoning recorded (${label}${step ? ', ' + step : ''}). Continue with your reply.` }] };
+      async () => {
+        return { content: [{ type: 'text', text: 'Reasoning recorded. Continue with your reply.' }] };
       }
     ),
     sdk.tool('get_working_directory',

@@ -1810,13 +1810,10 @@
 
   function injectSyntheticReasoningStep(wrap, parsed) {
     sequentialThinkingCount++;
-    const kind = parsed.kind ? parsed.kind.charAt(0).toUpperCase() + parsed.kind.slice(1) : 'Note';
-    const label = parsed.step
-      ? `${kind} ${parsed.step}${parsed.totalSteps ? '/' + parsed.totalSteps : ''}`
-      : kind;
     addCotStep(wrap, {
       iconName: 'brain',
-      label,
+      label: '',
+      cardLabel: 'Reasoning',
       descriptionHTML: renderMarkdown(parsed.thought || ''),
       toolId: 'synthetic-reason-' + sequentialThinkingCount,
     });
@@ -2428,20 +2425,16 @@
       sequentialThinkingCount++;
       const input = call.input || {};
       const thoughtText = input.thought || '';
-      let label;
-      if (isReason) {
-        const kind = input.kind ? String(input.kind).charAt(0).toUpperCase() + String(input.kind).slice(1) : 'Note';
-        label = input.step
-          ? `${kind} ${input.step}${input.totalSteps ? '/' + input.totalSteps : ''}`
-          : kind;
-      } else {
-        const totalSteps = input.totalThoughts || '?';
-        const stepNum = input.thoughtNumber || sequentialThinkingCount;
-        label = `Thinking ${stepNum}/${totalSteps}`;
-      }
+      // Single-call reasoning model — one card titled "Reasoning",
+      // markdown body inside. Kept the legacy seq-thinking step
+      // labels for back-compat with that MCP if a user re-enables it.
+      const label = isReason
+        ? ''
+        : `Thinking ${input.thoughtNumber || sequentialThinkingCount}/${input.totalThoughts || '?'}`;
       addCotStep(wrap, {
         iconName: 'brain',
         label,
+        cardLabel: isReason ? 'Reasoning' : undefined,
         descriptionHTML: renderMarkdown(thoughtText),
         toolId: call.id,
       });

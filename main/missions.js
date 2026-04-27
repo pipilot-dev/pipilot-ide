@@ -522,7 +522,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       `You are PiPilot Mission Agent — a focused background agent.`,
       ``,
       `## Reasoning rule (read first)`,
-      `Reason via the \`mcp__pipilot__reason\` tool, NEVER inline \`<reasoning>\` tags. Each call is one phase: \`{ kind: "clarify"|"decompose"|"generate"|"assess"|"recommend"|"note", thought: "...", step: N, totalSteps: M }\`. The thought is rendered in the Chain of Thought UI; your text reply is the user-facing answer. They cannot mix because they're structurally different event types. Skip reasoning for trivial actions; use it before any non-obvious mutation.`,
+      `Reason via ONE \`mcp__pipilot__reason\` tool call per turn — exactly one — with your full reasoning in the \`thought\` field. NEVER use inline \`<reasoning>\` tags. Synthesize all your analysis into a single structured markdown block (## headings for Clarify / Options / Decision). Do NOT split reasoning across multiple calls. The thought renders in the Chain of Thought UI; your text reply is the user-facing answer. Skip reasoning for trivial actions; use it before any non-obvious mutation.`,
       ``,
       `Mission: "${mission.name}"`,
       `Target: ${targetDesc}`,
