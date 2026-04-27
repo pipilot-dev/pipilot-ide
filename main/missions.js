@@ -74,6 +74,8 @@ async function cloneWithRetry(url, branch, targetDir) {
   if (attempt.ok) return attempt;
   if (!TRANSIENT.test((attempt.stderr || '') + ' ' + (attempt.error || ''))) return attempt;
 
+  // (definition continues — retry block below)
+
   // Wipe the partial clone (if any) before retry so git doesn't
   // refuse with "already exists and is not empty".
   try { await fsp.rm(targetDir, { recursive: true, force: true }); } catch {}
@@ -83,6 +85,43 @@ async function cloneWithRetry(url, branch, targetDir) {
   await new Promise(r => setTimeout(r, 1500));
   attempt = await execAsync('git', baseArgs, env, { timeoutMs: 4 * 60_000 });
   return attempt;
+}
+
+// Write a curl --config file the agent can use as a reliable
+// cross-shell auth path. The file lives inside the scratch clone at
+// .pipilot/auth.cfg so it travels with the workspace and disappears
+// when the clone is GC'd. Format is curl's own config syntax — one
+// option per line — so curl reads the header verbatim, no shell
+// expansion involved.
+async function writeAuthConfig(workDir, pat) {
+  if (!workDir || !pat) return;
+  const dir = path.join(workDir, '.pipilot');
+  const file = path.join(dir, 'auth.cfg');
+  try {
+    await fsp.mkdir(dir, { recursive: true });
+    const body = [
+      '# PiPilot mission curl auth config — auto-generated, do not commit.',
+      '# Use with: curl --config .pipilot/auth.cfg https://api.github.com/...',
+      `header = "Authorization: Bearer ${pat}"`,
+      'header = "Accept: application/vnd.github+json"',
+      'header = "X-GitHub-Api-Version: 2022-11-28"',
+      'silent',
+      'show-error',
+    ].join('\n') + '\n';
+    await fsp.writeFile(file, body, { encoding: 'utf8', mode: 0o600 });
+    // Add to local .git/info/exclude so it never gets committed
+    // accidentally even if the agent runs `git add -A`.
+    try {
+      const excludeFile = path.join(workDir, '.git', 'info', 'exclude');
+      let existing = '';
+      try { existing = await fsp.readFile(excludeFile, 'utf8'); } catch {}
+      if (!/\.pipilot\/auth\.cfg/.test(existing)) {
+        await fsp.appendFile(excludeFile, (existing.endsWith('\n') || !existing ? '' : '\n') + '.pipilot/auth.cfg\n', 'utf8');
+      }
+    } catch {}
+  } catch (err) {
+    console.warn('[missions] writeAuthConfig failed:', err.message);
+  }
 }
 
 const TICK_INTERVAL_MS = 60_000;
@@ -447,21 +486,21 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         ``,
         `Useful read-only MCP tools while planning: mcp__github__list_pull_requests, mcp__github__search_code, mcp__github__list_issues, mcp__github__get_issue, mcp__github__get_file_contents.`,
         ``,
-        `**Fallback when the github MCP fails or a tool isn't available:** the env vars \`GITHUB_TOKEN\` and \`GH_TOKEN\` are set to a valid PAT for this run. Shell out to the GitHub REST API directly via curl, e.g.:`,
+        `**Fallback when the github MCP fails or a tool isn't available:** there's a pre-written curl config at \`.pipilot/auth.cfg\` inside the working directory containing the Authorization header for this run. Use it with curl --config — it bypasses shell variable expansion entirely (which is unreliable across cmd.exe / Git Bash / PowerShell):`,
         ``,
         `    # Close a PR`,
-        `    curl -s -X PATCH -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \\`,
+        `    curl --config .pipilot/auth.cfg -X PATCH \\`,
         `      https://api.github.com/repos/<owner>/<repo>/pulls/<num> -d '{"state":"closed"}'`,
         ``,
         `    # Comment on an issue / PR`,
-        `    curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \\`,
+        `    curl --config .pipilot/auth.cfg -X POST \\`,
         `      https://api.github.com/repos/<owner>/<repo>/issues/<num>/comments -d '{"body":"..."}'`,
         ``,
         `    # Trigger a workflow`,
-        `    curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \\`,
+        `    curl --config .pipilot/auth.cfg -X POST \\`,
         `      https://api.github.com/repos/<owner>/<repo>/actions/workflows/<id>/dispatches -d '{"ref":"main"}'`,
         ``,
-        `Use the env-var name (\`$GITHUB_TOKEN\`) — NEVER paste the literal token. Don't run \`gh auth login\` (writes to global config); env-var auth is intentionally process-scoped.`,
+        `\`.pipilot/auth.cfg\` is in .git/info/exclude so \`git add -A\` will not commit it. Do NOT cat it, echo its contents, or copy the token elsewhere — just point curl at it. Env vars \`GITHUB_TOKEN\` / \`GH_TOKEN\` are also set as a secondary fallback for tools that read them directly (gh, octokit), but \`curl --config .pipilot/auth.cfg\` is the recommended path for raw API calls. Don't run \`gh auth login\` (writes to global config); auth is intentionally workspace-scoped.`,
         ``,
         `Do NOT use mcp__github__create_or_update_file — that creates one commit per file and pollutes the PR history. The local-clone-and-push flow above gives you one atomic commit per mission, which is the whole point.`,
         ``,
@@ -585,6 +624,12 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         // <scratch>/.git/config, never touches the user's ~/.gitconfig.
         await execAsync('git', ['-C', scratchDir, 'config', '--local', 'user.name', 'PiPilot Mission']);
         await execAsync('git', ['-C', scratchDir, 'config', '--local', 'user.email', 'mission@pipilot.local']);
+        // Write a curl --config file so the agent has a reliable
+        // cross-shell auth path. $GITHUB_TOKEN expansion can fail on
+        // Windows when the Bash tool lands in cmd.exe instead of
+        // Git Bash; --config reads the header from disk verbatim
+        // so no shell substitution is involved.
+        await writeAuthConfig(scratchDir, pat);
         ghInfo.scratchDir = scratchDir;
       } catch (err) {
         const summary = 'Failed to prepare scratch clone: ' + (err?.message || err);
@@ -1137,6 +1182,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         if (!cloneRes.ok) throw new Error('Re-clone failed for resume');
         await execAsync('git', ['-C', fresh, 'config', '--local', 'user.name', 'PiPilot Mission']);
         await execAsync('git', ['-C', fresh, 'config', '--local', 'user.email', 'mission@pipilot.local']);
+        await writeAuthConfig(fresh, pat);
         workDir = fresh;
       }
     }
