@@ -447,6 +447,22 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
         ``,
         `Useful read-only MCP tools while planning: mcp__github__list_pull_requests, mcp__github__search_code, mcp__github__list_issues, mcp__github__get_issue, mcp__github__get_file_contents.`,
         ``,
+        `**Fallback when the github MCP fails or a tool isn't available:** the env vars \`GITHUB_TOKEN\` and \`GH_TOKEN\` are set to a valid PAT for this run. Shell out to the GitHub REST API directly via curl, e.g.:`,
+        ``,
+        `    # Close a PR`,
+        `    curl -s -X PATCH -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \\`,
+        `      https://api.github.com/repos/<owner>/<repo>/pulls/<num> -d '{"state":"closed"}'`,
+        ``,
+        `    # Comment on an issue / PR`,
+        `    curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \\`,
+        `      https://api.github.com/repos/<owner>/<repo>/issues/<num>/comments -d '{"body":"..."}'`,
+        ``,
+        `    # Trigger a workflow`,
+        `    curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \\`,
+        `      https://api.github.com/repos/<owner>/<repo>/actions/workflows/<id>/dispatches -d '{"ref":"main"}'`,
+        ``,
+        `Use the env-var name (\`$GITHUB_TOKEN\`) — NEVER paste the literal token. Don't run \`gh auth login\` (writes to global config); env-var auth is intentionally process-scoped.`,
+        ``,
         `Do NOT use mcp__github__create_or_update_file — that creates one commit per file and pollutes the PR history. The local-clone-and-push flow above gives you one atomic commit per mission, which is the whole point.`,
         ``,
         `If the mission turns out to be unnecessary, end with \`Skipped: <reason>\` and DO NOT push or open a PR. The scratch clone is left in place for inspection and cleaned up later.`,
@@ -712,6 +728,14 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       } catch {}
     };
 
+    // GITHUB_TOKEN / GH_TOKEN env injection: gives the agent a CLI
+    // fallback (curl, gh) when the github MCP fails or isn't wired —
+    // mirrors Pipilot Cloud's pattern. The token only lives in this
+    // run's spawned bash subprocess; never written to global config.
+    const extraEnv = runState.githubPat
+      ? { GITHUB_TOKEN: runState.githubPat, GH_TOKEN: runState.githubPat }
+      : {};
+
     const agentRun = runMissionAgent({
       missionName: mission.name,
       missionId: mission.id,
@@ -721,6 +745,7 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
       effort: mission.effort || 'medium',
       workDir: runState.workDir,
       extraMcpServers: runState.extraMcpServers,
+      extraEnv,
     }, onEvent);
     runState.agent = agentRun;
 
