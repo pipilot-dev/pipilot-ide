@@ -4092,7 +4092,8 @@
       if (!isOpen) renderModeDropdown();
     });
   }
-  setMode('agent');
+  setMode(state.settings?.agentDefaultMode === 'plan' ? 'plan' : 'agent');
+  bus.on('settings:changed', (p) => { if (p?.key === 'agentDefaultMode') setMode(p.value); });
 
   // ---------- Reasoning effort selector ----------
   // Five levels — none < low < medium (default) < high < xhigh.

@@ -135,17 +135,13 @@
     if (id === 'general') {
       return `
         <h2>General</h2>
-        <p class="lead">Appearance and editor look-and-feel.</p>
+        <p class="lead">Editor look-and-feel.</p>
         <div class="st-card">
-          ${rowSelect('theme', 'Theme', 'Color theme used across the IDE.', settings.theme || 'midnight', [
-            { v: 'midnight', t: 'Midnight Studio' },
-          ])}
-          ${rowRange('fontSize', 'Editor Font Size', 'Base font size in pixels.', settings.fontSize || 13, 10, 24)}
-          ${rowText('fontFamily', 'Font Family', 'CSS font-family stack for editor and code surfaces.', settings.fontFamily || '', { placeholder: 'JetBrains Mono, Consolas, monospace' })}
+          ${rowRange('fontSize', 'Editor Font Size', 'Base font size in pixels. Live-updates the editor.', settings.fontSize || 13, 10, 24)}
+          ${rowText('fontFamily', 'Font Family', 'CSS font-family stack. Leave blank for the JetBrains Mono default.', settings.fontFamily || '', { placeholder: 'JetBrains Mono, Consolas, monospace' })}
           ${rowSelect('cursorStyle', 'Cursor Style', 'Caret rendering in code editors.', settings.cursorStyle || 'line', [
             { v: 'line', t: 'Line' },
             { v: 'block', t: 'Block' },
-            { v: 'underline', t: 'Underline' },
           ])}
         </div>`;
     }

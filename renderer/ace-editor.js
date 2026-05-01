@@ -193,6 +193,7 @@
 
   async function restoreOpenTabsForProject(projectPath) {
     if (!projectPath) return;
+    const t0 = performance.now();
     let saved = null;
     try {
       saved = JSON.parse(localStorage.getItem(openTabsStorageKey(projectPath)) || 'null');
@@ -200,34 +201,51 @@
     const tabs = Array.isArray(saved?.tabs) ? saved.tabs : [];
     if (!tabs.length) return;
 
-    let opened = 0;
-    for (const p of tabs) {
-      try {
-        await openFile(p);
-        opened++;
-      } catch {}
-    }
-    if (!opened) return;
+    // Open the active tab first so the user sees something useful immediately,
+    // then restore the rest in the background, yielding to the event loop
+    // between each one. With 15+ saved tabs this turns a multi-second freeze
+    // into a smooth incremental restore — the user can interact with the
+    // active tab while siblings load behind it.
+    const activePath = saved?.active && tabs.includes(saved.active) ? saved.active : tabs[0];
+    const rest = tabs.filter(p => p !== activePath);
 
-    if (saved?.active && openDocs.has(saved.active)) {
-      switchTo(saved.active);
+    let opened = 0;
+    try { await openFile(activePath); opened++; } catch {}
+    if (saved?.active && openDocs.has(saved.active)) switchTo(saved.active);
+    if (openDocs.has('__welcome__')) closeFile('__welcome__');
+    console.log(`[startup] restoreOpenTabsForProject active tab took ${(performance.now() - t0).toFixed(0)}ms`);
+
+    // Background phase: open remaining tabs one per task, with yield points.
+    const yieldFn = (cb) => (typeof requestIdleCallback === 'function')
+      ? requestIdleCallback(cb, { timeout: 200 })
+      : setTimeout(cb, 0);
+    let i = 0;
+    const restT0 = performance.now();
+    function next() {
+      if (i >= rest.length) {
+        console.log(`[startup] restoreOpenTabsForProject restored ${opened}/${tabs.length} tabs in ${(performance.now() - t0).toFixed(0)}ms total (${(performance.now() - restT0).toFixed(0)}ms background)`);
+        persistOpenTabs();
+        return;
+      }
+      const p = rest[i++];
+      openFile(p).then(() => { opened++; }, () => {}).finally(() => yieldFn(next));
     }
-    if (openDocs.has('__welcome__')) {
-      closeFile('__welcome__');
-    }
-    persistOpenTabs();
+    if (rest.length) yieldFn(next);
+    else persistOpenTabs();
   }
 
   // ---------- Ace editor instance ----------
   function ensureEditor() {
     if (aceEditor) return aceEditor;
+    const _t0 = performance.now();
 
     // Configure worker path so Ace's built-in syntax checkers (JS, JSON, CSS, etc.) load from CDN
     ace.config.set('workerPath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7');
 
+    const customFont = (state.settings?.fontFamily || '').trim();
     aceEditor = ace.edit(hostEl, {
       theme: 'ace/theme/midnight',
-      fontFamily: '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace',
+      fontFamily: customFont || '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace',
       fontSize: state.settings?.fontSize || 13,
       showPrintMargin: false,
       highlightActiveLine: true,
@@ -244,6 +262,8 @@
       enableLiveAutocompletion: true,
       enableSnippets: false,
       wrap: state.settings?.wordWrap !== 'off',
+      showLineNumbers: state.settings?.lineNumbers !== false,
+      showGutter: true,
     });
 
     // Padding at top
@@ -296,6 +316,7 @@
       exec: () => { if (activePath) closeFile(activePath); },
     });
 
+    console.log(`[startup] ensureEditor (Ace init) took ${(performance.now() - _t0).toFixed(0)}ms`);
     bus.emit('ace:ready', aceEditor);
 
     return aceEditor;
@@ -393,15 +414,77 @@
       'min-width:180px', 'font-size:12px', 'color:var(--text,#b0b0b8)',
     ].join(';');
 
-    const actions = [
+    // Build actions per tab kind. Detect virtual tabs by id prefix.
+    const isBrowser = filePath.startsWith('browser-tab://');
+    const isBrowserHistory = filePath === 'browser-history://';
+    const isBrowserDownloads = filePath === 'browser-downloads://';
+    const isCommit = filePath.startsWith('git-commit://');
+    const isGitFile = filePath.startsWith('git-file://') || filePath.startsWith('git-diff-bin://');
+    const isWelcome = filePath === '__welcome__' || filePath.startsWith('__walkthrough_');
+    const closeBlock = [
       { label: 'Close', action: () => closeFile(filePath) },
       { label: 'Close Others', action: () => { [...tabOrder].filter(p => p !== filePath).forEach(p => closeFile(p)); } },
       { label: 'Close All', action: () => { [...tabOrder].forEach(p => closeFile(p)); } },
       { label: 'Close to the Right', action: () => { tabOrder.slice(idx + 1).forEach(p => closeFile(p)); }, disabled: idx >= tabOrder.length - 1 },
-      null,
-      { label: 'Copy Path', action: async () => { try { await navigator.clipboard.writeText(filePath); bus.emit('toast:show', { type: 'ok', message: 'Path copied' }); } catch {} } },
-      { label: 'Reveal in Explorer', action: () => { api.shell?.showItemInFolder?.(filePath); } },
     ];
+
+    let actions;
+    if (isBrowser) {
+      // Browser-tab specific menu
+      const tabInfo = (window.PiPilot?.browser?.listOpenTabs?.() || []).find(t => t.tabId === filePath) || {};
+      const url = tabInfo.url || '';
+      actions = [
+        ...closeBlock,
+        null,
+        { label: 'Reload Page', action: () => bus.emit('browser:control:reload', { tabId: filePath }) },
+        { label: 'Duplicate Tab', action: () => { if (url) window.PiPilot?.browser?.open?.(url); } , disabled: !url },
+        { label: 'New Browser Tab', action: () => window.PiPilot?.browser?.open?.() },
+        { label: 'New Private Tab', action: () => window.PiPilot?.browser?.openIncognito?.() },
+        null,
+        { label: 'Copy URL', action: async () => { try { await navigator.clipboard.writeText(url); bus.emit('toast:show', { type: 'ok', message: 'URL copied' }); } catch {} }, disabled: !url },
+        { label: 'Open in System Browser', action: () => { if (url) api.browser?.openExternal?.(url) || api.shell?.openExternal?.(url); }, disabled: !url },
+        null,
+        { label: 'Browser History', action: () => window.PiPilot?.browser?.openHistoryTab?.() },
+        { label: 'Downloads', action: () => window.PiPilot?.browser?.openDownloadsTab?.() },
+      ];
+    } else if (isBrowserHistory || isBrowserDownloads) {
+      actions = [
+        ...closeBlock,
+        null,
+        { label: 'New Browser Tab', action: () => window.PiPilot?.browser?.open?.() },
+        { label: isBrowserHistory ? 'Open Downloads' : 'Open History', action: () => isBrowserHistory ? window.PiPilot?.browser?.openDownloadsTab?.() : window.PiPilot?.browser?.openHistoryTab?.() },
+      ];
+    } else if (isCommit) {
+      const hash = filePath.split('/').pop() || '';
+      actions = [
+        ...closeBlock,
+        null,
+        { label: 'Copy Commit Hash', action: async () => { try { await navigator.clipboard.writeText(hash); bus.emit('toast:show', { type: 'ok', message: 'Hash copied' }); } catch {} } },
+        { label: 'Copy Short Hash', action: async () => { try { await navigator.clipboard.writeText(hash.slice(0, 7)); bus.emit('toast:show', { type: 'ok', message: 'Short hash copied' }); } catch {} } },
+      ];
+    } else if (isGitFile) {
+      // Parse the underlying file path from git-file://<projectPath>/<hash>/<file>
+      const m = filePath.match(/^git-(?:file|diff-bin):\/\/(.+?)\/([0-9a-f]+|HEAD|wt|staged)\/(.+)$/);
+      const realPath = m ? `${m[1]}/${m[3]}` : '';
+      actions = [
+        ...closeBlock,
+        null,
+        { label: 'Open Current Version', action: () => realPath && bus.emit('file:open', { path: realPath }), disabled: !realPath },
+        { label: 'Copy Path', action: async () => { try { await navigator.clipboard.writeText(realPath || filePath); bus.emit('toast:show', { type: 'ok', message: 'Path copied' }); } catch {} } },
+      ];
+    } else if (isWelcome) {
+      actions = [
+        ...closeBlock,
+      ];
+    } else {
+      // Regular file tab
+      actions = [
+        ...closeBlock,
+        null,
+        { label: 'Copy Path', action: async () => { try { await navigator.clipboard.writeText(filePath); bus.emit('toast:show', { type: 'ok', message: 'Path copied' }); } catch {} } },
+        { label: 'Reveal in Explorer', action: () => { api.shell?.showItemInFolder?.(filePath); } },
+      ];
+    }
 
     for (const item of actions) {
       if (!item) {
@@ -517,10 +600,30 @@
   }
 
   // ---------- Breadcrumb ----------
+  // Tabs whose ids should NOT show a path breadcrumb (browser tabs, history,
+  // downloads, commit details, etc. — these aren't filesystem locations).
+  const BREADCRUMB_HIDE_PREFIXES = [
+    'browser-tab://',
+    'browser-history://',
+    'browser-downloads://',
+    'git-commit://',
+    'git-file://',
+    'git-diff-bin://',
+    'ext://',
+  ];
   function updateBreadcrumb() {
     if (!breadcrumbEl) return;
+    // Always clear inline display we may have set previously — let CSS
+    // (`.breadcrumb:empty`) decide whether to collapse the row. Setting
+    // `display:none` directly on a grid row sometimes prevents subsequent
+    // grid rows (the editor area) from claiming the freed space cleanly.
+    breadcrumbEl.style.display = '';
     breadcrumbEl.innerHTML = '';
     if (!activePath) return;
+
+    // For non-file virtual tabs (browser, history, commit detail, etc.),
+    // leave the breadcrumb empty — the `:empty` CSS rule collapses it.
+    if (BREADCRUMB_HIDE_PREFIXES.some(p => activePath.startsWith(p))) return;
 
     const projRoot = state.projectPath;
     const projName = state.projectName || (projRoot ? basename(projRoot) : '');
@@ -761,10 +864,15 @@
       session.setTabSize(state.settings?.tabSize || 2);
       session.setUseSoftTabs(true);
       session.setUseWrapMode(state.settings?.wordWrap !== 'off');
-      // Enable Ace's built-in syntax checking only for languages it actually understands
-      // (JS, JSON, CSS). Disable for TS/TSX — Ace's JS worker gives false positives on TypeScript.
-      const workerLangs = new Set(['javascript', 'json', 'css']);
-      session.setOption('useWorker', workerLangs.has(lang));
+      // Ace's syntax workers are narrow: the JS worker chokes on JSX/TSX, the HTML
+      // worker can't parse Vue/Svelte/MDX templates, and the CSS worker rejects SCSS/
+      // LESS/Tailwind directives. Key the toggle on the file *extension* (not the Ace
+      // mode), because LANG_MAP aliases jsx→javascript and vue/svelte→html — using
+      // the mode name would re-enable the worker on exactly the files it misreads.
+      const extMatch = String(filePath || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+      const ext = extMatch ? extMatch[1] : '';
+      const WORKER_EXTS = new Set(['js', 'mjs', 'cjs', 'json', 'jsonc', 'html', 'htm']);
+      session.setOption('useWorker', WORKER_EXTS.has(ext));
 
       const docEntry = {
         session,
@@ -1421,6 +1529,47 @@
     if (aceEditor) aceEditor.resize();
   });
   resizeObserver.observe(hostEl);
+
+  // ── Reapply settings to existing sessions ─────────────────────────
+  // The Ace edit sessions are created lazily per-file, and each one calls
+  // session.setUseWrapMode at creation. If the user's saved settings load
+  // AFTER a session was created, or they toggle wordWrap in Settings, we
+  // need to push the new value into every open session — Ace doesn't do
+  // this automatically. Same for tab size.
+  function reapplyEditorSettings(changedKey) {
+    const wantWrap = state.settings?.wordWrap !== 'off';
+    const wantTab = state.settings?.tabSize || 2;
+    for (const [, doc] of openDocs) {
+      if (doc.virtual || !doc.session) continue;
+      try {
+        if (!changedKey || changedKey === 'wordWrap') doc.session.setUseWrapMode(wantWrap);
+        if (!changedKey || changedKey === 'tabSize') doc.session.setTabSize(wantTab);
+      } catch {}
+    }
+    if (aceEditor) {
+      try {
+        if (!changedKey || changedKey === 'wordWrap') aceEditor.setOption('wrap', wantWrap);
+        if (!changedKey || changedKey === 'fontSize') aceEditor.setOption('fontSize', state.settings?.fontSize || 13);
+        if (!changedKey || changedKey === 'fontFamily') {
+          const f = (state.settings?.fontFamily || '').trim();
+          aceEditor.setOption('fontFamily', f || '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace');
+        }
+        if (!changedKey || changedKey === 'cursorStyle') {
+          aceEditor.setOption('cursorStyle', state.settings?.cursorStyle === 'block' ? 'ace' : 'slim');
+        }
+        if (!changedKey || changedKey === 'lineNumbers') {
+          aceEditor.setOption('showLineNumbers', state.settings?.lineNumbers !== false);
+        }
+      } catch {}
+    }
+  }
+  bus.on('settings:loaded', () => reapplyEditorSettings(null));
+  bus.on('settings:changed', (payload) => {
+    if (!payload) return;
+    if (['wordWrap', 'tabSize', 'fontSize', 'fontFamily', 'cursorStyle', 'lineNumbers'].includes(payload.key)) {
+      reapplyEditorSettings(payload.key);
+    }
+  });
 
   // ---------- Public API ----------
   window.PiPilot.editor = {

@@ -229,7 +229,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   debug: {
     start: (opts) => ipcRenderer.invoke('debug:start', opts),
     stop: (sessionId) => ipcRenderer.invoke('debug:stop', { sessionId }),
-    setBreakpoints: (sessionId, filePath, lines) => ipcRenderer.invoke('debug:set-breakpoints', { sessionId, filePath, lines }),
+    setBreakpoints: (sessionId, filePath, breakpoints) => ipcRenderer.invoke('debug:set-breakpoints', { sessionId, filePath, breakpoints }),
+    setPauseOnExceptions: (sessionId, state) => ipcRenderer.invoke('debug:set-pause-on-exceptions', { sessionId, state }),
     continue: (sessionId) => ipcRenderer.invoke('debug:continue', { sessionId }),
     stepOver: (sessionId) => ipcRenderer.invoke('debug:step-over', { sessionId }),
     stepInto: (sessionId) => ipcRenderer.invoke('debug:step-into', { sessionId }),

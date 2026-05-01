@@ -13,8 +13,9 @@
   const bus = window.PiPilot?.bus;
   if (!api || !bus || !api.debug) return;
 
-  const BP_KEY = 'pipilot.debug.breakpoints'; // { [filePath]: number[] }
+  const BP_KEY = 'pipilot.debug.breakpoints'; // { [filePath]: ({ line, condition?, logMessage? } | number)[] }
   const SELECTED_CONFIG_KEY = 'pipilot.debug.selectedConfig';
+  const PAUSE_EXC_KEY = 'pipilot.debug.pauseOnExceptions'; // 'none' | 'caught' | 'uncaught' | 'all'
   const state = {
     breakpoints: loadBreakpoints(),
     session: null,           // { id, script } when a debug run is active
@@ -25,26 +26,48 @@
     configs: [],             // launch.json configurations[]
     selectedConfig: null,    // name of currently selected config, or null = "Debug File"
     launchJsonPath: null,
+    pauseOnExceptions: (() => {
+      try { return localStorage.getItem(PAUSE_EXC_KEY) || 'uncaught'; } catch { return 'uncaught'; }
+    })(),
   };
 
   // ── Breakpoint persistence ──────────────────────────────────────────
   function loadBreakpoints() {
-    try { return JSON.parse(localStorage.getItem(BP_KEY) || '{}') || {}; }
-    catch { return {}; }
+    try {
+      const raw = JSON.parse(localStorage.getItem(BP_KEY) || '{}') || {};
+      // Migration: old format was number[]; new is {line,condition?,logMessage?}[].
+      for (const k of Object.keys(raw)) {
+        raw[k] = (raw[k] || []).map(v => typeof v === 'number' ? { line: v } : v);
+      }
+      return raw;
+    } catch { return {}; }
   }
   function saveBreakpoints() {
     try { localStorage.setItem(BP_KEY, JSON.stringify(state.breakpoints)); } catch {}
   }
   function bpsForFile(filePath) {
-    return Array.from(new Set(state.breakpoints[filePath] || [])).sort((a, b) => a - b);
+    const arr = (state.breakpoints[filePath] || []).slice();
+    arr.sort((a, b) => (a.line || 0) - (b.line || 0));
+    return arr;
   }
-  function setBpsForFile(filePath, lines) {
-    if (!lines || !lines.length) delete state.breakpoints[filePath];
-    else state.breakpoints[filePath] = Array.from(new Set(lines)).sort((a, b) => a - b);
+  function setBpsForFile(filePath, breakpoints) {
+    if (!breakpoints || !breakpoints.length) delete state.breakpoints[filePath];
+    else {
+      // Dedupe by line, preferring entries with condition/logMessage
+      const map = new Map();
+      for (const bp of breakpoints) {
+        const cur = map.get(bp.line);
+        if (!cur || bp.condition || bp.logMessage) map.set(bp.line, bp);
+      }
+      state.breakpoints[filePath] = [...map.values()].sort((a, b) => a.line - b.line);
+    }
     saveBreakpoints();
     if (state.session) {
       api.debug.setBreakpoints(state.session.id, filePath, bpsForFile(filePath)).catch(() => {});
     }
+  }
+  function findBp(filePath, line) {
+    return (state.breakpoints[filePath] || []).find(b => b.line === line) || null;
   }
 
   // ── launch.json (.vscode) ───────────────────────────────────────────
@@ -183,23 +206,43 @@
     editor._dbgGutterWired = true;
     editor.on('guttermousedown', (e) => {
       const target = e.domEvent?.target;
-      // Ignore clicks on the fold widgets
       if (target && target.className && /ace_fold-widget/.test(target.className)) return;
       const row = e.getDocumentPosition().row;
       const filePath = window.PiPilot?.editor?.getActiveFile?.();
       if (!filePath || filePath.startsWith('browser-tab://') || filePath.startsWith('pipilot-')) return;
+      // Right-click → contextual menu for condition / logpoint / remove.
+      if (e.domEvent && (e.domEvent.button === 2 || e.domEvent.ctrlKey)) {
+        e.stop();
+        showGutterMenu(e.domEvent, filePath, row + 1);
+        return;
+      }
       toggleBreakpoint(filePath, row + 1);
       e.stop();
     });
+    // Suppress the native gutter context menu so our menu wins.
+    const gutterEl = editor.renderer?.$gutter;
+    if (gutterEl && !gutterEl._dbgCtxBlock) {
+      gutterEl._dbgCtxBlock = true;
+      gutterEl.addEventListener('contextmenu', (ev) => ev.preventDefault());
+    }
     setTimeout(refreshGutterMarkers, 0);
   }
 
   function toggleBreakpoint(filePath, line) {
-    const lines = bpsForFile(filePath);
-    const idx = lines.indexOf(line);
-    if (idx >= 0) lines.splice(idx, 1);
-    else lines.push(line);
-    setBpsForFile(filePath, lines);
+    const list = bpsForFile(filePath);
+    const idx = list.findIndex(b => b.line === line);
+    if (idx >= 0) list.splice(idx, 1);
+    else list.push({ line });
+    setBpsForFile(filePath, list);
+    refreshGutterMarkers();
+  }
+
+  function setBreakpointWithMeta(filePath, line, patch) {
+    const list = bpsForFile(filePath);
+    const idx = list.findIndex(b => b.line === line);
+    const next = { line, ...(idx >= 0 ? list[idx] : {}), ...patch };
+    if (idx >= 0) list[idx] = next; else list.push(next);
+    setBpsForFile(filePath, list);
     refreshGutterMarkers();
   }
 
@@ -208,13 +251,82 @@
     const filePath = window.PiPilot?.editor?.getActiveFile?.();
     if (!editor || !filePath) return;
     const session = editor.session;
-    // Clear our own breakpoint classes from every line, then re-stamp.
     const total = session.getLength();
-    for (let r = 0; r < total; r++) session.removeGutterDecoration(r, 'dbg-breakpoint');
-    for (const line of bpsForFile(filePath)) {
-      session.addGutterDecoration(line - 1, 'dbg-breakpoint');
+    for (let r = 0; r < total; r++) {
+      session.removeGutterDecoration(r, 'dbg-breakpoint');
+      session.removeGutterDecoration(r, 'dbg-breakpoint-conditional');
+      session.removeGutterDecoration(r, 'dbg-breakpoint-logpoint');
+    }
+    for (const bp of bpsForFile(filePath)) {
+      const cls = bp.logMessage ? 'dbg-breakpoint-logpoint'
+        : bp.condition ? 'dbg-breakpoint-conditional'
+        : 'dbg-breakpoint';
+      session.addGutterDecoration(bp.line - 1, cls);
     }
     refreshActiveLineMarker();
+  }
+
+  // ── Right-click gutter menu ─────────────────────────────────────────
+  function showGutterMenu(ev, filePath, line) {
+    const existing = findBp(filePath, line);
+    const items = [
+      { label: existing ? 'Remove Breakpoint' : 'Add Breakpoint',
+        onClick: () => toggleBreakpoint(filePath, line) },
+      { label: existing?.condition ? 'Edit Condition…' : 'Add Conditional Breakpoint…',
+        onClick: () => promptCondition(filePath, line, existing?.condition || '') },
+      { label: existing?.logMessage ? 'Edit Logpoint…' : 'Add Logpoint…',
+        onClick: () => promptLogpoint(filePath, line, existing?.logMessage || '') },
+    ];
+    const menu = document.createElement('div');
+    menu.className = 'dbg-ctxmenu';
+    menu.style.cssText = `position:fixed;left:${ev.clientX}px;top:${ev.clientY}px;z-index:9999;`;
+    menu.innerHTML = items.map((it, i) => `<button data-i="${i}">${escapeHtml(it.label)}</button>`).join('');
+    document.body.appendChild(menu);
+    const close = (e) => {
+      if (e && menu.contains(e.target)) return;
+      menu.remove();
+      document.removeEventListener('mousedown', close, true);
+      document.removeEventListener('keydown', escClose, true);
+    };
+    const escClose = (e) => { if (e.key === 'Escape') close(); };
+    setTimeout(() => {
+      document.addEventListener('mousedown', close, true);
+      document.addEventListener('keydown', escClose, true);
+    }, 0);
+    menu.querySelectorAll('button').forEach((b) => {
+      b.addEventListener('click', () => { items[+b.dataset.i].onClick(); menu.remove(); });
+    });
+  }
+
+  function promptCondition(filePath, line, current) {
+    const v = window.prompt(
+      `Condition for breakpoint at line ${line} (JS expression — pause when truthy). Leave blank to clear.`,
+      current
+    );
+    if (v === null) return;
+    const trimmed = v.trim();
+    if (!trimmed && !findBp(filePath, line)) return;
+    if (!trimmed) {
+      // Clearing condition demotes to a plain breakpoint, not a removal.
+      setBreakpointWithMeta(filePath, line, { condition: undefined });
+    } else {
+      setBreakpointWithMeta(filePath, line, { condition: trimmed, logMessage: undefined });
+    }
+  }
+
+  function promptLogpoint(filePath, line, current) {
+    const v = window.prompt(
+      `Log message at line ${line}. Use \${expr} for inline expressions (e.g. "user=\${user.id}"). Leave blank to clear.`,
+      current
+    );
+    if (v === null) return;
+    const trimmed = v.trim();
+    if (!trimmed && !findBp(filePath, line)) return;
+    if (!trimmed) {
+      setBreakpointWithMeta(filePath, line, { logMessage: undefined });
+    } else {
+      setBreakpointWithMeta(filePath, line, { logMessage: trimmed, condition: undefined });
+    }
   }
 
   function refreshActiveLineMarker() {
@@ -297,13 +409,16 @@
     if (!r?.ok) { pushConsole('error', r?.error || 'failed to start'); setStatus('idle'); return; }
     state.session = { id: r.sessionId, script: opts.script, port: r.port, pid: r.pid };
     setStatus('running');
-    // Push existing breakpoints for this file once we know we're attached.
+    // Push existing breakpoints + pause-on-exceptions once attached.
     setTimeout(() => {
       if (!state.session) return;
-      for (const [file, lines] of Object.entries(state.breakpoints)) {
-        if (lines && lines.length) {
-          api.debug.setBreakpoints(state.session.id, file, lines).catch(() => {});
+      for (const [file, bps] of Object.entries(state.breakpoints)) {
+        if (bps && bps.length) {
+          api.debug.setBreakpoints(state.session.id, file, bps).catch(() => {});
         }
+      }
+      if (state.pauseOnExceptions && state.pauseOnExceptions !== 'none') {
+        api.debug.setPauseOnExceptions(state.session.id, state.pauseOnExceptions).catch(() => {});
       }
     }, 250);
     renderPanel();
@@ -403,6 +518,15 @@
             <select class="dbg-config-picker" data-config-picker title="Debug configuration (.vscode/launch.json)"></select>
             <button class="dbg-btn dbg-btn-link" data-act="open-launch" title="Open .vscode/launch.json">⚙</button>
             <span class="dbg-sep"></span>
+            <label class="dbg-exc-label" title="Pause on exceptions">
+              ✦ <select class="dbg-exc-picker" data-exc-picker>
+                <option value="none">never</option>
+                <option value="uncaught">uncaught</option>
+                <option value="caught">caught</option>
+                <option value="all">all</option>
+              </select>
+            </label>
+            <span class="dbg-sep"></span>
             <button class="dbg-btn" data-act="continue"  title="Continue (F5)" disabled>⏵</button>
             <button class="dbg-btn" data-act="stepOver"  title="Step Over (F10)" disabled>⤼</button>
             <button class="dbg-btn" data-act="stepInto"  title="Step Into (F11)" disabled>↘</button>
@@ -451,6 +575,18 @@
         try { localStorage.setItem(SELECTED_CONFIG_KEY, state.selectedConfig || ''); } catch {}
         const cfg = state.selectedConfig ? state.configs.find(c => c.name === state.selectedConfig) : null;
         if (runBtn) runBtn.textContent = cfg ? `▶ ${cfg.name}` : '▶ Debug File';
+      });
+    }
+    const excPicker = pane.querySelector('[data-exc-picker]');
+    if (excPicker && !excPicker._wired) {
+      excPicker._wired = true;
+      excPicker.value = state.pauseOnExceptions;
+      excPicker.addEventListener('change', () => {
+        state.pauseOnExceptions = excPicker.value;
+        try { localStorage.setItem(PAUSE_EXC_KEY, state.pauseOnExceptions); } catch {}
+        if (state.session) {
+          api.debug.setPauseOnExceptions(state.session.id, state.pauseOnExceptions).catch(() => {});
+        }
       });
     }
     renderConfigPicker();
@@ -708,12 +844,45 @@
     const st = document.createElement('style');
     st.id = 'debug-styles';
     st.textContent = `
-      .ace_gutter-cell.dbg-breakpoint { position: relative; }
+      .ace_gutter-cell.dbg-breakpoint,
+      .ace_gutter-cell.dbg-breakpoint-conditional,
+      .ace_gutter-cell.dbg-breakpoint-logpoint { position: relative; }
       .ace_gutter-cell.dbg-breakpoint::before {
         content: ''; position: absolute; left: 4px; top: 50%; transform: translateY(-50%);
         width: 9px; height: 9px; border-radius: 50%; background: #e5534b;
         box-shadow: 0 0 4px rgba(229,83,75,0.6);
       }
+      .ace_gutter-cell.dbg-breakpoint-conditional::before {
+        content: '?'; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+        width: 13px; height: 13px; border-radius: 50%; background: #e5534b; color: #fff;
+        font-size: 9px; font-weight: 700; text-align: center; line-height: 13px;
+        box-shadow: 0 0 4px rgba(229,83,75,0.5);
+      }
+      .ace_gutter-cell.dbg-breakpoint-logpoint::before {
+        content: ''; position: absolute; left: 4px; top: 50%; transform: translateY(-50%);
+        width: 9px; height: 9px; background: #6cb6ff; clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+        box-shadow: 0 0 4px rgba(108,182,255,0.6);
+      }
+      .dbg-ctxmenu {
+        background: var(--surface-raised); border: 1px solid var(--border);
+        border-radius: 6px; box-shadow: var(--shadow); padding: 4px; min-width: 220px;
+        font-family: var(--font-sans); font-size: 12px;
+      }
+      .dbg-ctxmenu button {
+        all: unset; cursor: pointer; display: block; width: 100%;
+        padding: 6px 12px; border-radius: 4px; color: var(--text); box-sizing: border-box;
+      }
+      .dbg-ctxmenu button:hover { background: var(--surface-alt); color: var(--text-strong); }
+      .dbg-exc-label {
+        display: inline-flex; align-items: center; gap: 4px;
+        font-size: 11px; color: var(--text-dim); padding: 2px 6px;
+        border-radius: 4px; background: var(--surface-alt);
+      }
+      .dbg-exc-picker {
+        background: transparent; color: var(--text); border: none;
+        font: inherit; font-size: 11px; cursor: pointer; padding: 0; margin: 0;
+      }
+      .dbg-exc-picker:focus { outline: none; }
       .ace_marker-layer .dbg-active-line {
         position: absolute; z-index: 4;
         background: rgba(229,166,57,0.18);

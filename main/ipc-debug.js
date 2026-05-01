@@ -97,6 +97,9 @@ function attachWs(session, wsUrl) {
     try {
       await sendCdp(session, 'Runtime.enable');
       await sendCdp(session, 'Debugger.enable');
+      if (session.pauseOnExceptions && session.pauseOnExceptions !== 'none') {
+        await sendCdp(session, 'Debugger.setPauseOnExceptions', { state: session.pauseOnExceptions });
+      }
       await sendCdp(session, 'Runtime.runIfWaitingForDebugger');
     } catch (err) {
       emit(session, 'error', { message: String(err?.message || err) });
@@ -148,12 +151,23 @@ async function handleCdpEvent(session, method, params) {
     session.scripts.set(params.scriptId, { url: params.url, hash: params.hash });
     const file = urlToFilePath(params.url);
     if (file && session.fileBreakpoints.has(file)) {
-      const lines = [...session.fileBreakpoints.get(file)];
-      for (const line of lines) {
+      const bps = session.fileBreakpoints.get(file);
+      // Backwards-compat: stored entries may be Sets of line numbers OR
+      // arrays of { line, condition, logMessage }.
+      const list = bps instanceof Set
+        ? [...bps].map(line => ({ line }))
+        : Array.isArray(bps) ? bps : [];
+      for (const bp of list) {
         try {
+          let condition = bp.condition || undefined;
+          if (bp.logMessage) {
+            const expr = bp.logMessage.replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
+            condition = `(console.log(\`${expr}\`), false)`;
+          }
           await sendCdp(session, 'Debugger.setBreakpointByUrl', {
-            lineNumber: Math.max(0, line - 1),
+            lineNumber: Math.max(0, (bp.line || 1) - 1),
             url: params.url,
+            condition,
           });
         } catch {}
       }
@@ -251,26 +265,49 @@ module.exports = function register(ipcMain, ctx) {
 
   ipcMain.handle('debug:set-breakpoints', async (_e, payload) => {
     try {
-      const { sessionId, filePath, lines } = payload || {};
+      const { sessionId, filePath, breakpoints } = payload || {};
       const session = sessions.get(sessionId);
       if (!session) throw new Error('session not found');
       if (!filePath) throw new Error('filePath required');
-      session.fileBreakpoints.set(path.normalize(filePath), new Set(lines || []));
-      // If already attached, sync now: clear all existing and re-set for this file.
+      // breakpoints: [{ line, condition?, logMessage? }]
+      const bps = Array.isArray(breakpoints) ? breakpoints : [];
+      session.fileBreakpoints.set(path.normalize(filePath), bps);
       if (session.ws && session.ws.readyState === WebSocket.OPEN) {
         const url = filePathToUrl(filePath);
-        // Best-effort: we don't track per-line breakpoint IDs, so we rely on
-        // `Debugger.setBreakpointsActive` + setBreakpointByUrl idempotency.
-        for (const line of (lines || [])) {
+        for (const bp of bps) {
           try {
+            // Logpoint = a breakpoint whose condition prints then evaluates to false
+            // so the runtime never actually pauses. Standard CDP idiom.
+            let condition = bp.condition || undefined;
+            if (bp.logMessage) {
+              const expr = bp.logMessage.replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
+              condition = `(console.log(\`${expr}\`), false)`;
+            }
             await sendCdp(session, 'Debugger.setBreakpointByUrl', {
-              lineNumber: Math.max(0, line - 1),
+              lineNumber: Math.max(0, (bp.line || 1) - 1),
               url,
+              condition,
             });
           } catch {}
         }
       }
       return ok({});
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('debug:set-pause-on-exceptions', async (_e, payload) => {
+    try {
+      const { sessionId, state: pauseState } = payload || {};
+      const session = sessions.get(sessionId);
+      if (!session) throw new Error('session not found');
+      // CDP accepts: 'none' | 'caught' | 'uncaught' | 'all'
+      const valid = ['none', 'caught', 'uncaught', 'all'];
+      const v = valid.includes(pauseState) ? pauseState : 'none';
+      session.pauseOnExceptions = v;
+      if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+        await sendCdp(session, 'Debugger.setPauseOnExceptions', { state: v });
+      }
+      return ok({ state: v });
     } catch (err) { return fail(err); }
   });
 

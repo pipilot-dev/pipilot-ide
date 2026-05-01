@@ -275,7 +275,7 @@
 
     const term = new Terminal({
       fontFamily: 'JetBrains Mono, Cascadia Code, monospace',
-      fontSize: 13,
+      fontSize: state.settings?.terminalFontSize || 13,
       theme: THEME,
       cursorBlink: true,
       allowTransparency: false,
@@ -293,7 +293,7 @@
     try { fit.fit(); } catch {}
 
     const cwd = opts.cwd || state.projectPath || undefined;
-    const profileId = opts.profileId || selectedProfileId || undefined;
+    const profileId = opts.profileId || selectedProfileId || state.settings?.terminalProfile || undefined;
 
     let created;
     try {
@@ -457,6 +457,15 @@
 
     return entry;
   }
+
+  // Live-apply terminalFontSize changes from Settings to every open terminal.
+  bus.on('settings:changed', (p) => {
+    if (!p || p.key !== 'terminalFontSize') return;
+    const size = Number(p.value) || 13;
+    for (const entry of terminals) {
+      try { entry.term.options.fontSize = size; entry.fit && entry.fit.fit && entry.fit.fit(); } catch {}
+    }
+  });
 
   function closeTerminal(id) {
     const idx = terminals.findIndex(t => t.id === id);
