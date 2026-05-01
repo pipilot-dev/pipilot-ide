@@ -1908,6 +1908,50 @@
     run_code:             S('<polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>'),
     edit_file_patch:      S('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 14l2 2 4-4"/>'),
     fetch_url:            S('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/><path d="M16 8l4-4M20 4h-3M20 4v3"/>'),
+    // Embedded browser tools (browser_use)
+    browser_open:         S('<circle cx="12" cy="12" r="9"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 3a15 15 0 0 1 4 9 15 15 0 0 1-4 9 15 15 0 0 1-4-9 15 15 0 0 1 4-9z"/>'),
+    browser_navigate:     S('<circle cx="12" cy="12" r="9"/><polyline points="9 7 16 12 9 17"/>'),
+    browser_back:         S('<polyline points="15 18 9 12 15 6"/>'),
+    browser_forward:      S('<polyline points="9 18 15 12 9 6"/>'),
+    browser_reload:       S('<polyline points="23 4 23 10 17 10"/><path d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10"/>'),
+    browser_close_tab:    S('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M9 9l6 6M15 9l-6 6"/>'),
+    browser_list_tabs:    S('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
+    browser_url:          S('<circle cx="12" cy="12" r="9"/><path d="M9 8h6v8H9z"/>'),
+    browser_title:        S('<path d="M4 7h16M4 12h16M4 17h10"/>'),
+    browser_observe:      S('<circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/>'),
+    browser_snapshot:     S('<path d="M3 3h7l2 2h9v14H3z"/><path d="M7 13h10M7 17h6"/>'),
+    browser_console_log:  S('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 10l3 2-3 2"/><path d="M13 14h4"/>'),
+    browser_click:        S('<path d="M9 3l3 8 3-3 5 5-3 3 8 3-9 4z"/>'),
+    browser_click_ref:    S('<path d="M9 3l3 8 3-3 5 5-3 3 8 3-9 4z"/><circle cx="18" cy="6" r="2"/>'),
+    browser_type:         S('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 12h10M7 16h6"/>'),
+    browser_fill_ref:     S('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 12h6"/><circle cx="18" cy="9" r="2"/>'),
+    browser_press_key:    S('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10v4M11 10v4M15 10v4M19 10v4"/>'),
+    browser_scroll:       S('<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v4M10 9l2 2 2-2"/>'),
+    browser_get_text:     S('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/>'),
+    browser_get_html:     S('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>'),
+    browser_wait_for:     S('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+    browser_eval:         S('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/><path d="M11 14l2 -8"/>'),
+    browser_summary:      S('<path d="M3 5h18M3 10h18M3 15h12M3 20h8"/>'),
+    browser_hover:        S('<path d="M5 5l6 17 2-7 7-2z"/>'),
+    browser_drag:         S('<circle cx="9" cy="9" r="1"/><circle cx="15" cy="9" r="1"/><circle cx="9" cy="15" r="1"/><circle cx="15" cy="15" r="1"/><path d="M3 12h18M12 3v18"/>'),
+    browser_scroll_to:    S('<path d="M12 3v14M5 12l7 7 7-7"/>'),
+    browser_upload:       S('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'),
+    browser_wait_load:    S('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="2" fill="currentColor"/>'),
+    browser_set_viewport: S('<rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/>'),
+    browser_reset_viewport:S('<rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/><path d="M19 9l-3 3 3 3"/>'),
+    browser_cookies_get:  S('<circle cx="12" cy="12" r="9"/><circle cx="9" cy="9" r="1"/><circle cx="14" cy="13" r="1"/><circle cx="10" cy="15" r="1"/><circle cx="15" cy="8" r="1"/>'),
+    browser_pdf:          S('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 14h.01M11 14h2"/>'),
+    /* RETIRED — coordinate-input + game-bot pill icons. Re-enable in lockstep with the matching tools.
+    browser_click_at:     S('<path d="M3 3l7 17 2-7 7-2z"/><path d="M16 16l5 5"/>'),
+    browser_mouse_move:   S('<path d="M5 5l4 13 2-5 5-2z"/><path d="M3 12h2M19 12h2M12 3v2M12 19v2"/>'),
+    browser_drag_at:      S('<circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 8l8 8" stroke-dasharray="2 2"/>'),
+    browser_poll_until:   S('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><circle cx="20" cy="6" r="2" fill="currentColor"/>'),
+    browser_sample:       S('<path d="M3 17l5-7 4 5 4-9 5 11"/>'),
+    browser_run_script:   S('<polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/><circle cx="20" cy="6" r="2" fill="currentColor"/>'),
+    browser_stop_script:  S('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>'),
+    browser_script_status:S('<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/>'),
+    browser_update_script_state: S('<polygon points="5 3 19 12 5 21 5 3"/><path d="M14 12h6M17 9v6"/>'),
+    */
     // Default
     default:        S('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
   };
@@ -1928,6 +1972,50 @@
     generate_image: 'Generate Image', project_memory: 'Memory',
     edit_file_patch: 'Patch File', fetch_url: 'Fetch URL', run_code: 'Run Code',
     get_working_directory: 'Working Directory',
+    // Embedded browser tools
+    browser_open: 'Browser · Open',
+    browser_navigate: 'Browser · Navigate',
+    browser_back: 'Browser · Back',
+    browser_forward: 'Browser · Forward',
+    browser_reload: 'Browser · Reload',
+    browser_close_tab: 'Browser · Close Tab',
+    browser_list_tabs: 'Browser · List Tabs',
+    browser_url: 'Browser · URL',
+    browser_title: 'Browser · Title',
+    browser_observe: 'Browser · Observe',
+    browser_snapshot: 'Browser · Snapshot',
+    browser_console_log: 'Browser · Console',
+    browser_click: 'Browser · Click',
+    browser_click_ref: 'Browser · Click',
+    browser_type: 'Browser · Type',
+    browser_fill_ref: 'Browser · Fill',
+    browser_press_key: 'Browser · Key',
+    browser_scroll: 'Browser · Scroll',
+    browser_get_text: 'Browser · Get Text',
+    browser_get_html: 'Browser · Get HTML',
+    browser_wait_for: 'Browser · Wait',
+    browser_eval: 'Browser · Eval',
+    browser_summary: 'Browser · Summary',
+    browser_hover: 'Browser · Hover',
+    browser_drag: 'Browser · Drag',
+    browser_scroll_to: 'Browser · Scroll To',
+    browser_upload: 'Browser · Upload',
+    browser_wait_load: 'Browser · Wait Load',
+    browser_set_viewport: 'Browser · Viewport',
+    browser_reset_viewport: 'Browser · Reset Viewport',
+    browser_cookies_get: 'Browser · Cookies',
+    browser_pdf: 'Browser · PDF',
+    /* RETIRED — coordinate-input + game-bot pill labels. Re-enable in lockstep with the matching tools.
+    browser_click_at: 'Browser · Click @',
+    browser_mouse_move: 'Browser · Move',
+    browser_drag_at: 'Browser · Drag @',
+    browser_poll_until: 'Browser · Poll',
+    browser_sample: 'Browser · Sample',
+    browser_run_script: 'Browser · Run Bot',
+    browser_stop_script: 'Browser · Stop Bot',
+    browser_script_status: 'Browser · Bot Status',
+    browser_update_script_state: 'Browser · Steer Bot',
+    */
   };
 
   // Accent colors per tool (matching Vite)
@@ -1943,6 +2031,27 @@
     Bash: 'var(--text-mid)', run_in_terminal: 'var(--text-mid)',
     Agent: 'var(--accent)', SubAgent: 'var(--accent)',
     TodoWrite: 'var(--ok)', WebFetch: 'var(--info)',
+    // Embedded browser — pick a single accent so all browser pills cluster visually
+    browser_open: '#56d4dd', browser_navigate: '#56d4dd', browser_observe: '#56d4dd',
+    browser_snapshot: '#56d4dd', browser_console_log: '#56d4dd',
+    browser_click: '#56d4dd', browser_click_ref: '#56d4dd',
+    browser_type: '#56d4dd', browser_fill_ref: '#56d4dd',
+    browser_press_key: '#56d4dd', browser_scroll: '#56d4dd',
+    browser_get_text: '#56d4dd', browser_get_html: '#56d4dd',
+    browser_wait_for: '#56d4dd', browser_eval: '#56d4dd', browser_summary: '#56d4dd',
+    browser_back: '#56d4dd', browser_forward: '#56d4dd', browser_reload: '#56d4dd',
+    browser_close_tab: '#56d4dd', browser_list_tabs: '#56d4dd',
+    browser_url: '#56d4dd', browser_title: '#56d4dd',
+    browser_hover: '#56d4dd', browser_drag: '#56d4dd', browser_scroll_to: '#56d4dd',
+    browser_upload: '#56d4dd', browser_wait_load: '#56d4dd',
+    browser_set_viewport: '#56d4dd', browser_reset_viewport: '#56d4dd',
+    browser_cookies_get: '#56d4dd', browser_pdf: '#56d4dd',
+    /* RETIRED — coordinate-input + game-bot pill colors. Re-enable in lockstep with the matching tools.
+    browser_click_at: '#56d4dd', browser_mouse_move: '#56d4dd',
+    browser_drag_at: '#56d4dd', browser_poll_until: '#56d4dd', browser_sample: '#56d4dd',
+    browser_run_script: '#56d4dd', browser_stop_script: '#56d4dd', browser_script_status: '#56d4dd',
+    browser_update_script_state: '#56d4dd',
+    */
   };
 
   // Normalize MCP tool names: mcp__pipilot__search_codebase → search_codebase
@@ -2029,6 +2138,58 @@
     if (n === 'edit_file_patch') return input.filepath ? sanitizePath(input.filepath) : '';
     if (n === 'fetch_url') return input.url ? input.url.replace(/^https?:\/\//, '').slice(0, 60) : '';
     if (n === 'run_code') return input.language ? `${input.language}` : '';
+    // Embedded browser tools
+    if (n === 'browser_open' || n === 'browser_navigate') {
+      const u = input.url || '';
+      return u ? u.replace(/^https?:\/\//, '').slice(0, 60) : '';
+    }
+    if (n === 'browser_observe' || n === 'browser_snapshot' || n === 'browser_summary' || n === 'browser_console_log' ||
+        n === 'browser_back' || n === 'browser_forward' || n === 'browser_reload' ||
+        n === 'browser_url' || n === 'browser_title' || n === 'browser_list_tabs') {
+      // No input worth showing — pill stays clean
+      return '';
+    }
+    if (n === 'browser_close_tab') return input.tabId ? input.tabId.slice(-12) : '';
+    if (n === 'browser_click')     return input.selector || '';
+    if (n === 'browser_click_ref') return input.ref ? `[ref=${input.ref}]` : '';
+    if (n === 'browser_type') {
+      const sel = input.selector || '';
+      const txt = (input.text || '').slice(0, 40);
+      return sel ? `${sel} ← "${txt}"` : `"${txt}"`;
+    }
+    if (n === 'browser_fill_ref') {
+      const ref = input.ref ? `[ref=${input.ref}]` : '';
+      const txt = (input.text || '').slice(0, 40);
+      return ref ? `${ref} ← "${txt}"` : `"${txt}"`;
+    }
+    if (n === 'browser_press_key') return input.key || '';
+    if (n === 'browser_scroll') {
+      if (input.to != null) return `to ${input.to}px`;
+      if (input.dy != null) return `${input.dy > 0 ? '↓' : '↑'} ${Math.abs(input.dy)}px`;
+      return '';
+    }
+    if (n === 'browser_get_text' || n === 'browser_get_html') return input.selector || '(whole page)';
+    if (n === 'browser_wait_for') return input.selector || '';
+    if (n === 'browser_eval') return (input.expression || '').slice(0, 60);
+    if (n === 'browser_hover') return input.selector || '';
+    if (n === 'browser_drag') return `${input.from || ''} → ${input.to || ''}`;
+    if (n === 'browser_scroll_to') return input.selector || '';
+    if (n === 'browser_upload') return input.selector ? `${input.selector} (${(input.files || []).length} file${(input.files || []).length === 1 ? '' : 's'})` : '';
+    if (n === 'browser_wait_load') return input.idleMs ? `idle ${input.idleMs}ms` : '';
+    if (n === 'browser_set_viewport') return `${input.width}×${input.height}`;
+    if (n === 'browser_reset_viewport' || n === 'browser_cookies_get') return '';
+    if (n === 'browser_pdf') return input.name || '';
+    /* RETIRED — coordinate-input + game-bot previewFor cases. Re-enable in lockstep with the matching tools.
+    if (n === 'browser_click_at') return `(${input.x}, ${input.y})`;
+    if (n === 'browser_mouse_move') return `(${input.x}, ${input.y})`;
+    if (n === 'browser_drag_at') return `(${input.x1},${input.y1}) → (${input.x2},${input.y2})`;
+    if (n === 'browser_poll_until') return (input.expression || '').slice(0, 50);
+    if (n === 'browser_sample') return `${input.durationMs || 3000}ms @ ${input.intervalMs || 100}ms`;
+    if (n === 'browser_run_script') return input.name ? `${input.name} (${input.useRaf ? 'rAF' : (input.intervalMs || 100) + 'ms'})` : '';
+    if (n === 'browser_stop_script') return input.name || '';
+    if (n === 'browser_script_status') return input.name || '(list all)';
+    if (n === 'browser_update_script_state') return input.name ? `${input.name}: ${Object.keys(input.patch || {}).join(', ').slice(0, 40)}` : '';
+    */
     // Bash — show $ command (Vite style)
     if (name === 'Bash' || name === 'BashOutput') {
       const cmd = input.command || input.bash_id || '';
@@ -5088,6 +5249,29 @@
       messageToSend += `\n\n[Attached files — read these for context]\n${fileLines}`;
     }
 
+    // Embedded-browser context: if the user has any browser tabs open in the
+    // IDE, surface them so the agent can reason about them and act via the
+    // mcp__pipilot__browser_* tools (browser_observe, browser_navigate, etc.)
+    // without the user having to mention them. Skipped silently when no tabs
+    // are open or when the user toggled it off in settings.
+    try {
+      const browserCtxOff = localStorage.getItem('pipilot.chat.browserContext') === '0';
+      if (!browserCtxOff && window.PiPilot?.browser?.listOpenTabs) {
+        const tabs = window.PiPilot.browser.listOpenTabs() || [];
+        if (tabs.length) {
+          const lines = tabs.map(t => {
+            const flags = [];
+            if (t.active) flags.push('active');
+            if (t.mode === 'inc') flags.push('private');
+            const flagStr = flags.length ? ` (${flags.join(', ')})` : '';
+            const title = (t.title || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+            return `- tabId: ${t.tabId}${flagStr}\n  url:   ${t.url || ''}\n  title: ${title || '(no title)'}`;
+          }).join('\n');
+          messageToSend += `\n\n[Embedded browser context — ${tabs.length} tab${tabs.length === 1 ? '' : 's'} currently open]\n${lines}\n\nYou can interact with these via mcp__pipilot__browser_observe / browser_navigate / browser_click_ref / browser_type / browser_press_key. Pass tabId to target a specific tab; omit for the active tab.`;
+        }
+      }
+    } catch (err) { console.warn('[chat] browser-context inject failed:', err); }
+
     activeStream = api.agent.send({
       sessionId: currentSessionId,
       projectPath: state.projectPath,
@@ -6343,5 +6527,8 @@ Voice: first person plural ("we tried…"), warm but precise. No fluff, no greet
     stop() { if (activeStream && activeStream.stop) activeStream.stop(); },
     getCurrentSession() { return currentSessionId; },
     loadSession,
+    setEffort,
+    getEffort: () => state.reasoningEffort,
+    effortLevels: () => EFFORT_LEVELS.map(l => ({ id: l.id, label: l.label })),
   };
 })();

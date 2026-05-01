@@ -79,9 +79,13 @@
 <body>
   <!-- Welcome screen (shown when no project is open) -->
   <div id="welcome-screen" class="ws hidden">
-    <!-- Ambient glow -->
-    <div class="ws-glow ws-glow-1"></div>
-    <div class="ws-glow ws-glow-2"></div>
+    <!-- Atmospheric background (matches welcome-tab) -->
+    <div class="ws-bg" aria-hidden="true">
+      <div class="ws-bg-warm"></div>
+      <div class="ws-bg-cool"></div>
+      <div class="ws-bg-grid"></div>
+      <div class="ws-bg-vignette"></div>
+    </div>
 
     <!-- Full titlebar with menus (same as IDE titlebar) -->
     <header class="titlebar ws-header-bar">
@@ -106,11 +110,17 @@
     <div class="ws-content">
       <!-- Left: Brand + Actions -->
       <div class="ws-left">
-        <div class="ws-brand">
-          <img src="public/icon.png" alt="PiPilot" width="48" height="48" class="ws-logo-img" />
-          <div>
-            <h1 class="ws-title">PiPilot IDE</h1>
-            <p class="ws-subtitle">AI-native development environment</p>
+        <div class="ws-hero">
+          <span class="ws-eyebrow"><span class="ws-eyebrow-dot"></span>AI · NATIVE · IDE</span>
+          <div class="ws-hero-row">
+            <div class="ws-hero-logo-frame">
+              <div class="ws-hero-logo-glow"></div>
+              <img src="public/icon.png" alt="PiPilot" class="ws-hero-logo" />
+            </div>
+            <div class="ws-hero-text">
+              <h1 class="ws-hero-title">PiPilot<span class="ws-hero-title-mark">.</span></h1>
+              <p class="ws-hero-tagline">An editor that thinks alongside you.</p>
+            </div>
           </div>
         </div>
 
@@ -142,37 +152,47 @@
       <div class="ws-right">
         <h2 class="ws-section-label">Walkthroughs</h2>
 
-        <button class="ws-card" data-tutorial="get-started">
-          <div class="ws-card-icon ws-card-icon-blue">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          </div>
+        <button class="ws-card featured" data-tutorial="get-started" data-wk-id="getting-started">
+          <span class="ws-card-pennant" aria-hidden="true">
+            <svg viewBox="0 0 36 36" width="36" height="36">
+              <path d="M0 0 L36 0 L36 14 L18 36 L0 18 Z" fill="var(--accent, #FF6B35)"/>
+              <path d="M14 7l1.6 4.8h5l-4 2.9 1.5 4.8-4.1-3-4.1 3 1.5-4.8-4-2.9h5z" fill="#fff"/>
+            </svg>
+          </span>
           <div class="ws-card-body">
-            <div class="ws-card-title">Get Started with PiPilot</div>
-            <div class="ws-card-desc">Customize your editor, learn the basics, and start coding</div>
+            <div class="ws-card-title-row">
+              <span class="ws-card-title">Get Started with PiPilot</span>
+            </div>
+            <div class="ws-card-desc">Customize your editor, learn the basics, and start coding.</div>
           </div>
-          <svg class="ws-card-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+          <div class="ws-card-progress" aria-hidden="true"><div class="ws-card-progress-fill"></div></div>
         </button>
 
-        <button class="ws-card" data-tutorial="ai-power">
-          <div class="ws-card-icon ws-card-icon-accent">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
-          </div>
+        <button class="ws-card" data-tutorial="ai-power" data-wk-id="ai-power">
+          <span class="ws-card-icon-line">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12a4 4 0 0 1 4-4M12 16a4 4 0 0 0 4-4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
+          </span>
           <div class="ws-card-body">
-            <div class="ws-card-title">AI Power User</div>
-            <div class="ws-card-desc">Your AI pair programmer to write code faster and smarter</div>
+            <div class="ws-card-title-row">
+              <span class="ws-card-title">AI Power User</span>
+              <span class="ws-card-badge" data-show="updated">Updated</span>
+            </div>
+            <div class="ws-card-desc">Your AI pair programmer to write code faster and smarter.</div>
           </div>
-          <svg class="ws-card-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+          <div class="ws-card-progress" aria-hidden="true"><div class="ws-card-progress-fill"></div></div>
         </button>
 
-        <button class="ws-card" data-tutorial="docs">
-          <div class="ws-card-icon ws-card-icon-green">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-          </div>
+        <button class="ws-card" data-tutorial="docs" data-wk-id="docs">
+          <span class="ws-card-icon-line">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+          </span>
           <div class="ws-card-body">
-            <div class="ws-card-title">Documentation</div>
-            <div class="ws-card-desc">Explore keyboard shortcuts, features, and configuration</div>
+            <div class="ws-card-title-row">
+              <span class="ws-card-title">Documentation</span>
+            </div>
+            <div class="ws-card-desc">Explore keyboard shortcuts, features, and configuration.</div>
           </div>
-          <svg class="ws-card-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+          <div class="ws-card-progress" aria-hidden="true"><div class="ws-card-progress-fill"></div></div>
         </button>
       </div>
     </div>
@@ -208,6 +228,10 @@
       </nav>
       <div class="titlebar-right">
         <span id="titlebar-status" class="titlebar-status"></span>
+        <button class="titlebar-browser-btn" id="titlebar-browser-btn" title="Web Browser (Ctrl+Shift+B)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span class="titlebar-browser-label">Browser</span>
+        </button>
         <button class="titlebar-missions-btn" id="titlebar-missions-btn" title="Missions — scheduled & background agents">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
           <span class="titlebar-missions-label">Missions</span>
@@ -431,6 +455,14 @@
       <div class="status-right">
         <span class="status-item" id="status-encoding">UTF-8</span>
         <span class="status-item" id="status-language">Plain Text</span>
+        <span class="status-item status-item-btn" id="status-blame" title="Toggle inline git blame">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3"/><path d="M5 21v-1a7 7 0 0 1 14 0v1"/></svg>
+          Blame
+        </span>
+        <span class="status-item status-item-btn" id="status-notifications" title="Notifications">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2h16l-2-2z"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
+          <span class="status-notif-badge hidden" id="status-notif-badge">0</span>
+        </span>
       </div>
     </footer>
   </div>
@@ -455,9 +487,14 @@
   <!-- Scripts -->
   <script src="renderer/ipc.js"></script>
   <script src="renderer/toast.js"></script>
+  <script src="renderer/notifications.js"></script>
+  <script src="renderer/notifications-bindings.js"></script>
   <script src="renderer/contextmenu.js"></script>
   <script src="renderer/modals.js"></script>
   <script src="renderer/titlebar.js"></script>
+  <script src="renderer/git-decorations.js"></script>
+  <script src="renderer/blame.js"></script>
+  <script src="renderer/browser-tab.js"></script>
   <script src="renderer/statusbar.js"></script>
   <script src="renderer/sidebar.js"></script>
   <script src="renderer/panels.js"></script>
@@ -478,6 +515,7 @@
   <script src="renderer/docs/hover.js"></script>
   <script src="renderer/minimap.js"></script>
   <script src="renderer/welcome-tab.js"></script>
+  <script src="renderer/settings-tab.js"></script>
   <script src="renderer/preview.js"></script>
   <script src="renderer/dual-mode.js"></script>
   <script src="renderer/diagnostics.js"></script>

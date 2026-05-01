@@ -284,9 +284,11 @@
       footer.appendChild(cancel);
       footer.appendChild(confirm);
 
-      const handle = show(body, { title, footer, width: 460, onClose: () => resolve(null) });
-      cancel.addEventListener('click', () => { handle.close(); resolve(null); });
-      confirm.addEventListener('click', () => { const v = input.value; handle.close(); resolve(v); });
+      let settled = false;
+      const settle = (v) => { if (settled) return; settled = true; resolve(v); };
+      const handle = show(body, { title, footer, width: 460, onClose: () => settle(null) });
+      cancel.addEventListener('click', () => { settle(null); handle.close(); });
+      confirm.addEventListener('click', () => { settle(input.value); handle.close(); });
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { confirm.click(); }
       });
@@ -296,6 +298,8 @@
 
   function confirm({ title = 'Confirm', message = '', confirmText = 'OK', cancelText = 'Cancel', danger = false } = {}) {
     return new Promise((resolve) => {
+      let settled = false;
+      const settle = (v) => { if (settled) return; settled = true; resolve(v); };
       const body = document.createElement('div');
       body.textContent = message;
       const footer = document.createElement('div');
@@ -308,9 +312,10 @@
       if (danger) ok.style.background = 'var(--error)';
       footer.appendChild(cancel);
       footer.appendChild(ok);
-      const handle = show(body, { title, footer, width: 420, onClose: () => resolve(false) });
-      cancel.addEventListener('click', () => { handle.close(); resolve(false); });
-      ok.addEventListener('click', () => { handle.close(); resolve(true); });
+      const handle = show(body, { title, footer, width: 420, onClose: () => settle(false) });
+      // settle BEFORE close so onClose's settle(false) becomes a no-op
+      cancel.addEventListener('click', () => { settle(false); handle.close(); });
+      ok.addEventListener('click', () => { settle(true); handle.close(); });
     });
   }
 
@@ -406,17 +411,38 @@
     });
   });
 
-  // Settings modal
-  bus.on('modal:settings', async () => {
+  // Settings modal — REPLACED by virtual editor tab in renderer/settings-tab.js.
+  // Left here as fallback only if the tab module fails to load.
+  bus.on('modal:settings', async (payload) => {
+    if (window.PiPilot?.settings?.openTab) return; // tab handler wins
+    return _legacySettingsModal(payload);
+  });
+
+  async function _legacySettingsModal(payload) {
     let settingsResp;
     try { settingsResp = await api.settings.all(); } catch { settingsResp = { settings: {} }; }
     const settings = (settingsResp && settingsResp.settings) || {};
     let profiles = [];
     try { profiles = await api.terminal.profiles(); } catch {}
     let appVersion = ''; try { appVersion = await api.getVersion(); } catch {}
+    let builtins = [];
+    try {
+      const r = await api.extensions?.listBuiltins?.();
+      if (r?.ok) builtins = r.builtins || [];
+    } catch {}
 
-    const tabs = ['General', 'Editor', 'Terminal', 'AI', 'About'];
+    const tabs = ['General', 'Editor', 'Terminal', 'AI', 'Features', 'About'];
+    // Allow callers to open a specific tab. Accepts a numeric index or one
+    // of the tab names. Defaults to 0 (General).
     let activeTab = 0;
+    if (payload && typeof payload === 'object') {
+      if (typeof payload.tab === 'number' && payload.tab >= 0 && payload.tab < tabs.length) {
+        activeTab = payload.tab;
+      } else if (typeof payload.tab === 'string') {
+        const idx = tabs.findIndex(t => t.toLowerCase() === String(payload.tab).toLowerCase());
+        if (idx >= 0) activeTab = idx;
+      }
+    }
 
     const body = document.createElement('div');
 
@@ -471,13 +497,33 @@
           <p style="color:var(--text-dim);font-size:11px;">API endpoint and model are configured via the .env file in the project root.</p>
         `;
       } else if (activeTab === 4) {
+        // Built-in features — toggle each shipped extension
+        const rows = builtins.map(b => `
+          <div class="modal-form-row" style="align-items:flex-start;">
+            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+              <input type="checkbox" data-key="${b.settingsKey}" ${settings[b.settingsKey] !== false ? 'checked' : ''} style="margin-top:2px;" />
+              <span>
+                <span style="font-weight:500;color:var(--text-strong);">${b.name}</span>
+                <span style="display:block;font-size:11px;color:var(--text-dim);margin-top:2px;line-height:1.4;">${b.desc || ''}</span>
+              </span>
+            </label>
+          </div>
+        `).join('');
+        content.innerHTML = `
+          <p style="color:var(--text-dim);font-size:11px;margin:0 0 14px;">
+            Built-in features ship with the IDE — no installation required. Toggle to enable or disable.
+            Changes take effect on next launch.
+          </p>
+          ${rows || '<p style="color:var(--text-dim);font-size:11px;">No built-in features available.</p>'}
+        `;
+      } else if (activeTab === 5) {
         content.innerHTML = `
           <div style="text-align:center;padding:20px 0;">
             <div style="font-size:32px;color:var(--accent);">PiPilot IDE</div>
             <div style="color:var(--text-dim);margin-top:6px;">Version ${appVersion}</div>
             <div style="color:var(--text-dim);font-size:11px;margin-top:14px;">
               Native AI development environment.<br/>
-              Built with Electron + Claude Agent SDK.
+              An editor that thinks alongside you.
             </div>
           </div>
         `;
@@ -501,7 +547,7 @@
     }
     render();
     show(body, { title: 'Settings', width: 600 });
-  });
+  }
 
   // Add MCP server
   bus.on('modal:add-mcp', () => {
