@@ -437,6 +437,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   deploy: {
     listProviders: () => ipcRenderer.invoke('deploy:list-providers'),
+    detectProvider: (projectPath) => ipcRenderer.invoke('deploy:detect-provider', { projectPath }),
     history: (provider) => ipcRenderer.invoke('deploy:history', { provider }),
     run: (opts) => ipcRenderer.invoke('deploy:run', opts),
     promote: (opts) => ipcRenderer.invoke('deploy:promote', opts),

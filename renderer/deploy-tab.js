@@ -105,6 +105,19 @@
       .dt-dialog .actions { display:flex; gap:8px; margin-top:6px; justify-content:flex-end; }
       .dt-error { color:var(--error); font-size:11.5px; padding:8px 10px; background:color-mix(in srgb, var(--error) 12%, transparent); border-radius:5px; }
 
+      /* Provider auto-detection banner */
+      .dt-detected {
+        display:flex; align-items:center; gap:12px; padding:10px 14px;
+        background:color-mix(in srgb, var(--accent) 8%, transparent);
+        border:1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+        border-radius:8px; font-size:12.5px; color:var(--text);
+      }
+      .dt-detected-icon { font-size:18px; flex:0 0 auto; }
+      .dt-detected-text { flex:1; min-width:0; line-height:1.4; }
+      .dt-detected-text strong { color:var(--text-strong); font-weight:600; }
+      .dt-detected-marker { color:var(--text-dim); font-size:11.5px; }
+      .dt-detected code { font-family:var(--font-mono); font-size:10.5px; padding:1px 5px; border-radius:3px; background:var(--surface-alt); }
+
       /* Domains list */
       .dt-domain-list { display:flex; flex-direction:column; gap:6px; max-height:340px; overflow:auto; padding:4px 0; }
       .dt-domain-row { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--bg); border:1px solid var(--border); border-radius:5px; font-size:12px; }
@@ -182,6 +195,7 @@
     accounts: { github: null, gitlab: null },
     cloud: {},            // { providerId: { connected: bool, history: [] } }
     devServers: [],       // [{ id, projectPath, url, port, ... }]
+    detected: [],         // [{ provider, marker, confidence, note }] — auto-detected providers
   };
 
   function projectPath() { return window.PiPilot?.state?.projectPath || ''; }
@@ -222,6 +236,12 @@
       const all = r?.servers || r || [];
       state.devServers = (Array.isArray(all) ? all : []).filter(s => !p || s.projectPath === p);
     } catch { state.devServers = []; }
+
+    // Auto-detect provider from project files
+    try {
+      const r = await api.deploy.detectProvider(p);
+      state.detected = (r?.ok ? r.detected : []) || [];
+    } catch { state.detected = []; }
   }
 
   // ── Render ────────────────────────────────────────────────────────
@@ -256,6 +276,7 @@
 
         <section class="dt-section">
           <div class="dt-section-h"><span class="num">02</span><span>Cloud Deploy</span></div>
+          ${renderDetectionBanner()}
           <div class="dt-cards dt-cloud-cards">
             ${CLOUD_PROVIDERS.map(cp => renderCloudCard(cp)).join('')}
           </div>
@@ -271,6 +292,25 @@
     container.querySelectorAll('[data-act]').forEach((b) => {
       b.addEventListener('click', () => onAction(b.dataset.act, b.dataset.provider, b.dataset));
     });
+  }
+
+  function renderDetectionBanner() {
+    if (!state.detected.length) return '';
+    // Highest-confidence hit only — anything more is noise.
+    const top = state.detected[0];
+    const cp = CLOUD_PROVIDERS.find(c => c.id === top.provider);
+    if (!cp) return '';
+    const connected = state.cloud[top.provider]?.connected;
+    const action = connected
+      ? `<button class="dt-btn primary" data-act="${top.provider === 'render' ? 'deploy' : 'deploy'}" data-provider="${top.provider}" data-target="preview" style="flex:0 0 auto;padding:5px 12px;">▶ Deploy now</button>`
+      : `<button class="dt-btn primary" data-act="connect-cloud" data-provider="${top.provider}" style="flex:0 0 auto;padding:5px 12px;">Connect ${escapeHtml(cp.name)}</button>`;
+    const noteText = top.note ? ` · ${escapeHtml(top.note)}` : '';
+    return `
+      <div class="dt-detected">
+        <span class="dt-detected-icon">${cp.icon}</span>
+        <span class="dt-detected-text"><strong>Detected:</strong> ${escapeHtml(cp.name)}<span class="dt-detected-marker"> · <code>${escapeHtml(top.marker)}</code>${noteText}</span></span>
+        ${action}
+      </div>`;
   }
 
   function renderCloudCard(cp) {
@@ -533,16 +573,20 @@
     const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
     const list = state.cloud[provider]?.history || [];
     const rows = list.length
-      ? list.map((h, i) => `
+      ? list.map((h, i) => {
+          const logsUrl = buildLogsUrl(provider, h);
+          return `
           <div style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border);font-size:12px;">
             <span class="dt-deploy-pill ${h.status}">${h.status === 'success' ? '✓' : '✗'}</span>
             <span style="flex:1;min-width:0;">${h.url ? `<a href="#" data-act="open-url" data-url="${escapeHtml(h.url)}" style="color:var(--accent);">${escapeHtml(shortenUrl(h.url))}</a>` : '<span style="color:var(--text-dim);">(no url)</span>'}</span>
             <span style="font-size:10px;color:var(--text-dim);">${escapeHtml(h.target || 'preview')}</span>
             <span style="font-size:10px;color:var(--text-dim);">${formatRel(h.finishedAt)}</span>
             <span style="font-size:10px;color:var(--text-dim);">${Math.round(((h.finishedAt - h.startedAt) || 0) / 1000)}s</span>
+            ${logsUrl ? `<button class="dt-btn" data-act="open-url" data-url="${escapeHtml(logsUrl)}" title="View build logs in the provider's dashboard" style="flex:0 0 auto;padding:3px 10px;font-size:10.5px;${h.status === 'error' ? 'color:var(--error);' : ''}">📜 Logs</button>` : ''}
             <button class="dt-btn" data-act="rerun" data-provider="${provider}" data-target="${escapeHtml(h.target || 'preview')}" title="Deploy again with the same config" style="flex:0 0 auto;padding:3px 10px;font-size:10.5px;">↻ Re-run</button>
             ${rollbackButtonHtml(provider, h)}
-          </div>`).join('')
+          </div>`;
+        }).join('')
       : '<p class="lead">No deploys yet for this provider.</p>';
     showDialog({
       title: `${cp?.name || provider} · Deploy history`,
@@ -550,6 +594,33 @@
       onSubmit: () => null,
       submitLabel: 'Close',
     });
+  }
+
+  // Build a deep-link to the provider's build-logs page from whatever
+  // metadata we captured at deploy time. Returns null if we can't
+  // construct one (e.g. metadata wasn't captured for older history).
+  function buildLogsUrl(provider, h) {
+    const m = h.metadata || {};
+    const c = h.config || {};
+    if (provider === 'vercel') {
+      // Vercel's deployment URL hash is also the inspect path.
+      if (m.deploymentId) return `https://vercel.com/dashboard/deployments/${encodeURIComponent(m.deploymentId)}`;
+      if (h.url)          return `${h.url}/_logs`;
+    }
+    if (provider === 'netlify' && m.siteSlug && m.deployId) {
+      return `https://app.netlify.com/sites/${encodeURIComponent(m.siteSlug)}/deploys/${encodeURIComponent(m.deployId)}`;
+    }
+    if (provider === 'cloudflare' && m.projectName && m.deploymentId) {
+      // Account-scoped URL — CF's dashboard auto-resolves the account.
+      return `https://dash.cloudflare.com/?to=/:account/pages/view/${encodeURIComponent(m.projectName)}/${encodeURIComponent(m.deploymentId)}`;
+    }
+    if (provider === 'render' && m.serviceId && m.deployId) {
+      return `https://dashboard.render.com/web/${encodeURIComponent(m.serviceId)}/deploys/${encodeURIComponent(m.deployId)}`;
+    }
+    if (provider === 'railway' && m.serviceId) {
+      return `https://railway.app/project/${encodeURIComponent(m.projectId || '')}/service/${encodeURIComponent(m.serviceId)}`;
+    }
+    return null;
   }
 
   // Per-provider rollback button: each one has different requirements

@@ -225,6 +225,47 @@ module.exports = function register(ipcMain, ctx) {
     await writeJson(configFile, all);
   }
 
+  // Auto-detect which cloud provider this project is configured for by
+  // scanning for marker files. Returns provider IDs ranked by confidence
+  // (clearest signal first). The deploy tab shows a "Detected: X" banner
+  // and recommends the matching card.
+  const DETECTORS = [
+    { provider: 'vercel',     files: ['vercel.json'],                                       confidence: 0.95 },
+    { provider: 'netlify',    files: ['netlify.toml', 'netlify.json'],                      confidence: 0.95 },
+    { provider: 'render',     files: ['render.yaml'],                                       confidence: 0.95 },
+    { provider: 'railway',    files: ['railway.json', 'railway.toml', '.railway/config.json'], confidence: 0.95 },
+    { provider: 'cloudflare', files: ['wrangler.toml', 'wrangler.jsonc'],                   confidence: 0.85, note: 'wrangler — Pages or Workers depending on config' },
+    // Heuristic fallbacks (lower confidence — provider isn't pinned by
+    // a config file but the framework strongly suggests one).
+    { provider: 'vercel',     files: ['next.config.js', 'next.config.mjs', 'next.config.ts'], confidence: 0.55, note: 'Next.js — Vercel is the natural home' },
+    { provider: 'netlify',    files: ['_redirects', '_headers'],                            confidence: 0.5  },
+  ];
+
+  ipcMain.handle('deploy:detect-provider', async (_e, { projectPath } = {}) => {
+    try {
+      if (!projectPath) return ok({ detected: [] });
+      const detected = [];
+      const seen = new Map();          // provider → highest confidence seen
+      for (const d of DETECTORS) {
+        for (const f of d.files) {
+          try {
+            await fsp.access(path.join(projectPath, f));
+            const prev = seen.get(d.provider) || 0;
+            if (d.confidence > prev) {
+              seen.set(d.provider, d.confidence);
+              const idx = detected.findIndex(x => x.provider === d.provider);
+              if (idx >= 0) detected[idx] = { provider: d.provider, marker: f, confidence: d.confidence, note: d.note };
+              else detected.push({ provider: d.provider, marker: f, confidence: d.confidence, note: d.note });
+            }
+            break;       // one marker per detector entry is enough
+          } catch {}
+        }
+      }
+      detected.sort((a, b) => b.confidence - a.confidence);
+      return ok({ detected });
+    } catch (err) { return fail(err); }
+  });
+
   ipcMain.handle('deploy:list-providers', async () => {
     return ok({
       providers: Object.entries(PROVIDERS).map(([id, p]) => ({
