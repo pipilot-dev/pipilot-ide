@@ -3,7 +3,7 @@
 // api.terminal.profiles, api.extensions.listBuiltins, api.getVersion.
 (() => {
   const bus = window.PiPilot?.bus;
-  const api = window.PiPilot;
+  const api = window.electronAPI;
   if (!bus || !api) return;
 
   const SETTINGS_TAB_ID = 'pipilot-settings://main';
