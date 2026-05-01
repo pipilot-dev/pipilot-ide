@@ -105,6 +105,14 @@
       .dt-dialog .actions { display:flex; gap:8px; margin-top:6px; justify-content:flex-end; }
       .dt-error { color:var(--error); font-size:11.5px; padding:8px 10px; background:color-mix(in srgb, var(--error) 12%, transparent); border-radius:5px; }
 
+      /* Deploy webhooks list */
+      .dt-hook-list { display:flex; flex-direction:column; gap:6px; max-height:340px; overflow:auto; padding:4px 0; }
+      .dt-hook-row { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--bg); border:1px solid var(--border); border-radius:5px; font-size:11.5px; }
+      .dt-hook-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+      .dt-hook-title { color:var(--text-strong); font-weight:500; font-size:12px; }
+      .dt-hook-branch { color:var(--text-dim); font-weight:400; font-size:10.5px; }
+      .dt-hook-url { font-family:var(--font-mono); color:var(--text-mid); font-size:10.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
       /* Provider auto-detection banner */
       .dt-detected {
         display:flex; align-items:center; gap:12px; padding:10px 14px;
@@ -353,6 +361,7 @@
           }
           ${s.connected ? `<button class="dt-btn" data-act="env" data-provider="${cp.id}" title="Manage environment variables">🔐 Env</button>` : ''}
           ${s.connected ? `<button class="dt-btn" data-act="domains" data-provider="${cp.id}" title="Manage custom domains">🌐 Domains</button>` : ''}
+          ${s.connected ? `<button class="dt-btn" data-act="hooks" data-provider="${cp.id}" title="Deploy webhooks for CI integration">🪝 Hooks</button>` : ''}
           ${s.history.length ? `<button class="dt-btn" data-act="history" data-provider="${cp.id}" title="Deploy history">⏱ ${s.history.length}</button>` : ''}
         </div>
       </div>`;
@@ -458,6 +467,10 @@
     if (act === 'domains')           return openDomainsDialog(provider);
     if (act === 'domain-add')        return openDomainAddDialog(provider);
     if (act === 'domain-delete')     return deleteDomain(provider, dataset || {});
+    if (act === 'hooks')             return openHooksDialog(provider);
+    if (act === 'hook-add')          return openHookAddDialog(provider);
+    if (act === 'hook-delete')       return deleteHook(provider, dataset || {});
+    if (act === 'copy-hook')         return copyHookUrl(dataset?.url);
     if (act === 'open-url')         { try { api.shell?.openExternal?.(dataset?.url); } catch {} return; }
     if (act === 'dev-start')        return startDevServer();
     if (act === 'dev-stop')         return stopDevServer(dataset?.id);
@@ -1402,6 +1415,115 @@
     else if (provider === 'render')     r = await api.render.deleteDomain(ctx.serviceId, ds.domainId);
     if (!r?.ok) { bus.emit('toast:show', { type: 'error', message: r?.error || 'Delete failed' }); return; }
     openDomainsDialog(provider);
+  }
+
+  // ── Deploy webhooks ──────────────────────────────────────────────
+  // Each provider hosts deploy hooks differently. Netlify exposes a
+  // clean REST API so we can list / create / delete inline. The others
+  // configure hooks through their dashboard UI — we deep-link there.
+  function dashboardHooksUrl(provider) {
+    if (provider === 'vercel')    return 'https://vercel.com/dashboard/integrations';
+    if (provider === 'netlify')   return null;  // handled inline
+    if (provider === 'cloudflare')return 'https://dash.cloudflare.com/?to=/:account/pages';
+    if (provider === 'cloudflare-workers') return 'https://dash.cloudflare.com/?to=/:account/workers';
+    if (provider === 'render')    return 'https://dashboard.render.com';
+    if (provider === 'railway')   return 'https://railway.app/account';
+    return null;
+  }
+
+  async function openHooksDialog(provider) {
+    const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
+    if (provider !== 'netlify') {
+      const url = dashboardHooksUrl(provider);
+      showDialog({
+        title: `${cp?.name || provider} · Deploy webhooks`,
+        body: `<p class="lead">Webhooks for ${cp?.name} are managed in their dashboard. Each provider lets you generate a unique POST URL that triggers a fresh deploy when hit — perfect for CI pipelines, scheduled rebuilds, or "deploy on CMS publish" flows.</p>
+          ${url ? `<p class="lead">Open the dashboard: <a href="#" data-act="open-url" data-url="${escapeHtml(url)}" style="color:var(--accent);">${escapeHtml(url)}</a></p>` : ''}
+          <p class="lead">Once you've copied a hook URL from there, anything that can <code>curl -X POST &lt;url&gt;</code> will trigger a deploy.</p>`,
+        onSubmit: () => null,
+        submitLabel: 'OK',
+      });
+      return;
+    }
+
+    // Netlify — full management
+    const last = lastSuccessfulDeploy('netlify');
+    const siteSlug = last?.metadata?.siteSlug;
+    if (!siteSlug) {
+      showDialog({
+        title: 'Netlify · Deploy webhooks',
+        body: `<p class="lead">Deploy to Netlify once first so we capture the site ID.</p>`,
+        onSubmit: () => null, submitLabel: 'OK',
+      });
+      return;
+    }
+
+    let hooks = [];
+    let loadError = null;
+    try {
+      const r = await api.netlify.listHooks(siteSlug);
+      if (r?.ok) hooks = r.hooks || []; else loadError = r?.error;
+    } catch (err) { loadError = err.message; }
+
+    const renderRows = () => hooks.map(h => `
+      <div class="dt-hook-row">
+        <div class="dt-hook-info">
+          <div class="dt-hook-title">${escapeHtml(h.title)}${h.branch ? ` <span class="dt-hook-branch">on ${escapeHtml(h.branch)}</span>` : ''}</div>
+          <div class="dt-hook-url" title="${escapeHtml(h.url)}">${escapeHtml(h.url)}</div>
+        </div>
+        <button class="dt-btn" data-act="copy-hook" data-url="${escapeHtml(h.url)}" title="Copy URL" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">📋 Copy</button>
+        <button class="dt-btn danger" data-act="hook-delete" data-provider="${provider}" data-site-slug="${escapeHtml(siteSlug)}" data-hook-id="${escapeHtml(h.id)}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Delete</button>
+      </div>
+    `).join('');
+
+    showDialog({
+      title: `Netlify · ${escapeHtml(siteSlug)} · ${hooks.length} build hook${hooks.length === 1 ? '' : 's'}`,
+      body: `${loadError ? `<p class="dt-error" style="display:block;">${escapeHtml(loadError)}</p>` : ''}
+        <p class="lead">POST anything to a hook URL → Netlify queues a deploy. Use these from GitHub Actions, cron jobs, your CMS's webhook, etc.</p>
+        <div class="dt-hook-list">${hooks.length ? renderRows() : '<p class="lead">No build hooks yet.</p>'}</div>
+        <button class="dt-btn primary" data-act="hook-add" data-provider="${provider}" data-site-slug="${escapeHtml(siteSlug)}" style="margin-top:8px;">+ Create build hook</button>`,
+      onSubmit: () => null, submitLabel: 'Close',
+    });
+  }
+
+  async function openHookAddDialog(provider) {
+    if (provider !== 'netlify') return;
+    const last = lastSuccessfulDeploy('netlify');
+    const siteSlug = last?.metadata?.siteSlug;
+    if (!siteSlug) return;
+    showDialog({
+      title: 'Create Netlify build hook',
+      body: `<label>Hook name<input type="text" data-field="title" value="PiPilot hook" autofocus /></label>
+        <label>Branch (optional — defaults to production)<input type="text" data-field="branch" placeholder="main" /></label>
+        <p class="lead">The new hook URL will appear in the list below — copy it into your CI config.</p>`,
+      onSubmit: async (root) => {
+        const title = root.querySelector('[data-field="title"]').value.trim() || 'PiPilot hook';
+        const branch = root.querySelector('[data-field="branch"]').value.trim() || null;
+        const r = await api.netlify.addHook(siteSlug, title, branch);
+        if (!r?.ok) return r?.error || 'Create failed.';
+        openHooksDialog(provider);
+        return null;
+      },
+      submitLabel: 'Create',
+    });
+  }
+
+  async function deleteHook(provider, ds) {
+    if (provider !== 'netlify') return;
+    if (!confirm(`Delete this build hook?`)) return;
+    const r = await api.netlify.deleteHook(ds.siteSlug, ds.hookId);
+    if (!r?.ok) { bus.emit('toast:show', { type: 'error', message: r?.error || 'Delete failed' }); return; }
+    openHooksDialog(provider);
+  }
+
+  async function copyHookUrl(url) {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      bus.emit('toast:show', { type: 'success', message: 'Hook URL copied' });
+    } catch {
+      bus.emit('toast:show', { type: 'error', message: 'Copy failed' });
+    }
   }
 
   async function startDevServer() {

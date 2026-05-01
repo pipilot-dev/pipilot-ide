@@ -150,4 +150,44 @@ module.exports = function register(ipcMain, ctx) {
       return ok({});
     } catch (err) { return fail(err); }
   });
+
+  // ── Build hooks (deploy webhooks) ─────────────────────────────────
+  // Each hook is a unique POST URL — POST anything to it and Netlify
+  // queues a deploy. Useful for CI pipelines, cron jobs, "deploy on
+  // CMS publish" flows, etc.
+  ipcMain.handle('netlify:list-hooks', async (_e, { siteSlug } = {}) => {
+    try {
+      if (!siteSlug) throw new Error('siteSlug required');
+      const list = await api(`/api/v1/sites/${encodeURIComponent(siteSlug)}/build_hooks`);
+      const hooks = (Array.isArray(list) ? list : []).map(h => ({
+        id: h.id,
+        title: h.title || '(untitled)',
+        url: h.url,
+        branch: h.branch || null,
+        createdAt: h.created_at || null,
+      }));
+      return ok({ hooks });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('netlify:add-hook', async (_e, { siteSlug, title, branch } = {}) => {
+    try {
+      if (!siteSlug) throw new Error('siteSlug required');
+      const result = await api(`/api/v1/sites/${encodeURIComponent(siteSlug)}/build_hooks`, {
+        method: 'POST',
+        body: JSON.stringify({ title: title || 'PiPilot hook', branch: branch || null }),
+      });
+      return ok({ hook: result });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('netlify:delete-hook', async (_e, { siteSlug, hookId } = {}) => {
+    try {
+      if (!siteSlug || !hookId) throw new Error('siteSlug + hookId required');
+      await api(`/api/v1/sites/${encodeURIComponent(siteSlug)}/build_hooks/${encodeURIComponent(hookId)}`, {
+        method: 'DELETE',
+      });
+      return ok({});
+    } catch (err) { return fail(err); }
+  });
 };

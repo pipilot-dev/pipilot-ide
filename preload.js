@@ -409,6 +409,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listDomains: (siteSlug) => ipcRenderer.invoke('netlify:list-domains', { siteSlug }),
     addDomain: (siteSlug, domain, primary) => ipcRenderer.invoke('netlify:add-domain', { siteSlug, domain, primary }),
     deleteDomain: (siteSlug, domain) => ipcRenderer.invoke('netlify:delete-domain', { siteSlug, domain }),
+    listHooks: (siteSlug) => ipcRenderer.invoke('netlify:list-hooks', { siteSlug }),
+    addHook: (siteSlug, title, branch) => ipcRenderer.invoke('netlify:add-hook', { siteSlug, title, branch }),
+    deleteHook: (siteSlug, hookId) => ipcRenderer.invoke('netlify:delete-hook', { siteSlug, hookId }),
   },
 
   cloudflarePages: {
