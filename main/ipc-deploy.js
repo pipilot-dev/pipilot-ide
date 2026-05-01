@@ -23,13 +23,27 @@ try { ({ safeStorage } = require('electron')); } catch {}
 
 const HISTORY_LIMIT = 30;
 
+// Common build-output directories for static-site providers
+// (Cloudflare Pages). Auto-detect in order; first one that exists wins.
+const COMMON_DIST_DIRS = ['dist', 'build', 'out', '_site', '.output/public', 'public'];
+
+async function detectDistDir(projectPath) {
+  for (const d of COMMON_DIST_DIRS) {
+    try {
+      const stat = await fsp.stat(path.join(projectPath, d));
+      if (stat.isDirectory()) return d;
+    } catch {}
+  }
+  return 'dist';
+}
+
 // Provider configs. Each describes how to invoke the CLI, where to
 // inject the auth token, and how to extract the final URL from output.
+// `extraConfig` lists per-project options the deploy dialog should
+// collect (e.g. Cloudflare Pages needs a project name + dist dir).
 const PROVIDERS = {
   vercel: {
     name: 'Vercel',
-    // Use --yes to skip interactive prompts; --token for auth; --cwd
-    // pins the run to the project. --prod opts into production target.
     cliArgs: ({ projectPath, token, target }) => [
       '-y', 'vercel@latest', 'deploy',
       '--token', token,
@@ -37,8 +51,6 @@ const PROVIDERS = {
       '--cwd', projectPath,
       ...(target === 'production' ? ['--prod'] : []),
     ],
-    // Vercel prints the deployment URL on a line of its own — the last
-    // https://...vercel.app match wins.
     parseUrl: (output) => {
       const matches = output.match(/https:\/\/[a-z0-9-]+\.vercel\.app/gi);
       return matches ? matches[matches.length - 1] : null;
@@ -55,16 +67,67 @@ const PROVIDERS = {
       '--message', 'Deployed from PiPilot',
     ],
     parseUrl: (output) => {
-      // Netlify output:
-      //   Website URL: https://....netlify.app  (preview)
-      //   Website URL: https://yoursite.netlify.app  (prod)
       const m = output.match(/https:\/\/[a-z0-9-]+(--[a-z0-9-]+)?\.netlify\.app/gi);
       return m ? m[m.length - 1] : null;
     },
     estimatedFirstRunSeconds: 45,
-    // netlify-cli wants to know the base directory; we pass --dir '.'
-    // and rely on the user having a netlify.toml or for CLI to detect
-    // the framework.
+  },
+  cloudflare: {
+    name: 'Cloudflare Pages',
+    // wrangler reads the API token from the env, not a CLI flag.
+    // --project-name auto-creates the project on first deploy if it
+    // doesn't exist yet. The positional arg is the build-output dir.
+    cliArgs: ({ token, target, config }) => [
+      '-y', 'wrangler@latest', 'pages', 'deploy',
+      config.distDir || 'dist',
+      '--project-name', config.projectName,
+      ...(target === 'production' ? ['--branch', 'main'] : []),
+    ],
+    env: ({ token, config }) => ({
+      CLOUDFLARE_API_TOKEN: token,
+      ...(config.accountId ? { CLOUDFLARE_ACCOUNT_ID: config.accountId } : {}),
+    }),
+    parseUrl: (output) => {
+      const m = output.match(/https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.pages\.dev/gi);
+      return m ? m[m.length - 1] : null;
+    },
+    estimatedFirstRunSeconds: 40,
+    extraConfig: [
+      { key: 'projectName', label: 'Project name', placeholder: 'my-site (lowercase, dashes)', required: true },
+      { key: 'distDir',     label: 'Build output dir', placeholder: 'auto-detected', autoDetect: detectDistDir },
+      { key: 'accountId',   label: 'Account ID (optional)', placeholder: 'leave blank if you have only one account' },
+    ],
+  },
+  railway: {
+    name: 'Railway',
+    // railway up reads the project link from .railway/config.json in
+    // the project directory. RAILWAY_TOKEN env auths the request.
+    // --detach exits as soon as the upload completes (we don't need
+    // to follow build logs in this terminal).
+    cliArgs: ({ projectPath, target }) => [
+      '-y', '@railway/cli@latest', 'up',
+      '--detach',
+      ...(target === 'production' ? ['--environment', 'production'] : []),
+    ],
+    env: ({ token }) => ({ RAILWAY_TOKEN: token }),
+    parseUrl: (output) => {
+      // Railway prints "Build Logs: https://railway.app/project/<id>/service/<id>"
+      // and sometimes a deployment URL. Pull the deployment URL if
+      // present, otherwise the build-logs URL.
+      const deploy = output.match(/https:\/\/[a-z0-9-]+\.up\.railway\.app/gi);
+      if (deploy) return deploy[deploy.length - 1];
+      const build = output.match(/https:\/\/railway\.app\/project\/[a-z0-9-]+/gi);
+      return build ? build[build.length - 1] : null;
+    },
+    estimatedFirstRunSeconds: 60,
+    preflight: async ({ projectPath }) => {
+      try {
+        await fsp.access(path.join(projectPath, '.railway', 'config.json'));
+      } catch {
+        return 'Railway needs `railway link` to be run in this project first. Open a terminal in the project root and run: npx @railway/cli@latest link';
+      }
+      return null;
+    },
   },
 };
 
@@ -115,8 +178,52 @@ module.exports = function register(ipcMain, ctx) {
     await writeJson(historyFile, all);
   }
 
+  // Per-provider, per-project config (Cloudflare's project-name etc).
+  // Stored in <userData>/deploy-config.json keyed by `<provider>:<projectPath>`.
+  const configFile = path.join(ctx.userDataPath, 'deploy-config.json');
+
+  async function readConfig(provider, projectPath) {
+    const all = await readJsonSafe(configFile, {});
+    return all[`${provider}:${projectPath}`] || {};
+  }
+  async function writeConfig(provider, projectPath, value) {
+    const all = await readJsonSafe(configFile, {});
+    all[`${provider}:${projectPath}`] = value;
+    await writeJson(configFile, all);
+  }
+
   ipcMain.handle('deploy:list-providers', async () => {
-    return ok({ providers: Object.entries(PROVIDERS).map(([id, p]) => ({ id, name: p.name })) });
+    return ok({
+      providers: Object.entries(PROVIDERS).map(([id, p]) => ({
+        id, name: p.name,
+        extraConfig: (p.extraConfig || []).map(c => ({ key: c.key, label: c.label, placeholder: c.placeholder, required: !!c.required })),
+      })),
+    });
+  });
+
+  ipcMain.handle('deploy:get-config', async (_e, { provider, projectPath } = {}) => {
+    try {
+      if (!provider || !projectPath) throw new Error('provider + projectPath required');
+      const cfg = PROVIDERS[provider];
+      if (!cfg) throw new Error(`unsupported provider: ${provider}`);
+      const saved = await readConfig(provider, projectPath);
+      // Run any auto-detect hooks (e.g. dist dir scan) for missing keys.
+      const merged = { ...saved };
+      for (const c of cfg.extraConfig || []) {
+        if (!merged[c.key] && typeof c.autoDetect === 'function') {
+          try { merged[c.key] = await c.autoDetect(projectPath); } catch {}
+        }
+      }
+      return ok({ config: merged });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('deploy:save-config', async (_e, { provider, projectPath, config } = {}) => {
+    try {
+      if (!provider || !projectPath) throw new Error('provider + projectPath required');
+      await writeConfig(provider, projectPath, config || {});
+      return ok({});
+    } catch (err) { return fail(err); }
   });
 
   ipcMain.handle('deploy:history', async (_e, { provider } = {}) => {
@@ -128,7 +235,7 @@ module.exports = function register(ipcMain, ctx) {
   ipcMain.handle('deploy:run', async (_e, payload = {}) => {
     const runId = `deploy-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     try {
-      const { provider, projectPath, target } = payload;
+      const { provider, projectPath, target, config: rawConfig } = payload;
       const cfg = PROVIDERS[provider];
       if (!cfg) throw new Error(`unsupported provider: ${provider}`);
       if (!projectPath) throw new Error('projectPath required');
@@ -136,18 +243,36 @@ module.exports = function register(ipcMain, ctx) {
       const token = await tokenFor(provider);
       if (!token) throw new Error(`No token saved for ${cfg.name}. Connect it from the Deploy Hub or Extensions sidebar first.`);
 
-      const args = cfg.cliArgs({ projectPath, token, target });
-      // Mask the token in the rendered command for the log.
+      // Merge per-project saved config with whatever the dialog passed,
+      // then validate any required extraConfig fields.
+      const savedConfig = await readConfig(provider, projectPath);
+      const config = { ...savedConfig, ...(rawConfig || {}) };
+      for (const c of cfg.extraConfig || []) {
+        if (c.required && !config[c.key]) {
+          throw new Error(`${cfg.name} requires "${c.label}" — add it in the deploy dialog.`);
+        }
+      }
+      // Persist whatever the user passed so next deploy doesn't ask again.
+      if (rawConfig && Object.keys(rawConfig).length) {
+        await writeConfig(provider, projectPath, config);
+      }
+
+      // Provider-specific preflight (e.g. Railway needs `railway link`).
+      if (typeof cfg.preflight === 'function') {
+        const err = await cfg.preflight({ projectPath, config });
+        if (err) throw new Error(err);
+      }
+
+      const args = cfg.cliArgs({ projectPath, token, target, config });
       const masked = args.map(a => a === token ? '***' : a);
       emit(ctx, runId, 'log', { line: `$ npx ${masked.join(' ')}` });
       emit(ctx, runId, 'log', { line: `[pipilot] First run downloads the ${cfg.name} CLI (~${cfg.estimatedFirstRunSeconds}s). Subsequent runs are instant.` });
 
-      // npx is a CMD shim on Windows — must shell-out. On macOS/Linux
-      // it's a real binary so spawn directly works.
       const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+      const extraEnv = typeof cfg.env === 'function' ? cfg.env({ token, config }) : {};
       const child = spawn(npxBin, args, {
         cwd: projectPath,
-        env: { ...process.env, FORCE_COLOR: '0', CI: '1' },
+        env: { ...process.env, ...extraEnv, FORCE_COLOR: '0', CI: '1' },
         windowsHide: true,
         shell: process.platform === 'win32',
       });

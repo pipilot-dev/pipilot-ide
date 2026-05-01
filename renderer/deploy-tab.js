@@ -144,11 +144,11 @@
   // means we have a working spawn adapter; the rest are surfaced as
   // "coming soon" placeholders so the connection flow still works.
   const CLOUD_PROVIDERS = [
-    { id: 'vercel',     name: 'Vercel',           icon: '▲',  desc: 'Frontend + serverless',     wired: true,  authUrl: 'https://vercel.com/account/tokens' },
-    { id: 'netlify',    name: 'Netlify',          icon: '◈',  desc: 'JAMstack + functions',       wired: true,  authUrl: 'https://app.netlify.com/user/applications#personal-access-tokens' },
-    { id: 'cloudflare', name: 'Cloudflare Pages', icon: '☁',  desc: 'Edge static + Workers',     wired: false, authUrl: 'https://dash.cloudflare.com/profile/api-tokens' },
-    { id: 'railway',    name: 'Railway',          icon: '🚂', desc: 'Full-stack PaaS',            wired: false, authUrl: 'https://railway.com/account/tokens' },
-    { id: 'render',     name: 'Render',           icon: '◉',  desc: 'Static + servers + DBs',     wired: false, authUrl: 'https://dashboard.render.com/u/settings#api-keys' },
+    { id: 'vercel',     name: 'Vercel',           icon: '▲',  desc: 'Frontend + serverless',  wired: true,  authUrl: 'https://vercel.com/account/tokens' },
+    { id: 'netlify',    name: 'Netlify',          icon: '◈',  desc: 'JAMstack + functions',    wired: true,  authUrl: 'https://app.netlify.com/user/applications#personal-access-tokens' },
+    { id: 'cloudflare', name: 'Cloudflare Pages', icon: '☁',  desc: 'Edge static + Workers',  wired: true,  authUrl: 'https://dash.cloudflare.com/profile/api-tokens' },
+    { id: 'railway',    name: 'Railway',          icon: '🚂', desc: 'Full-stack PaaS',         wired: true,  authUrl: 'https://railway.com/account/tokens' },
+    { id: 'render',     name: 'Render',           icon: '◉',  desc: 'Static + servers + DBs',  wired: false, authUrl: 'https://dashboard.render.com/u/settings#api-keys' },
   ];
 
   // ── State ─────────────────────────────────────────────────────────
@@ -403,15 +403,45 @@
     await refresh();
   }
 
-  function openDeployDialog(provider, target) {
+  async function openDeployDialog(provider, target) {
     const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
     const isProd = target === 'production';
+
+    // Pull the provider's extraConfig spec + previously-saved values so
+    // the dialog can render input rows for things like Cloudflare's
+    // project name / dist dir / account ID.
+    let extraConfig = [];
+    let savedConfig = {};
+    try {
+      const list = await api.deploy.listProviders();
+      const p = (list?.providers || []).find(p => p.id === provider);
+      extraConfig = p?.extraConfig || [];
+    } catch {}
+    if (extraConfig.length) {
+      try {
+        const r = await api.deploy.getConfig(provider, projectPath());
+        if (r?.ok) savedConfig = r.config || {};
+      } catch {}
+    }
+    const configHtml = extraConfig.map(c => `
+      <label>${escapeHtml(c.label)}${c.required ? ' <span style="color:var(--error);">*</span>' : ''}<input type="text" data-cfg="${escapeHtml(c.key)}" value="${escapeHtml(savedConfig[c.key] || '')}" placeholder="${escapeHtml(c.placeholder || '')}" /></label>`).join('');
+
     showDialog({
       title: `Deploy to ${cp?.name || provider} — ${isProd ? 'production' : 'preview'}`,
       body: `<p class="lead">Runs the official ${cp?.name} CLI against your project. The first run downloads the CLI (~30s); subsequent deploys are fast.</p>
         <p class="lead" style="color:${isProd ? 'var(--warn)' : 'inherit'};">${isProd ? '⚠ Deploying to <strong>production</strong> — this updates your live URL.' : 'Deploying to a <strong>preview</strong> URL — your prod site is untouched.'}</p>
+        ${configHtml}
         <div data-progress style="display:none;"><div class="dt-log" data-log></div></div>`,
       onSubmit: async (root, ctxBtns) => {
+        // Collect the extraConfig values from the inputs.
+        const config = {};
+        for (const c of extraConfig) {
+          const el = root.querySelector(`[data-cfg="${c.key}"]`);
+          const v = el?.value?.trim();
+          if (v) config[c.key] = v;
+          else if (c.required) return `${c.label} is required.`;
+        }
+
         root.querySelector('[data-progress]').style.display = 'block';
         const log = root.querySelector('[data-log]');
         const writeLog = (cls, text) => {
@@ -427,7 +457,7 @@
           else if (evt.type === 'error') writeLog('err', '✗ ' + evt.message);
           else if (evt.type === 'done')  writeLog('ok', '✓ Deployed: ' + (evt.url || '(check log)'));
         });
-        const r = await api.deploy.run({ provider, projectPath: projectPath(), target });
+        const r = await api.deploy.run({ provider, projectPath: projectPath(), target, config });
         try { off(); } catch {}
         if (!r?.ok) {
           ctxBtns.enable();
