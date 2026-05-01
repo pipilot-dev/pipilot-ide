@@ -264,6 +264,15 @@ app.whenReady().then(() => {
   try { githubApi = require('./main/github')(ipcMain, ctx, { getSecret: secretsApi?.getSecret }); } catch (err) { console.error('[github] register failed:', err); }
   let ghCliApi = null;
   try { ghCliApi = require('./main/gh-cli')(ipcMain, ctx, { getSecret: secretsApi?.getSecret }); } catch (err) { console.error('[gh-cli] register failed:', err); }
+  let gitlabApi = null;
+  try { gitlabApi = require('./main/gitlab')(ipcMain, ctx, { getSecret: secretsApi?.getSecret }); } catch (err) { console.error('[gitlab] register failed:', err); }
+  try {
+    require('./main/ipc-publish')(ipcMain, ctx, {
+      getSecret: secretsApi?.getSecret,
+      createGithubRepo: githubApi?.createRepo,
+      createGitlabProject: gitlabApi?.createProject,
+    });
+  } catch (err) { console.error('[publish] register failed:', err); }
   try { require('./main/missions')(ipcMain, ctx, { getSecret: secretsApi?.getSecret, githubInvalidate: githubApi?.invalidate, ghEnsure: ghCliApi?.ensureForMission }); } catch (err) { console.error('[missions] register failed:', err); }
 
   createWindow();

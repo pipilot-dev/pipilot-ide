@@ -156,8 +156,65 @@ module.exports = function register(ipcMain, ctx, deps = {}) {
     }
   });
 
+  // List orgs the user belongs to — feeds the "owner" picker on the
+  // deploy tab so users can publish into an org they're a member of.
+  ipcMain.handle('github:list-orgs', async (_e, { refresh } = {}) => {
+    try {
+      if (refresh) cache.delete('orgs');
+      const value = await cached('orgs', async () => {
+        const list = await authedFetch('/user/orgs?per_page=100');
+        if (!Array.isArray(list)) return [];
+        return list.map(o => ({ login: o.login, avatar: o.avatar_url, description: o.description || '' }));
+      });
+      return { ok: true, orgs: value };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err), status: err?.status };
+    }
+  });
+
+  // Internal create — also exposed via IPC. Plain JS so other main
+  // modules (publish.js) can call it without going through the IPC bus.
+  async function createRepo({ name, description, isPrivate, owner } = {}) {
+    if (!name || !/^[\w.-]+$/.test(name)) throw new Error('name required (letters / digits / . _ -)');
+    const meWho = await authedFetch('/user');
+    const me = meWho?.login;
+    const body = {
+      name,
+      description: description || '',
+      private: !!isPrivate,
+      auto_init: false, // we push our own initial commit
+    };
+    const isOrg = owner && owner !== me;
+    const path = isOrg ? `/orgs/${encodeURIComponent(owner)}/repos` : '/user/repos';
+    const repo = await authedFetch(path, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    cache.delete('repos');
+    return {
+      ok: true,
+      repo: {
+        fullName: repo.full_name,
+        name: repo.name,
+        owner: repo.owner?.login,
+        private: !!repo.private,
+        httpUrl: repo.clone_url,
+        sshUrl: repo.ssh_url,
+        webUrl: repo.html_url,
+        defaultBranch: repo.default_branch || 'main',
+      },
+    };
+  }
+
+  ipcMain.handle('github:create-repo', async (_e, payload) => {
+    try { return await createRepo(payload || {}); }
+    catch (err) { return { ok: false, error: err?.message || String(err), status: err?.status }; }
+  });
+
   // Invalidate everything cached when the PAT changes.
   return {
     invalidate() { cache.clear(); },
+    createRepo,
   };
 };

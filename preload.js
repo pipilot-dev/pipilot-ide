@@ -372,10 +372,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ---------- GitHub API proxy (uses stored PAT, never exposed) ----------
+  gitlab: {
+    whoami: () => ipcRenderer.invoke('gitlab:whoami'),
+    listNamespaces: (refresh) => ipcRenderer.invoke('gitlab:list-namespaces', { refresh: !!refresh }),
+    createProject: (opts) => ipcRenderer.invoke('gitlab:create-project', opts),
+  },
+
+  publish: {
+    getState: (projectPath) => ipcRenderer.invoke('publish:get-state', { projectPath }),
+    createAndPush: (opts) => ipcRenderer.invoke('publish:create-and-push', opts),
+    onEvent: (handler) => {
+      const ch = 'publish:event';
+      const fn = (_e, payload) => handler(payload);
+      ipcRenderer.on(ch, fn);
+      return () => ipcRenderer.removeListener(ch, fn);
+    },
+  },
+
   github: {
     whoami: () => ipcRenderer.invoke('github:whoami'),
     listRepos: (refresh) => ipcRenderer.invoke('github:list-repos', { refresh: !!refresh }),
     listBranches: (repo, refresh) => ipcRenderer.invoke('github:list-branches', { repo, refresh: !!refresh }),
+    listOrgs: (refresh) => ipcRenderer.invoke('github:list-orgs', { refresh: !!refresh }),
+    createRepo: (opts) => ipcRenderer.invoke('github:create-repo', opts),
   },
 
   // ---------- gh CLI provisioning (used by cloud missions) ----------

@@ -270,5 +270,21 @@ module.exports = function register(ipcMain, ctx) {
     return hit ? hit.value : null;
   }
 
-  return { getSecret };
+  // Programmatic setter for other main modules that want to stash a
+  // credential without round-tripping through the renderer (e.g. the
+  // OAuth callback flow for connectors that haven't been added yet).
+  async function setSecretInternal(key, value) {
+    if (!key) return false;
+    ensureGlobalDir();
+    const records = await readJsonl(globalFile);
+    const next = (value == null || value === '') ? removeByKey(records, key) : upsert(records, key, value);
+    await writeJsonl(globalFile, next);
+    try {
+      const win = ctx.getWindow?.();
+      if (win && !win.isDestroyed()) win.webContents.send('secrets:changed', { key, scope: 'global' });
+    } catch {}
+    return true;
+  }
+
+  return { getSecret, setSecret: setSecretInternal };
 };

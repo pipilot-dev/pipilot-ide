@@ -11,6 +11,7 @@ try {
 
 const CONNECTORS = [
   { id: 'github', name: 'GitHub', desc: 'Repos, PRs, issues', icon: '🐙', authUrl: 'https://github.com/settings/tokens' },
+  { id: 'gitlab', name: 'GitLab', desc: 'Repos, projects, CI', icon: '🦊', authUrl: 'https://gitlab.com/-/profile/personal_access_tokens' },
   { id: 'vercel', name: 'Vercel', desc: 'Deploy frontend apps', icon: '▲', authUrl: 'https://vercel.com/account/tokens' },
   { id: 'netlify', name: 'Netlify', desc: 'Deploy & host', icon: '◈', authUrl: 'https://app.netlify.com/user/applications#personal-access-tokens' },
   { id: 'cloudflare', name: 'Cloudflare', desc: 'CDN, Workers, Pages', icon: '☁', authUrl: 'https://dash.cloudflare.com/profile/api-tokens' },

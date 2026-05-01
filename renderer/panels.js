@@ -2054,6 +2054,16 @@ $RECYCLE.BIN/
       );
       container.appendChild(header);
 
+      // Big primary CTA — opens the full Deploy Hub virtual editor tab.
+      // The sidebar stays as a quick launcher; everything substantial
+      // (push to GitHub/GitLab, deploy history, logs) lives in the tab.
+      const hub = el('button', {
+        class: 'btn btn-primary btn-small',
+        style: { width: '100%', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' },
+        onClick: () => window.PiPilot?.deploy?.openTab?.(),
+      }, '🚀 Open Deploy Hub');
+      container.appendChild(hub);
+
       const sec1 = el('div', { class: 'p-section' });
       sec1.appendChild(el('h4', null, 'Dev Servers'));
       sec1.appendChild(el('button', { class: 'btn btn-primary btn-small', style: { width: '100%', marginBottom: '8px' }, onClick: async () => {
