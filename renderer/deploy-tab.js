@@ -105,6 +105,25 @@
       .dt-dialog .actions { display:flex; gap:8px; margin-top:6px; justify-content:flex-end; }
       .dt-error { color:var(--error); font-size:11.5px; padding:8px 10px; background:color-mix(in srgb, var(--error) 12%, transparent); border-radius:5px; }
 
+      /* Last-deploy summary inside cloud cards */
+      .dt-deploy-last { display:flex; align-items:center; gap:10px; font-size:11.5px; padding:8px 10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; }
+      .dt-deploy-pill {
+        font-size:10px; font-weight:600; padding:1px 7px; border-radius:999px; letter-spacing:0.04em; text-transform:uppercase;
+      }
+      .dt-deploy-pill.success { color:var(--ok); background:color-mix(in srgb, var(--ok) 15%, transparent); }
+      .dt-deploy-pill.error   { color:var(--error); background:color-mix(in srgb, var(--error) 15%, transparent); }
+      .dt-deploy-url { color:var(--accent); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .dt-deploy-when { color:var(--text-dim); font-size:10.5px; flex:0 0 auto; }
+
+      /* Dev servers list */
+      .dt-dev-list { display:flex; flex-direction:column; gap:6px; }
+      .dt-dev-row { display:flex; align-items:center; gap:10px; padding:6px 10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; font-size:12px; }
+      .dt-dev-status { width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+      .dt-dev-status.ok { background:var(--ok); box-shadow:0 0 6px color-mix(in srgb, var(--ok) 60%, transparent); animation:dt-pulse 2s ease-in-out infinite; }
+      @keyframes dt-pulse { 0%,100% { opacity:1; } 50% { opacity:0.55; } }
+      .dt-dev-url { color:var(--accent); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .dt-dev-cmd { font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); flex:0 0 auto; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
       /* Live progress log */
       .dt-log {
         background:var(--bg); border:1px solid var(--border); border-radius:6px;
@@ -119,10 +138,25 @@
     document.head.appendChild(st);
   }
 
+  // ── Cloud provider catalog ────────────────────────────────────────
+  // Static UI metadata; the actual deploy runs via api.deploy.run which
+  // shells out to the provider's CLI under main/ipc-deploy.js. "wired"
+  // means we have a working spawn adapter; the rest are surfaced as
+  // "coming soon" placeholders so the connection flow still works.
+  const CLOUD_PROVIDERS = [
+    { id: 'vercel',     name: 'Vercel',           icon: '▲',  desc: 'Frontend + serverless',     wired: true,  authUrl: 'https://vercel.com/account/tokens' },
+    { id: 'netlify',    name: 'Netlify',          icon: '◈',  desc: 'JAMstack + functions',       wired: true,  authUrl: 'https://app.netlify.com/user/applications#personal-access-tokens' },
+    { id: 'cloudflare', name: 'Cloudflare Pages', icon: '☁',  desc: 'Edge static + Workers',     wired: false, authUrl: 'https://dash.cloudflare.com/profile/api-tokens' },
+    { id: 'railway',    name: 'Railway',          icon: '🚂', desc: 'Full-stack PaaS',            wired: false, authUrl: 'https://railway.com/account/tokens' },
+    { id: 'render',     name: 'Render',           icon: '◉',  desc: 'Static + servers + DBs',     wired: false, authUrl: 'https://dashboard.render.com/u/settings#api-keys' },
+  ];
+
   // ── State ─────────────────────────────────────────────────────────
   const state = {
     project: null,        // { name, path, state: { initialized, branch, hasCommits, lastCommit, remotes } }
     accounts: { github: null, gitlab: null },
+    cloud: {},            // { providerId: { connected: bool, history: [] } }
+    devServers: [],       // [{ id, projectPath, url, port, ... }]
   };
 
   function projectPath() { return window.PiPilot?.state?.projectPath || ''; }
@@ -140,6 +174,29 @@
     }
     state.accounts.github = await api.github.whoami().catch(() => ({ ok: false }));
     state.accounts.gitlab = await api.gitlab.whoami().catch(() => ({ ok: false }));
+
+    // Cloud connectors — read which have a saved token from the existing
+    // cloud-tokens store, plus per-provider deploy history.
+    let connectors = [];
+    try { const r = await api.cloud.listConnectors(); connectors = r?.connectors || []; } catch {}
+    let history = {};
+    try { const r = await api.deploy.history(); history = r?.history || {}; } catch {}
+    state.cloud = {};
+    for (const cp of CLOUD_PROVIDERS) {
+      const conn = connectors.find(c => c.id === cp.id);
+      state.cloud[cp.id] = {
+        connected: !!conn?.connected,
+        username: conn?.meta?.username || null,
+        history: history[cp.id] || [],
+      };
+    }
+
+    // Dev servers (only for the current project)
+    try {
+      const r = await api.devServer.list();
+      const all = r?.servers || r || [];
+      state.devServers = (Array.isArray(all) ? all : []).filter(s => !p || s.projectPath === p);
+    } catch { state.devServers = []; }
   }
 
   // ── Render ────────────────────────────────────────────────────────
@@ -173,18 +230,98 @@
         </section>
 
         <section class="dt-section">
-          <div class="dt-section-h"><span class="num">02</span><span>Cloud Deploy <em style="text-transform:none;letter-spacing:0;font-style:italic;color:var(--text-dim);font-weight:400;">— coming next: Vercel / Netlify / Cloudflare Pages / Railway / Render</em></span></div>
-          <div style="padding:14px 16px; background:var(--surface); border:1px dashed var(--border); border-radius:8px; color:var(--text-dim); font-size:12px;">
-            One-click deploy to your favorite cloud provider — pipeline is GitHub push → import & deploy.
-            Connect a provider in the Deploy sidebar to get a head start.
+          <div class="dt-section-h"><span class="num">02</span><span>Cloud Deploy</span></div>
+          <div class="dt-cards dt-cloud-cards">
+            ${CLOUD_PROVIDERS.map(cp => renderCloudCard(cp)).join('')}
           </div>
+        </section>
+
+        <section class="dt-section">
+          <div class="dt-section-h"><span class="num">03</span><span>Dev Servers</span></div>
+          ${renderDevServers()}
         </section>
 
       </div></div>`;
 
     container.querySelectorAll('[data-act]').forEach((b) => {
-      b.addEventListener('click', () => onAction(b.dataset.act, b.dataset.provider));
+      b.addEventListener('click', () => onAction(b.dataset.act, b.dataset.provider, b.dataset));
     });
+  }
+
+  function renderCloudCard(cp) {
+    const s = state.cloud[cp.id] || { connected: false, history: [] };
+    const last = s.history[0];
+    return `
+      <div class="dt-card" data-provider="${cp.id}">
+        <div class="dt-card-head">
+          <div class="dt-card-icon">${cp.icon}</div>
+          <div class="dt-card-title">
+            <div class="dt-card-name">${escapeHtml(cp.name)}${cp.wired ? '' : ' <span style="font-size:9px;color:var(--text-dim);font-weight:400;text-transform:uppercase;letter-spacing:0.04em;">(soon)</span>'}</div>
+            <div class="dt-card-desc">${escapeHtml(cp.desc)}</div>
+          </div>
+          <div class="dt-card-status ${s.connected ? 'connected' : 'disconnected'}">${s.connected ? 'connected' : 'not connected'}</div>
+        </div>
+        ${s.connected && s.username ? `<div class="dt-card-account"><span>@${escapeHtml(s.username)}</span></div>` : ''}
+        ${last ? `
+          <div class="dt-deploy-last">
+            <span class="dt-deploy-pill ${last.status}">${last.status === 'success' ? '✓' : '✗'} ${last.status}</span>
+            ${last.url ? `<a href="#" class="dt-deploy-url" data-act="open-url" data-url="${escapeHtml(last.url)}">${escapeHtml(shortenUrl(last.url))}</a>` : ''}
+            <span class="dt-deploy-when">${formatRel(last.finishedAt)}</span>
+          </div>
+        ` : ''}
+        <div class="dt-card-actions">
+          ${s.connected
+            ? cp.wired
+              ? `<button class="dt-btn primary" data-act="deploy" data-provider="${cp.id}" data-target="preview" title="Deploy to a preview URL">▶ Deploy preview</button>
+                 <button class="dt-btn" data-act="deploy" data-provider="${cp.id}" data-target="production" title="Deploy to production">→ Production</button>`
+              : `<button class="dt-btn" disabled>Coming soon</button>
+                 <button class="dt-btn" data-act="disconnect-cloud" data-provider="${cp.id}">Disconnect</button>`
+            : `<button class="dt-btn primary" data-act="connect-cloud" data-provider="${cp.id}">Connect ${escapeHtml(cp.name)}</button>`
+          }
+          ${s.history.length ? `<button class="dt-btn" data-act="history" data-provider="${cp.id}" title="Deploy history">⏱ ${s.history.length}</button>` : ''}
+        </div>
+      </div>`;
+  }
+
+  function renderDevServers() {
+    const p = projectPath();
+    if (!p) {
+      return `<div style="padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text-dim);font-size:12px;">No project open — open a folder to start a dev server.</div>`;
+    }
+    const servers = state.devServers || [];
+    return `
+      <div class="dt-card" style="gap:10px;">
+        <div class="dt-card-head">
+          <div class="dt-card-icon">▶</div>
+          <div class="dt-card-title">
+            <div class="dt-card-name">${servers.length ? `${servers.length} running` : 'No dev servers running'}</div>
+            <div class="dt-card-desc">Auto-detected build commands from package.json / framework files.</div>
+          </div>
+          <button class="dt-btn primary" data-act="dev-start" style="flex:0 0 auto;padding:6px 12px;">▶ Start</button>
+        </div>
+        ${servers.length ? `
+          <div class="dt-dev-list">
+            ${servers.map(s => `
+              <div class="dt-dev-row">
+                <span class="dt-dev-status ok"></span>
+                <a href="#" class="dt-dev-url" data-act="open-url" data-url="${escapeHtml(s.url || '')}">${escapeHtml(s.url || `port ${s.port || '?'}`)}</a>
+                <span class="dt-dev-cmd">${escapeHtml(s.cmd || s.command || '')}</span>
+                <button class="dt-btn" data-act="dev-stop" data-id="${escapeHtml(s.id || '')}" style="flex:0 0 auto;padding:3px 10px;font-size:11px;">Stop</button>
+              </div>
+            `).join('')}
+          </div>` : ''}
+      </div>`;
+  }
+
+  function formatRel(ts) {
+    if (!ts) return '';
+    const sec = Math.floor((Date.now() - ts) / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    return `${Math.floor(hr / 24)}d ago`;
   }
 
   function renderCard(provider, icon, name, desc, who) {
@@ -217,10 +354,139 @@
   }
 
   // ── Actions ───────────────────────────────────────────────────────
-  function onAction(act, provider) {
-    if (act === 'connect')    return openConnectDialog(provider);
-    if (act === 'disconnect') return disconnectProvider(provider);
-    if (act === 'push')       return openPushDialog(provider);
+  function onAction(act, provider, dataset) {
+    if (act === 'connect')          return openConnectDialog(provider);
+    if (act === 'disconnect')       return disconnectProvider(provider);
+    if (act === 'push')             return openPushDialog(provider);
+    if (act === 'connect-cloud')    return openCloudConnectDialog(provider);
+    if (act === 'disconnect-cloud') return disconnectCloud(provider);
+    if (act === 'deploy')           return openDeployDialog(provider, dataset?.target || 'preview');
+    if (act === 'history')          return openHistoryDialog(provider);
+    if (act === 'open-url')         { try { api.shell?.openExternal?.(dataset?.url); } catch {} return; }
+    if (act === 'dev-start')        return startDevServer();
+    if (act === 'dev-stop')         return stopDevServer(dataset?.id);
+  }
+
+  function openCloudConnectDialog(provider) {
+    const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
+    if (!cp) return;
+    showDialog({
+      title: `Connect ${cp.name}`,
+      body: `<p class="lead">Paste a personal access token from <a href="${cp.authUrl}" target="_blank" style="color:var(--accent);">${cp.authUrl}</a> (we'll open it in your browser).</p>
+        <p class="lead">Stored encrypted in your OS keychain via Electron's safeStorage.</p>
+        <label>Token<input type="password" data-field="token" placeholder="${cp.id === 'vercel' ? 'vercel_…' : cp.id === 'netlify' ? 'nfp_…' : '…'}" autofocus /></label>`,
+      onSubmit: async (root) => {
+        const token = root.querySelector('[data-field="token"]').value.trim();
+        if (!token) return 'Token is required.';
+        const r = await api.cloud.saveToken(provider, token, {});
+        if (!r?.ok) return r?.error || 'Failed to save token.';
+        // Verify if the existing connector test handler covers this provider.
+        try {
+          const t = await api.cloud.testConnection(provider);
+          if (t?.ok && t.username) {
+            await api.cloud.saveToken(provider, token, { username: t.username });
+          } else if (t && t.ok === false) {
+            await api.cloud.deleteToken(provider).catch(() => {});
+            return t?.error || `Token rejected by ${cp.name}.`;
+          }
+        } catch {}
+        await refresh();
+        return null;
+      },
+      submitLabel: 'Connect',
+    });
+    try { api.shell?.openExternal?.(cp.authUrl); } catch {}
+  }
+
+  async function disconnectCloud(provider) {
+    try { await api.cloud.deleteToken(provider); } catch {}
+    await refresh();
+  }
+
+  function openDeployDialog(provider, target) {
+    const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
+    const isProd = target === 'production';
+    showDialog({
+      title: `Deploy to ${cp?.name || provider} — ${isProd ? 'production' : 'preview'}`,
+      body: `<p class="lead">Runs the official ${cp?.name} CLI against your project. The first run downloads the CLI (~30s); subsequent deploys are fast.</p>
+        <p class="lead" style="color:${isProd ? 'var(--warn)' : 'inherit'};">${isProd ? '⚠ Deploying to <strong>production</strong> — this updates your live URL.' : 'Deploying to a <strong>preview</strong> URL — your prod site is untouched.'}</p>
+        <div data-progress style="display:none;"><div class="dt-log" data-log></div></div>`,
+      onSubmit: async (root, ctxBtns) => {
+        root.querySelector('[data-progress]').style.display = 'block';
+        const log = root.querySelector('[data-log]');
+        const writeLog = (cls, text) => {
+          const div = document.createElement('div');
+          if (cls) div.className = cls;
+          div.textContent = text;
+          log.appendChild(div);
+          log.scrollTop = log.scrollHeight;
+        };
+        ctxBtns.disable();
+        const off = api.deploy.onEvent((evt) => {
+          if (evt.type === 'log')   writeLog(evt.stream === 'stderr' ? 'err' : '', evt.line);
+          else if (evt.type === 'error') writeLog('err', '✗ ' + evt.message);
+          else if (evt.type === 'done')  writeLog('ok', '✓ Deployed: ' + (evt.url || '(check log)'));
+        });
+        const r = await api.deploy.run({ provider, projectPath: projectPath(), target });
+        try { off(); } catch {}
+        if (!r?.ok) {
+          ctxBtns.enable();
+          return r?.error || 'Deploy failed.';
+        }
+        if (r.url) {
+          ctxBtns.replaceSubmit('Open Site', () => {
+            try { api.shell?.openExternal?.(r.url); } catch {}
+            ctxBtns.close();
+          });
+        } else {
+          ctxBtns.replaceSubmit('Done', () => ctxBtns.close());
+        }
+        await refresh();
+        return null;
+      },
+      submitLabel: isProd ? 'Deploy to Production' : 'Deploy Preview',
+    });
+  }
+
+  function openHistoryDialog(provider) {
+    const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
+    const list = state.cloud[provider]?.history || [];
+    const rows = list.length
+      ? list.map(h => `
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border);font-size:12px;">
+            <span class="dt-deploy-pill ${h.status}">${h.status === 'success' ? '✓' : '✗'}</span>
+            <span style="flex:1;min-width:0;">${h.url ? `<a href="#" data-act="open-url" data-url="${escapeHtml(h.url)}" style="color:var(--accent);">${escapeHtml(shortenUrl(h.url))}</a>` : '<span style="color:var(--text-dim);">(no url)</span>'}</span>
+            <span style="font-size:10px;color:var(--text-dim);">${escapeHtml(h.target || 'preview')}</span>
+            <span style="font-size:10px;color:var(--text-dim);">${formatRel(h.finishedAt)}</span>
+            <span style="font-size:10px;color:var(--text-dim);">${Math.round(((h.finishedAt - h.startedAt) || 0) / 1000)}s</span>
+          </div>`).join('')
+      : '<p class="lead">No deploys yet for this provider.</p>';
+    showDialog({
+      title: `${cp?.name || provider} · Deploy history`,
+      body: `<div style="max-height:380px;overflow:auto;">${rows}</div>`,
+      onSubmit: () => null,
+      submitLabel: 'Close',
+    });
+  }
+
+  async function startDevServer() {
+    const p = projectPath();
+    if (!p) return;
+    try {
+      const r = await api.devServer.start(p);
+      if (r && r.ok === false) {
+        bus.emit('toast:show', { message: 'Start failed: ' + r.error, type: 'error' });
+      }
+    } catch (err) {
+      bus.emit('toast:show', { message: 'Start failed: ' + (err?.message || err), type: 'error' });
+    }
+    await refresh();
+  }
+
+  async function stopDevServer(id) {
+    if (!id) return;
+    try { await api.devServer.stop(id); } catch {}
+    await refresh();
   }
 
   async function disconnectProvider(provider) {

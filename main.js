@@ -273,6 +273,7 @@ app.whenReady().then(() => {
       createGitlabProject: gitlabApi?.createProject,
     });
   } catch (err) { console.error('[publish] register failed:', err); }
+  try { require('./main/ipc-deploy')(ipcMain, ctx); } catch (err) { console.error('[deploy] register failed:', err); }
   try { require('./main/missions')(ipcMain, ctx, { getSecret: secretsApi?.getSecret, githubInvalidate: githubApi?.invalidate, ghEnsure: ghCliApi?.ensureForMission }); } catch (err) { console.error('[missions] register failed:', err); }
 
   createWindow();

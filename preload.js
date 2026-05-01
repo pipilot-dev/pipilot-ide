@@ -389,6 +389,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 
+  deploy: {
+    listProviders: () => ipcRenderer.invoke('deploy:list-providers'),
+    history: (provider) => ipcRenderer.invoke('deploy:history', { provider }),
+    run: (opts) => ipcRenderer.invoke('deploy:run', opts),
+    onEvent: (handler) => {
+      const ch = 'deploy:event';
+      const fn = (_e, payload) => handler(payload);
+      ipcRenderer.on(ch, fn);
+      return () => ipcRenderer.removeListener(ch, fn);
+    },
+  },
+
   github: {
     whoami: () => ipcRenderer.invoke('github:whoami'),
     listRepos: (refresh) => ipcRenderer.invoke('github:list-repos', { refresh: !!refresh }),
