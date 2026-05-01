@@ -35,10 +35,46 @@ window.PiPilot.state = {
     theme: 'midnight',
     cursorStyle: 'line',
     tabSize: 2,
-    wordWrap: 'off',
+    wordWrap: 'on',
+    minimap: true,
+    builtinWordCount: true,
+    builtinJsdoc: true,
+    builtinColorPreview: true,
+    builtinFileSizeIndicator: true,
+    builtinAutoCloseTag: true,
+    builtinApiPlayground: true,
+    builtinDependencyGraph: true,
   },
   agentMode: 'agent', // 'agent' | 'plan'
 };
+
+// Bootstrap saved settings from the main process into state.settings as
+// early as possible (before the editor and other modules read them). The
+// merge runs the main-side migrations (e.g. wordWrap default flip), then
+// emits a `settings:loaded` bus event so listeners can reapply changed
+// values to already-created Ace sessions, the minimap, etc.
+(async function bootstrapSettings() {
+  try {
+    if (!window.electronAPI?.settings?.all) return;
+    const r = await window.electronAPI.settings.all();
+    if (!r || !r.ok || !r.settings) return;
+    Object.assign(window.PiPilot.state.settings, r.settings);
+    window.PiPilot.bus.emit('settings:loaded', r.settings);
+  } catch (err) {
+    console.warn('[settings] bootstrap failed:', err);
+  }
+})();
+
+// Keep state.settings in sync with every settings:changed event. Without
+// this, modules that read state.settings (ace-editor reapplyEditorSettings,
+// terminal, chat) see stale values after the user changes a setting in
+// the Settings tab — they only refresh after a full reload because that
+// re-runs bootstrapSettings above. Listening here is the single source
+// of truth so individual consumers don't each have to mirror the value.
+window.PiPilot.bus.on('settings:changed', (payload) => {
+  if (!payload || typeof payload.key !== 'string') return;
+  window.PiPilot.state.settings[payload.key] = payload.value;
+});
 
 // Convenience for query selectors
 window.$ = (sel, root = document) => root.querySelector(sel);
