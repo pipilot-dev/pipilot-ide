@@ -14,6 +14,7 @@
   if (!api || !bus || !api.debug) return;
 
   const BP_KEY = 'pipilot.debug.breakpoints'; // { [filePath]: number[] }
+  const SELECTED_CONFIG_KEY = 'pipilot.debug.selectedConfig';
   const state = {
     breakpoints: loadBreakpoints(),
     session: null,           // { id, script } when a debug run is active
@@ -21,6 +22,9 @@
     activeFrame: 0,
     activeMarkerId: null,    // ace marker for the current pause line
     activeMarkerSession: null,
+    configs: [],             // launch.json configurations[]
+    selectedConfig: null,    // name of currently selected config, or null = "Debug File"
+    launchJsonPath: null,
   };
 
   // ── Breakpoint persistence ──────────────────────────────────────────
@@ -43,6 +47,121 @@
     }
   }
 
+  // ── launch.json (.vscode) ───────────────────────────────────────────
+  // Tolerant JSONC parser — strips // and /* */ comments and trailing
+  // commas. Good enough for hand-edited config files; not a full spec
+  // implementation. Fails to JSON.parse silently and the user sees the
+  // raw error in the console pane.
+  function stripJsonc(src) {
+    let out = '';
+    let i = 0;
+    const n = src.length;
+    while (i < n) {
+      const c = src[i];
+      const c2 = src[i + 1];
+      // String literal — copy verbatim, respect escapes
+      if (c === '"') {
+        out += c; i++;
+        while (i < n) {
+          out += src[i];
+          if (src[i] === '\\' && i + 1 < n) { out += src[i + 1]; i += 2; continue; }
+          if (src[i] === '"') { i++; break; }
+          i++;
+        }
+        continue;
+      }
+      // Line comment
+      if (c === '/' && c2 === '/') {
+        while (i < n && src[i] !== '\n') i++;
+        continue;
+      }
+      // Block comment
+      if (c === '/' && c2 === '*') {
+        i += 2;
+        while (i < n && !(src[i] === '*' && src[i + 1] === '/')) i++;
+        i += 2;
+        continue;
+      }
+      out += c; i++;
+    }
+    // Trailing commas before } or ]
+    out = out.replace(/,(\s*[}\]])/g, '$1');
+    return out;
+  }
+
+  async function loadLaunchJson() {
+    state.configs = [];
+    state.launchJsonPath = null;
+    const projectPath = window.PiPilot?.state?.projectPath;
+    if (!projectPath || !api.files?.read) { renderConfigPicker(); return; }
+    const launchPath = projectPath.replace(/[\\/]+$/, '') + '/.vscode/launch.json';
+    try {
+      const stat = await api.files.stat?.(launchPath);
+      if (!stat || stat.exists === false) { renderConfigPicker(); return; }
+    } catch { renderConfigPicker(); return; }
+    try {
+      const r = await api.files.read(launchPath);
+      const raw = r?.content ?? r?.data ?? r;
+      if (typeof raw !== 'string') { renderConfigPicker(); return; }
+      const parsed = JSON.parse(stripJsonc(raw));
+      const configs = Array.isArray(parsed?.configurations) ? parsed.configurations : [];
+      // Only Node-ish configs are runnable today. Show the rest disabled.
+      state.configs = configs.filter(c => c && typeof c.name === 'string');
+      state.launchJsonPath = launchPath;
+      const saved = localStorage.getItem(SELECTED_CONFIG_KEY);
+      if (saved && state.configs.some(c => c.name === saved)) state.selectedConfig = saved;
+      else state.selectedConfig = state.configs[0]?.name || null;
+    } catch (err) {
+      pushConsole('error', `launch.json parse failed: ${err.message}`);
+    }
+    renderConfigPicker();
+  }
+
+  // VS Code-style variable substitution. Supports the subset that's
+  // meaningful inside an editor session — no task vars, no input vars.
+  function substituteVars(value, ctx) {
+    if (Array.isArray(value)) return value.map(v => substituteVars(v, ctx));
+    if (value && typeof value === 'object') {
+      const out = {};
+      for (const k of Object.keys(value)) out[k] = substituteVars(value[k], ctx);
+      return out;
+    }
+    if (typeof value !== 'string') return value;
+    return value.replace(/\$\{([^}]+)\}/g, (_m, key) => {
+      if (key === 'workspaceFolder' || key === 'workspaceRoot') return ctx.workspace || '';
+      if (key === 'workspaceFolderBasename') return (ctx.workspace || '').split(/[\\/]/).pop() || '';
+      if (key === 'file') return ctx.file || '';
+      if (key === 'fileBasename') return (ctx.file || '').split(/[\\/]/).pop() || '';
+      if (key === 'fileBasenameNoExtension') {
+        const b = (ctx.file || '').split(/[\\/]/).pop() || '';
+        return b.replace(/\.[^.]+$/, '');
+      }
+      if (key === 'fileDirname') {
+        const f = ctx.file || ''; const i = Math.max(f.lastIndexOf('/'), f.lastIndexOf('\\'));
+        return i >= 0 ? f.slice(0, i) : '';
+      }
+      if (key === 'fileExtname') { const m = /\.[^.]+$/.exec(ctx.file || ''); return m ? m[0] : ''; }
+      if (key === 'cwd') return ctx.workspace || '';
+      if (key === 'pathSeparator') return navigator.platform.startsWith('Win') ? '\\' : '/';
+      if (key.startsWith('env:')) return ctx.env?.[key.slice(4)] || '';
+      return '';
+    });
+  }
+
+  function resolveConfig(cfg, ctx) {
+    const r = substituteVars(cfg, ctx);
+    return {
+      name: r.name,
+      type: r.type || 'node',
+      script: r.program || ctx.file,
+      cwd: r.cwd || ctx.workspace,
+      args: Array.isArray(r.args) ? r.args : [],
+      env: { ...(r.env || {}) },
+      runtimeExecutable: r.runtimeExecutable || null,
+      runtimeArgs: Array.isArray(r.runtimeArgs) ? r.runtimeArgs : [],
+    };
+  }
+
   // ── Ace gutter wiring ───────────────────────────────────────────────
   injectStyles();
   bus.on('ace:ready', wireGutter);
@@ -50,6 +169,14 @@
   bus.on('file:opened', () => { setTimeout(refreshGutterMarkers, 0); });
   // Some surfaces emit a generic "file changed" — covers tab switch
   bus.on('editor:changed', () => { setTimeout(refreshGutterMarkers, 0); });
+  bus.on('project:opened', loadLaunchJson);
+  bus.on('project:loaded', loadLaunchJson);
+  // Re-read when the user saves launch.json so picker stays current.
+  bus.on('file:saved', (p) => {
+    if (typeof p === 'string' && /\.vscode[\\/]launch\.json$/i.test(p)) loadLaunchJson();
+    else if (p?.path && /\.vscode[\\/]launch\.json$/i.test(p.path)) loadLaunchJson();
+  });
+  setTimeout(loadLaunchJson, 800);
 
   function wireGutter(editor) {
     if (!editor || editor._dbgGutterWired) return;
@@ -121,23 +248,54 @@
       pushConsole('warn', 'A debug session is already running. Stop it first.');
       return;
     }
-    if (!script) {
-      const f = window.PiPilot?.editor?.getActiveFile?.();
-      if (f && /\.(m?js|cjs|ts)$/i.test(f)) script = f;
+    const activeFile = window.PiPilot?.editor?.getActiveFile?.();
+    const workspace = window.PiPilot?.state?.projectPath || '';
+    const ctx = { file: activeFile || '', workspace, env: {} };
+
+    let opts;
+    const cfg = state.selectedConfig
+      ? state.configs.find(c => c.name === state.selectedConfig)
+      : null;
+
+    if (cfg) {
+      const resolved = resolveConfig(cfg, ctx);
+      if (cfg.type && !/node|pwa-node/i.test(cfg.type)) {
+        pushConsole('error', `Configuration "${cfg.name}" has unsupported type "${cfg.type}". Only node is supported in this build.`);
+        revealPanel();
+        return;
+      }
+      if (!resolved.script) {
+        pushConsole('error', `Configuration "${cfg.name}" has no program/file to debug.`);
+        revealPanel();
+        return;
+      }
+      opts = {
+        script: resolved.script,
+        cwd: resolved.cwd,
+        args: resolved.args,
+        env: resolved.env,
+        runtimeExecutable: resolved.runtimeExecutable,
+        runtimeArgs: resolved.runtimeArgs,
+      };
+      pushConsole('info', `Launching "${cfg.name}": ${opts.script}${opts.args.length ? ' ' + opts.args.join(' ') : ''}`);
+    } else {
+      const target = script || (activeFile && /\.(m?js|cjs|ts)$/i.test(activeFile) ? activeFile : null);
+      if (!target) {
+        pushConsole('error', 'Open a .js / .mjs / .cjs file to debug, or add a configuration to .vscode/launch.json.');
+        revealPanel();
+        return;
+      }
+      opts = { script: target };
+      pushConsole('info', `Launching: node --inspect-brk ${target}`);
     }
-    if (!script) {
-      pushConsole('error', 'Open a .js / .mjs / .cjs file to debug.');
-      revealPanel();
-      return;
-    }
-    pushConsole('info', `Launching: node --inspect-brk ${script}`);
+
     revealPanel();
     setStatus('starting');
     let r;
-    try { r = await api.debug.start({ script }); }
+    try { r = await api.debug.start(opts); }
     catch (err) { pushConsole('error', String(err?.message || err)); setStatus('idle'); return; }
     if (!r?.ok) { pushConsole('error', r?.error || 'failed to start'); setStatus('idle'); return; }
-    state.session = { id: r.sessionId, script, port: r.port, pid: r.pid };
+    state.session = { id: r.sessionId, script: opts.script, port: r.port, pid: r.pid };
     setStatus('running');
     // Push existing breakpoints for this file once we know we're attached.
     setTimeout(() => {
@@ -242,6 +400,8 @@
         <div class="dbg-root">
           <div class="dbg-toolbar">
             <button class="dbg-btn dbg-btn-primary" data-act="run"   title="Debug current file (F5)">▶ Debug File</button>
+            <select class="dbg-config-picker" data-config-picker title="Debug configuration (.vscode/launch.json)"></select>
+            <button class="dbg-btn dbg-btn-link" data-act="open-launch" title="Open .vscode/launch.json">⚙</button>
             <span class="dbg-sep"></span>
             <button class="dbg-btn" data-act="continue"  title="Continue (F5)" disabled>⏵</button>
             <button class="dbg-btn" data-act="stepOver"  title="Step Over (F10)" disabled>⤼</button>
@@ -282,6 +442,18 @@
       if (b._wired) return; b._wired = true;
       b.addEventListener('click', () => onAction(b.dataset.act));
     });
+    const picker = pane.querySelector('[data-config-picker]');
+    if (picker && !picker._wired) {
+      picker._wired = true;
+      picker.addEventListener('change', () => {
+        const v = picker.value;
+        state.selectedConfig = v === '__file__' ? null : v;
+        try { localStorage.setItem(SELECTED_CONFIG_KEY, state.selectedConfig || ''); } catch {}
+        const cfg = state.selectedConfig ? state.configs.find(c => c.name === state.selectedConfig) : null;
+        if (runBtn) runBtn.textContent = cfg ? `▶ ${cfg.name}` : '▶ Debug File';
+      });
+    }
+    renderConfigPicker();
     const inp = pane.querySelector('.dbg-input');
     const evalBtn = pane.querySelector('.dbg-btn-eval');
     if (inp && !inp._wired) {
@@ -300,14 +472,62 @@
   }
 
   function onAction(act) {
-    if (act === 'run')      return startDebug();
-    if (act === 'stop')     return stopDebug();
+    if (act === 'run')         return startDebug();
+    if (act === 'stop')        return stopDebug();
+    if (act === 'open-launch') return openLaunchJson();
     if (!state.session) return;
     if (act === 'continue') return api.debug.continue(state.session.id);
     if (act === 'stepOver') return api.debug.stepOver(state.session.id);
     if (act === 'stepInto') return api.debug.stepInto(state.session.id);
     if (act === 'stepOut')  return api.debug.stepOut(state.session.id);
     if (act === 'pause')    return api.debug.pause(state.session.id);
+  }
+
+  function renderConfigPicker() {
+    const picker = panelEl?.querySelector('[data-config-picker]');
+    if (!picker) return;
+    const opts = ['<option value="__file__">Active file</option>']
+      .concat(state.configs.map(c => `<option value="${escapeHtml(c.name)}"${c.name === state.selectedConfig ? ' selected' : ''}>${escapeHtml(c.name)}</option>`));
+    picker.innerHTML = opts.join('');
+    picker.value = state.selectedConfig || '__file__';
+    picker.style.display = state.configs.length ? '' : 'none';
+    if (runBtn) {
+      const cfg = state.selectedConfig ? state.configs.find(c => c.name === state.selectedConfig) : null;
+      runBtn.textContent = cfg ? `▶ ${cfg.name}` : '▶ Debug File';
+    }
+  }
+
+  async function openLaunchJson() {
+    const projectPath = window.PiPilot?.state?.projectPath;
+    if (!projectPath) return;
+    const launchPath = projectPath.replace(/[\\/]+$/, '') + '/.vscode/launch.json';
+    try {
+      const stat = await api.files.stat?.(launchPath);
+      if (!stat || stat.exists === false) {
+        // Seed with a sensible default that points at the active file.
+        const seed = JSON.stringify({
+          version: '0.2.0',
+          configurations: [
+            {
+              type: 'node',
+              request: 'launch',
+              name: 'Debug Active File',
+              program: '${file}',
+              cwd: '${workspaceFolder}',
+              args: [],
+              env: {},
+            },
+          ],
+        }, null, 2);
+        await api.files.mkdir?.(projectPath.replace(/[\\/]+$/, '') + '/.vscode');
+        await api.files.write(launchPath, seed);
+      }
+    } catch (err) {
+      pushConsole('error', `failed to ensure launch.json: ${err.message}`);
+    }
+    const open = window.PiPilot?.files?.openFile || window.PiPilot?.editor?.openFile;
+    if (typeof open === 'function') { try { open(launchPath); } catch {} }
+    setTimeout(loadLaunchJson, 600);
   }
 
   async function runEval(expression) {
@@ -517,6 +737,13 @@
       .dbg-btn-primary:hover:not(:disabled) { background: rgba(255,107,53,0.1); }
       .dbg-btn-stop { color: #e5534b; }
       .dbg-btn-stop:hover:not(:disabled) { background: rgba(229,83,75,0.12); }
+      .dbg-btn-link { color: var(--text-dim); font-size: 13px; padding: 3px 6px; }
+      .dbg-config-picker {
+        background: var(--bg); color: var(--text); border: 1px solid var(--border);
+        font-size: 11.5px; padding: 3px 8px; border-radius: 4px; margin-left: 4px;
+        font-family: var(--font-sans); cursor: pointer; min-width: 130px;
+      }
+      .dbg-config-picker:focus { outline: none; border-color: var(--accent); }
       .dbg-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
       .dbg-status {
         margin-left: auto; font-size: 11px; color: var(--text-dim);

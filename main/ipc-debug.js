@@ -3,10 +3,26 @@
 // Chrome DevTools Protocol, and multiplexes commands/events between the
 // renderer and the inspected process.
 
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const WebSocket = require('ws');
+
+let cachedNodeBinary = null;
+function resolveNodeBinary() {
+  if (cachedNodeBinary) return cachedNodeBinary;
+  const exe = process.platform === 'win32' ? 'node.exe' : 'node';
+  // Search PATH for a real node binary first.
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, exe);
+    try { if (fs.existsSync(candidate)) { cachedNodeBinary = candidate; return candidate; } } catch {}
+  }
+  // Last resort: Electron's binary with ELECTRON_RUN_AS_NODE=1 set by caller.
+  cachedNodeBinary = process.execPath;
+  return cachedNodeBinary;
+}
 
 const sessions = new Map(); // sessionId -> session
 let seq = 0;
@@ -180,13 +196,21 @@ module.exports = function register(ipcMain, ctx) {
       const port = pickPort();
       const id = nextSessionId();
 
-      const child = spawn(process.execPath, [
+      const runtimeExecutable = opts?.runtimeExecutable || resolveNodeBinary();
+      const runtimeArgs = opts?.runtimeArgs || [];
+      // When falling back to Electron's binary, ELECTRON_RUN_AS_NODE makes
+      // it behave as plain node (no chromium globals). System `node` ignores
+      // this var, so it is harmless when set.
+      const baseEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...(extraEnv || {}) };
+
+      const child = spawn(runtimeExecutable, [
+        ...runtimeArgs,
         `--inspect-brk=127.0.0.1:${port}`,
         script,
         ...(args || []),
       ], {
         cwd: cwd || path.dirname(script),
-        env: { ...process.env, ...(extraEnv || {}) },
+        env: baseEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });
