@@ -182,11 +182,12 @@
   // means we have a working spawn adapter; the rest are surfaced as
   // "coming soon" placeholders so the connection flow still works.
   const CLOUD_PROVIDERS = [
-    { id: 'vercel',     name: 'Vercel',           icon: '▲',  desc: 'Frontend + serverless',  wired: true,  authUrl: 'https://vercel.com/account/tokens' },
-    { id: 'netlify',    name: 'Netlify',          icon: '◈',  desc: 'JAMstack + functions',    wired: true,  authUrl: 'https://app.netlify.com/user/applications#personal-access-tokens' },
-    { id: 'cloudflare', name: 'Cloudflare Pages', icon: '☁',  desc: 'Edge static + Workers',  wired: true,  authUrl: 'https://dash.cloudflare.com/profile/api-tokens' },
-    { id: 'railway',    name: 'Railway',          icon: '🚂', desc: 'Full-stack PaaS',         wired: true,  authUrl: 'https://railway.com/account/tokens' },
-    { id: 'render',     name: 'Render',           icon: '◉',  desc: 'Static + servers + DBs',  wired: true,  authUrl: 'https://dashboard.render.com/u/settings#api-keys' },
+    { id: 'vercel',              name: 'Vercel',              icon: '▲',  desc: 'Frontend + serverless',  wired: true,  authUrl: 'https://vercel.com/account/tokens',                                                       tokenProvider: 'vercel' },
+    { id: 'netlify',             name: 'Netlify',             icon: '◈',  desc: 'JAMstack + functions',    wired: true,  authUrl: 'https://app.netlify.com/user/applications#personal-access-tokens',                       tokenProvider: 'netlify' },
+    { id: 'cloudflare',          name: 'Cloudflare Pages',    icon: '☁',  desc: 'Edge static + Workers',  wired: true,  authUrl: 'https://dash.cloudflare.com/profile/api-tokens',                                          tokenProvider: 'cloudflare' },
+    { id: 'cloudflare-workers',  name: 'Cloudflare Workers',  icon: '⚡', desc: 'Serverless edge functions', wired: true,  authUrl: 'https://dash.cloudflare.com/profile/api-tokens',                                       tokenProvider: 'cloudflare' },
+    { id: 'railway',             name: 'Railway',             icon: '🚂', desc: 'Full-stack PaaS',         wired: true,  authUrl: 'https://railway.com/account/tokens',                                                      tokenProvider: 'railway' },
+    { id: 'render',              name: 'Render',              icon: '◉',  desc: 'Static + servers + DBs',  wired: true,  authUrl: 'https://dashboard.render.com/u/settings#api-keys',                                       tokenProvider: 'render' },
   ];
 
   // ── State ─────────────────────────────────────────────────────────
@@ -222,10 +223,15 @@
     try { const r = await api.deploy.history(); history = r?.history || {}; } catch {}
     state.cloud = {};
     for (const cp of CLOUD_PROVIDERS) {
-      const conn = connectors.find(c => c.id === cp.id);
+      // Some cards share an upstream token (Cloudflare Workers reuses the
+      // Cloudflare token saved under id 'cloudflare'). tokenProvider
+      // points at the underlying connector entry.
+      const tokenId = cp.tokenProvider || cp.id;
+      const conn = connectors.find(c => c.id === tokenId);
       state.cloud[cp.id] = {
         connected: !!conn?.connected,
         username: conn?.meta?.username || null,
+        tokenId,
         history: history[cp.id] || [],
       };
     }
@@ -460,6 +466,9 @@
   function openCloudConnectDialog(provider) {
     const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
     if (!cp) return;
+    // Always save under the underlying token id so multiple cards that
+    // share auth (Cloudflare Pages + Workers) light up together.
+    const tokenId = cp.tokenProvider || cp.id;
     showDialog({
       title: `Connect ${cp.name}`,
       body: `<p class="lead">Paste a personal access token from <a href="${cp.authUrl}" target="_blank" style="color:var(--accent);">${cp.authUrl}</a> (we'll open it in your browser).</p>
@@ -468,15 +477,14 @@
       onSubmit: async (root) => {
         const token = root.querySelector('[data-field="token"]').value.trim();
         if (!token) return 'Token is required.';
-        const r = await api.cloud.saveToken(provider, token, {});
+        const r = await api.cloud.saveToken(tokenId, token, {});
         if (!r?.ok) return r?.error || 'Failed to save token.';
-        // Verify if the existing connector test handler covers this provider.
         try {
-          const t = await api.cloud.testConnection(provider);
+          const t = await api.cloud.testConnection(tokenId);
           if (t?.ok && t.username) {
-            await api.cloud.saveToken(provider, token, { username: t.username });
+            await api.cloud.saveToken(tokenId, token, { username: t.username });
           } else if (t && t.ok === false) {
-            await api.cloud.deleteToken(provider).catch(() => {});
+            await api.cloud.deleteToken(tokenId).catch(() => {});
             return t?.error || `Token rejected by ${cp.name}.`;
           }
         } catch {}
@@ -489,7 +497,9 @@
   }
 
   async function disconnectCloud(provider) {
-    try { await api.cloud.deleteToken(provider); } catch {}
+    const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
+    const tokenId = cp?.tokenProvider || provider;
+    try { await api.cloud.deleteToken(tokenId); } catch {}
     await refresh();
   }
 

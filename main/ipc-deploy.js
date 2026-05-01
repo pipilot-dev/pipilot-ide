@@ -131,6 +131,52 @@ const PROVIDERS = {
       { key: 'accountId',   label: 'Account ID (optional)', placeholder: 'leave blank if you have only one account' },
     ],
   },
+  'cloudflare-workers': {
+    name: 'Cloudflare Workers',
+    // Wrangler reads almost everything from wrangler.toml (name, main,
+    // routes, compatibility_date). We just shell out and let it do its
+    // thing. CLOUDFLARE_API_TOKEN env auths the upload.
+    cliArgs: ({ target }) => [
+      '-y', 'wrangler@latest', 'deploy',
+      ...(target === 'production' ? [] : ['--env', 'preview']),
+    ],
+    env: ({ token, config }) => ({
+      CLOUDFLARE_API_TOKEN: token,
+      ...(config.accountId ? { CLOUDFLARE_ACCOUNT_ID: config.accountId } : {}),
+    }),
+    parseUrl: (output) => {
+      // Wrangler output:
+      //   Published <name> (X sec)
+      //     <name>.<subdomain>.workers.dev
+      // Or for custom domain: routes line.
+      const m = output.match(/https?:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev/gi);
+      if (m) return m[m.length - 1];
+      const naked = output.match(/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev/gi);
+      return naked ? 'https://' + naked[naked.length - 1] : null;
+    },
+    parseMetadata: (output, { config } = {}) => {
+      const url = (output.match(/https?:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev/gi) || []).pop();
+      const name = url ? url.match(/^https?:\/\/([a-z0-9-]+)\./)?.[1] : null;
+      const versionId = output.match(/Current Version ID:\s*([a-f0-9-]{8,})/i)?.[1] || null;
+      return { workerName: name, versionId, accountId: config?.accountId || null };
+    },
+    estimatedFirstRunSeconds: 30,
+    extraConfig: [
+      { key: 'accountId', label: 'Account ID (optional)', placeholder: 'leave blank if you have only one account' },
+    ],
+    preflight: async ({ projectPath }) => {
+      try {
+        await fsp.access(path.join(projectPath, 'wrangler.toml'));
+      } catch {
+        try {
+          await fsp.access(path.join(projectPath, 'wrangler.jsonc'));
+        } catch {
+          return 'Cloudflare Workers needs a wrangler.toml (or wrangler.jsonc) in the project root. Run `npx wrangler init` in a terminal to generate one.';
+        }
+      }
+      return null;
+    },
+  },
   railway: {
     name: 'Railway',
     // railway up reads the project link from .railway/config.json in
@@ -198,9 +244,15 @@ module.exports = function register(ipcMain, ctx) {
     await fsp.writeFile(file, JSON.stringify(data, null, 2), 'utf8');
   }
 
+  // Map deploy-provider id → underlying cloud-tokens entry. Most are
+  // 1:1; Cloudflare Pages and Workers share the same token.
+  const TOKEN_PROVIDER = {
+    'cloudflare-workers': 'cloudflare',
+  };
   async function tokenFor(provider) {
     const all = await readJsonSafe(tokensFile, {});
-    return decryptToken(all[provider]);
+    const id = TOKEN_PROVIDER[provider] || provider;
+    return decryptToken(all[id]);
   }
 
   async function appendHistory(entry) {
