@@ -438,6 +438,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteDomain: (serviceId, domainId) => ipcRenderer.invoke('render:delete-domain', { serviceId, domainId }),
   },
 
+  railway: {
+    whoami: () => ipcRenderer.invoke('railway:whoami'),
+    linkInfo: (projectPath) => ipcRenderer.invoke('railway:link-info', { projectPath }),
+    listDeployments: (projectPath) => ipcRenderer.invoke('railway:list-deployments', { projectPath }),
+    rollback: (deploymentId) => ipcRenderer.invoke('railway:rollback', { deploymentId }),
+    listEnv: (projectPath) => ipcRenderer.invoke('railway:list-env', { projectPath }),
+    setEnv: (projectPath, key, value) => ipcRenderer.invoke('railway:set-env', { projectPath, key, value }),
+    deleteEnv: (projectPath, key) => ipcRenderer.invoke('railway:delete-env', { projectPath, key }),
+    listDomains: (projectPath) => ipcRenderer.invoke('railway:list-domains', { projectPath }),
+    addDomain: (projectPath, domain) => ipcRenderer.invoke('railway:add-domain', { projectPath, domain }),
+    deleteDomain: (domainId) => ipcRenderer.invoke('railway:delete-domain', { domainId }),
+  },
+
   deploy: {
     listProviders: () => ipcRenderer.invoke('deploy:list-providers'),
     detectProvider: (projectPath) => ipcRenderer.invoke('deploy:detect-provider', { projectPath }),

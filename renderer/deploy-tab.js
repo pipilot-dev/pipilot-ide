@@ -362,6 +362,7 @@
           ${s.connected ? `<button class="dt-btn" data-act="env" data-provider="${cp.id}" title="Manage environment variables">🔐 Env</button>` : ''}
           ${s.connected ? `<button class="dt-btn" data-act="domains" data-provider="${cp.id}" title="Manage custom domains">🌐 Domains</button>` : ''}
           ${s.connected ? `<button class="dt-btn" data-act="hooks" data-provider="${cp.id}" title="Deploy webhooks for CI integration">🪝 Hooks</button>` : ''}
+          ${s.connected && cp.id === 'railway' ? `<button class="dt-btn" data-act="railway-rollback" title="Roll back to a previous Railway deployment">↑ Rollback</button>` : ''}
           ${s.history.length ? `<button class="dt-btn" data-act="history" data-provider="${cp.id}" title="Deploy history">⏱ ${s.history.length}</button>` : ''}
         </div>
       </div>`;
@@ -464,6 +465,11 @@
     if (act === 'render-env-add')    return openRenderEnvAddDialog(dataset || {});
     if (act === 'render-env-edit')   return openRenderEnvEditDialog(dataset || {});
     if (act === 'render-env-delete') return deleteRenderEnv(dataset || {});
+    if (act === 'railway-env-add')    return openRailwayEnvAddDialog();
+    if (act === 'railway-env-edit')   return openRailwayEnvEditDialog(dataset || {});
+    if (act === 'railway-env-delete') return deleteRailwayEnv(dataset || {});
+    if (act === 'railway-rollback')   return openRailwayRollbackDialog();
+    if (act === 'railway-do-rollback') return doRailwayRollback(dataset || {});
     if (act === 'domains')           return openDomainsDialog(provider);
     if (act === 'domain-add')        return openDomainAddDialog(provider);
     if (act === 'domain-delete')     return deleteDomain(provider, dataset || {});
@@ -765,6 +771,112 @@
     openRenderEnvDialog();
   }
 
+  // ── Railway (GraphQL) ────────────────────────────────────────────
+  async function openRailwayEnvDialog() {
+    const p = projectPath();
+    let envs = [];
+    let loadError = null;
+    try {
+      const r = await api.railway.listEnv(p);
+      if (r?.ok) envs = r.envs || []; else loadError = r?.error;
+    } catch (err) { loadError = err.message; }
+
+    const renderRows = () => envs.map(e => `
+      <div class="dt-env-row" data-env-key="${escapeHtml(e.key)}">
+        <span class="dt-env-key">${escapeHtml(e.key)}</span>
+        <span class="dt-env-value" data-toggle-secret>${escapeHtml(maskValue(e.value))}</span>
+        <button class="dt-btn" data-act="railway-env-edit" data-env-key="${escapeHtml(e.key)}" data-env-value="${escapeHtml(e.value || '')}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Edit</button>
+        <button class="dt-btn danger" data-act="railway-env-delete" data-env-key="${escapeHtml(e.key)}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Delete</button>
+      </div>
+    `).join('');
+
+    showDialog({
+      title: `Railway · ${envs.length} env vars`,
+      body: `${loadError ? `<p class="dt-error" style="display:block;">${escapeHtml(loadError)}</p>` : ''}
+        <p class="lead">Vars apply to the linked service in the linked environment. Changes apply on the next deploy.</p>
+        <div class="dt-env-list">${envs.length ? renderRows() : '<p class="lead">No env vars yet.</p>'}</div>
+        <button class="dt-btn primary" data-act="railway-env-add" style="margin-top:8px;">+ Add variable</button>`,
+      onSubmit: () => null, submitLabel: 'Close',
+    });
+    setTimeout(() => wireRevealClicks(envs), 0);
+  }
+
+  async function openRailwayEnvAddDialog() {
+    showDialog({
+      title: 'Add Railway env var',
+      body: `<label>Key<input type="text" data-field="key" placeholder="MY_API_KEY" autofocus /></label>
+        <label>Value<input type="text" data-field="value" placeholder="(secret)" /></label>`,
+      onSubmit: async (root) => {
+        const key = root.querySelector('[data-field="key"]').value.trim();
+        const value = root.querySelector('[data-field="value"]').value;
+        if (!key) return 'Key is required.';
+        const r = await api.railway.setEnv(projectPath(), key, value);
+        if (!r?.ok) return r?.error || 'Save failed.';
+        openRailwayEnvDialog();
+        return null;
+      },
+      submitLabel: 'Save',
+    });
+  }
+  async function openRailwayEnvEditDialog(ds) {
+    showDialog({
+      title: `Edit ${escapeHtml(ds.envKey)}`,
+      body: `<label>Key (read-only)<input type="text" value="${escapeHtml(ds.envKey)}" disabled /></label>
+        <label>Value<input type="text" data-field="value" value="${escapeHtml(ds.envValue || '')}" autofocus /></label>`,
+      onSubmit: async (root) => {
+        const value = root.querySelector('[data-field="value"]').value;
+        const r = await api.railway.setEnv(projectPath(), ds.envKey, value);
+        if (!r?.ok) return r?.error || 'Save failed.';
+        openRailwayEnvDialog();
+        return null;
+      },
+      submitLabel: 'Save',
+    });
+  }
+  async function deleteRailwayEnv(ds) {
+    if (!confirm(`Delete ${ds.envKey}?`)) return;
+    const r = await api.railway.deleteEnv(projectPath(), ds.envKey);
+    if (!r?.ok) { bus.emit('toast:show', { type: 'error', message: r?.error || 'Delete failed' }); return; }
+    openRailwayEnvDialog();
+  }
+
+  async function openRailwayRollbackDialog() {
+    let deployments = [];
+    let loadError = null;
+    try {
+      const r = await api.railway.listDeployments(projectPath());
+      if (r?.ok) deployments = r.deployments || []; else loadError = r?.error;
+    } catch (err) { loadError = err.message; }
+    // Skip the very first one (that's "current"); show deployable previous ones.
+    const rollbackable = deployments.slice(1);
+    const rows = rollbackable.length
+      ? rollbackable.map(d => `
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--border);font-size:12px;">
+            <span class="dt-deploy-pill ${d.status === 'SUCCESS' ? 'success' : 'error'}">${d.status === 'SUCCESS' ? '✓' : '✗'}</span>
+            <span style="flex:1;font-family:var(--font-mono);font-size:10.5px;">${escapeHtml(d.id.slice(0, 12))}…</span>
+            <span style="font-size:10px;color:var(--text-dim);">${escapeHtml(d.status)}</span>
+            <span style="font-size:10px;color:var(--text-dim);">${formatRel(new Date(d.createdAt).getTime())}</span>
+            ${d.status === 'SUCCESS' ? `<button class="dt-btn" data-act="railway-do-rollback" data-deployment-id="${escapeHtml(d.id)}" data-url="${escapeHtml(d.url || '')}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">↑ Roll back here</button>` : ''}
+          </div>`).join('')
+      : '<p class="lead">No previous deployments to roll back to.</p>';
+    showDialog({
+      title: 'Railway · Roll back to a previous deployment',
+      body: `${loadError ? `<p class="dt-error" style="display:block;">${escapeHtml(loadError)}</p>` : ''}
+        <p class="lead">Pick any past successful deployment to make it the live one again.</p>
+        <div style="max-height:340px;overflow:auto;">${rows}</div>`,
+      onSubmit: () => null, submitLabel: 'Close',
+    });
+  }
+
+  async function doRailwayRollback(ds) {
+    if (!ds?.deploymentId) return;
+    if (!confirm('Roll Railway production back to this deployment?')) return;
+    const r = await api.railway.rollback(ds.deploymentId);
+    if (!r?.ok) { bus.emit('toast:show', { type: 'error', message: r?.error || 'Rollback failed' }); return; }
+    bus.emit('toast:show', { type: 'success', message: 'Railway rollback queued' });
+    await refresh();
+  }
+
   async function rerunDeploy(provider, target) {
     // history records carry their own `config` so we just call run with
     // no extra args — the main-side handler will merge with savedConfig
@@ -858,6 +970,7 @@
     if (provider === 'netlify')    return openNetlifyEnvDialog();
     if (provider === 'cloudflare') return openCloudflareEnvDialog();
     if (provider === 'render')     return openRenderEnvDialog();
+    if (provider === 'railway')    return openRailwayEnvDialog();
     if (provider !== 'vercel') {
       showDialog({
         title: `${cp?.name || provider} · Environment variables`,
@@ -1327,6 +1440,13 @@
       try { const r = await api.render.getServiceMap(p); if (r?.ok) mapping = r.mapping; } catch {}
       return mapping ? { ok: true, label: mapping.name || mapping.id, serviceId: mapping.id } : { ok: false, error: 'Trigger a Render deploy first to pick the service.' };
     }
+    if (provider === 'railway') {
+      try {
+        const r = await api.railway.linkInfo(p);
+        if (r?.ok && r.link?.serviceId) return { ok: true, label: r.link.serviceId.slice(0, 8) + '…', projectPath: p };
+      } catch {}
+      return { ok: false, error: 'Run `npx @railway/cli@latest link` in this project first to bind it to a Railway service.' };
+    }
     return { ok: false, error: `Custom domains aren't wired for ${provider} yet.` };
   }
 
@@ -1335,6 +1455,7 @@
     if (provider === 'netlify')    return api.netlify.listDomains(ctx.siteSlug);
     if (provider === 'cloudflare') return api.cloudflarePages.listDomains(ctx.accountId, ctx.projectName);
     if (provider === 'render')     return api.render.listDomains(ctx.serviceId);
+    if (provider === 'railway')    return api.railway.listDomains(ctx.projectPath);
     return { ok: false, error: 'unsupported' };
   }
 
@@ -1396,6 +1517,7 @@
         else if (provider === 'netlify')    r = await api.netlify.addDomain(ctx.siteSlug, domain, primary);
         else if (provider === 'cloudflare') r = await api.cloudflarePages.addDomain(ctx.accountId, ctx.projectName, domain);
         else if (provider === 'render')     r = await api.render.addDomain(ctx.serviceId, domain);
+        else if (provider === 'railway')    r = await api.railway.addDomain(ctx.projectPath, domain);
         if (!r?.ok) return r?.error || 'Add failed.';
         openDomainsDialog(provider);
         return null;
@@ -1413,6 +1535,7 @@
     else if (provider === 'netlify')    r = await api.netlify.deleteDomain(ctx.siteSlug, ds.domain);
     else if (provider === 'cloudflare') r = await api.cloudflarePages.deleteDomain(ctx.accountId, ctx.projectName, ds.domain);
     else if (provider === 'render')     r = await api.render.deleteDomain(ctx.serviceId, ds.domainId);
+    else if (provider === 'railway')    r = await api.railway.deleteDomain(ds.domainId);
     if (!r?.ok) { bus.emit('toast:show', { type: 'error', message: r?.error || 'Delete failed' }); return; }
     openDomainsDialog(provider);
   }
