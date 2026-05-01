@@ -362,6 +362,7 @@
     if (act === 'disconnect-cloud') return disconnectCloud(provider);
     if (act === 'deploy')           return openDeployDialog(provider, dataset?.target || 'preview');
     if (act === 'history')          return openHistoryDialog(provider);
+    if (act === 'promote')          return openPromoteDialog(provider, dataset?.url);
     if (act === 'open-url')         { try { api.shell?.openExternal?.(dataset?.url); } catch {} return; }
     if (act === 'dev-start')        return startDevServer();
     if (act === 'dev-stop')         return stopDevServer(dataset?.id);
@@ -482,13 +483,14 @@
     const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
     const list = state.cloud[provider]?.history || [];
     const rows = list.length
-      ? list.map(h => `
+      ? list.map((h, i) => `
           <div style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border);font-size:12px;">
             <span class="dt-deploy-pill ${h.status}">${h.status === 'success' ? '✓' : '✗'}</span>
             <span style="flex:1;min-width:0;">${h.url ? `<a href="#" data-act="open-url" data-url="${escapeHtml(h.url)}" style="color:var(--accent);">${escapeHtml(shortenUrl(h.url))}</a>` : '<span style="color:var(--text-dim);">(no url)</span>'}</span>
             <span style="font-size:10px;color:var(--text-dim);">${escapeHtml(h.target || 'preview')}</span>
             <span style="font-size:10px;color:var(--text-dim);">${formatRel(h.finishedAt)}</span>
             <span style="font-size:10px;color:var(--text-dim);">${Math.round(((h.finishedAt - h.startedAt) || 0) / 1000)}s</span>
+            ${(provider === 'vercel' && h.status === 'success' && h.url && h.target !== 'production') ? `<button class="dt-btn" data-act="promote" data-provider="${provider}" data-url="${escapeHtml(h.url)}" title="Promote this deployment to production" style="flex:0 0 auto;padding:3px 10px;font-size:10.5px;">↑ Promote</button>` : ''}
           </div>`).join('')
       : '<p class="lead">No deploys yet for this provider.</p>';
     showDialog({
@@ -496,6 +498,45 @@
       body: `<div style="max-height:380px;overflow:auto;">${rows}</div>`,
       onSubmit: () => null,
       submitLabel: 'Close',
+    });
+  }
+
+  function openPromoteDialog(provider, url) {
+    showDialog({
+      title: `Promote to production`,
+      body: `<p class="lead">Promote <a href="#" data-act="open-url" data-url="${escapeHtml(url)}" style="color:var(--accent);">${escapeHtml(shortenUrl(url))}</a> to your production URL.</p>
+        <p class="lead" style="color:var(--warn);">⚠ This updates your live site immediately. There's no undo besides promoting a different deployment.</p>
+        <div data-progress style="display:none;"><div class="dt-log" data-log></div></div>`,
+      onSubmit: async (root, ctxBtns) => {
+        root.querySelector('[data-progress]').style.display = 'block';
+        const log = root.querySelector('[data-log]');
+        const writeLog = (cls, text) => {
+          const div = document.createElement('div');
+          if (cls) div.className = cls;
+          div.textContent = text;
+          log.appendChild(div);
+          log.scrollTop = log.scrollHeight;
+        };
+        ctxBtns.disable();
+        const off = api.deploy.onEvent((evt) => {
+          if (evt.type === 'log')   writeLog(evt.stream === 'stderr' ? 'err' : '', evt.line);
+          else if (evt.type === 'error') writeLog('err', '✗ ' + evt.message);
+          else if (evt.type === 'done')  writeLog('ok', '✓ Promoted: ' + evt.url);
+        });
+        const r = await api.deploy.promote({ provider, projectPath: projectPath(), url });
+        try { off(); } catch {}
+        if (!r?.ok) {
+          ctxBtns.enable();
+          return r?.error || 'Promote failed.';
+        }
+        ctxBtns.replaceSubmit('Open Production', () => {
+          try { api.shell?.openExternal?.(r.url || url); } catch {}
+          ctxBtns.close();
+        });
+        await refresh();
+        return null;
+      },
+      submitLabel: 'Promote',
     });
   }
 
@@ -668,7 +709,19 @@
       if (submitBtn.textContent === escapeHtml(submitLabel)) close();
     });
     cancelBtn.addEventListener('click', close);
-    bg.addEventListener('click', (e) => { if (e.target === bg) close(); });
+    bg.addEventListener('click', (e) => {
+      if (e.target === bg) { close(); return; }
+      // Bubble [data-act="..."] clicks inside the dialog body up to our
+      // global onAction so history-row buttons (Promote / open-url) work
+      // without re-binding per-row.
+      const act = e.target.closest && e.target.closest('[data-act]');
+      if (act && bg.contains(act)) {
+        e.preventDefault();
+        const ds = {};
+        for (const k of Object.keys(act.dataset)) ds[k] = act.dataset[k];
+        onAction(act.dataset.act, act.dataset.provider, ds);
+      }
+    });
     bg.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
   }
 

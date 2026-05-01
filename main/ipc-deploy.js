@@ -232,6 +232,74 @@ module.exports = function register(ipcMain, ctx) {
     return ok({ history: all });
   });
 
+  // Promote a previous Vercel preview deployment to production.
+  // Vercel's CLI exposes this as `vercel promote <url>` — no equivalent
+  // for Netlify (needs site_id + deploy_id, captured from API not CLI),
+  // Cloudflare Pages (needs account_id + project_name + deployment_id),
+  // or Railway (different model: redeploy from snapshot). Those land in
+  // a follow-up once we capture the necessary IDs at deploy time.
+  ipcMain.handle('deploy:promote', async (_e, payload = {}) => {
+    const runId = `promote-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    try {
+      const { provider, projectPath, url } = payload;
+      if (provider !== 'vercel') {
+        throw new Error(`Promote is only supported for Vercel today. Netlify, Cloudflare Pages, and Railway promotion is on the roadmap (each needs deployment-id capture at deploy time).`);
+      }
+      if (!url) throw new Error('deployment url required');
+      if (!projectPath) throw new Error('projectPath required');
+      const token = await tokenFor(provider);
+      if (!token) throw new Error(`No token saved for Vercel.`);
+
+      const args = ['-y', 'vercel@latest', 'promote', url, '--token', token, '--yes'];
+      emit(ctx, runId, 'log', { line: `$ npx ${args.map(a => a === token ? '***' : a).join(' ')}` });
+
+      const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+      const child = spawn(npxBin, args, {
+        cwd: projectPath,
+        env: { ...process.env, FORCE_COLOR: '0', CI: '1' },
+        windowsHide: true,
+        shell: process.platform === 'win32',
+      });
+
+      let outputBuf = '';
+      const onChunk = (chunk, stream) => {
+        const text = chunk.toString();
+        outputBuf += text;
+        for (const line of text.split(/\r?\n/)) {
+          if (line.trim().length) emit(ctx, runId, 'log', { line, stream });
+        }
+      };
+      child.stdout.on('data', (c) => onChunk(c, 'stdout'));
+      child.stderr.on('data', (c) => onChunk(c, 'stderr'));
+
+      const startedAt = Date.now();
+
+      return await new Promise((resolve) => {
+        child.on('error', async (err) => {
+          emit(ctx, runId, 'error', { message: String(err?.message || err) });
+          resolve(fail(err));
+        });
+        child.on('exit', async (code) => {
+          if (code === 0) {
+            emit(ctx, runId, 'done', { url, code });
+            await appendHistory({
+              id: runId, provider, projectPath, target: 'production',
+              status: 'success', startedAt, finishedAt: Date.now(),
+              url, promotedFrom: url,
+            });
+            resolve(ok({ runId, url }));
+          } else {
+            emit(ctx, runId, 'error', { message: `vercel promote exited with code ${code}` });
+            resolve(fail(new Error(`exit ${code}`)));
+          }
+        });
+      });
+    } catch (err) {
+      emit(ctx, runId, 'error', { message: err?.message || String(err) });
+      return fail(err);
+    }
+  });
+
   ipcMain.handle('deploy:run', async (_e, payload = {}) => {
     const runId = `deploy-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     try {
