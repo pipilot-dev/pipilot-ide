@@ -133,10 +133,13 @@
 
   function buildSection(id, settings, profiles, builtins, appVersion) {
     if (id === 'general') {
+      const themes = window.PiPilot?.theme?.list?.() || [{ id: 'midnight', label: 'Midnight Studio' }];
+      const currentTheme = window.PiPilot?.theme?.current?.() || 'midnight';
       return `
         <h2>General</h2>
         <p class="lead">Editor look-and-feel.</p>
         <div class="st-card">
+          ${rowSelect('theme', 'Color Theme', 'Applies live to the entire IDE — workbench colors and the editor syntax theme.', currentTheme, themes.map(t => ({ v: t.id, t: t.label })))}
           ${rowRange('fontSize', 'Editor Font Size', 'Base font size in pixels. Live-updates the editor.', settings.fontSize || 13, 10, 24)}
           ${rowText('fontFamily', 'Font Family', 'CSS font-family stack. Leave blank for the JetBrains Mono default.', settings.fontFamily || '', { placeholder: 'JetBrains Mono, Consolas, monospace' })}
           ${rowSelect('cursorStyle', 'Cursor Style', 'Caret rendering in code editors.', settings.cursorStyle || 'line', [

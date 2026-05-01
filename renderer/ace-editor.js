@@ -241,6 +241,10 @@
 
     // Configure worker path so Ace's built-in syntax checkers (JS, JSON, CSS, etc.) load from CDN
     ace.config.set('workerPath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7');
+    // Themes are loaded lazily by setTheme() — point at the same CDN so
+    // dracula / github_dark / solarized_* etc. download on demand.
+    ace.config.set('themePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7');
+    ace.config.set('basePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7');
 
     const customFont = (state.settings?.fontFamily || '').trim();
     aceEditor = ace.edit(hostEl, {
