@@ -389,6 +389,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 
+  vercel: {
+    listProjects: () => ipcRenderer.invoke('vercel:list-projects'),
+    getProjectMap: (projectPath) => ipcRenderer.invoke('vercel:get-project-map', { projectPath }),
+    setProjectMap: (projectPath, vercelProjectId, vercelProjectName) => ipcRenderer.invoke('vercel:set-project-map', { projectPath, vercelProjectId, vercelProjectName }),
+    listEnv: (vercelProjectId) => ipcRenderer.invoke('vercel:list-env', { vercelProjectId }),
+    setEnv: (vercelProjectId, key, value, target) => ipcRenderer.invoke('vercel:set-env', { vercelProjectId, key, value, target }),
+    deleteEnv: (vercelProjectId, envId) => ipcRenderer.invoke('vercel:delete-env', { vercelProjectId, envId }),
+  },
+
   deploy: {
     listProviders: () => ipcRenderer.invoke('deploy:list-providers'),
     history: (provider) => ipcRenderer.invoke('deploy:history', { provider }),

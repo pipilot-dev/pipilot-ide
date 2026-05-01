@@ -105,6 +105,22 @@
       .dt-dialog .actions { display:flex; gap:8px; margin-top:6px; justify-content:flex-end; }
       .dt-error { color:var(--error); font-size:11.5px; padding:8px 10px; background:color-mix(in srgb, var(--error) 12%, transparent); border-radius:5px; }
 
+      /* Env vars list */
+      .dt-env-list { display:flex; flex-direction:column; gap:6px; max-height:340px; overflow:auto; padding:4px 0; }
+      .dt-env-row { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--bg); border:1px solid var(--border); border-radius:5px; font-size:11.5px; }
+      .dt-env-key { font-family:var(--font-mono); color:#b392f0; flex:0 0 auto; min-width:120px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+      .dt-env-targets { display:flex; gap:3px; flex:0 0 auto; }
+      .dt-env-target {
+        font-size:9px; font-weight:600; padding:1px 5px; border-radius:3px;
+        text-transform:uppercase; letter-spacing:0.04em;
+        background:var(--surface-alt); color:var(--text-mid);
+      }
+      .dt-env-target.production { color:var(--ok); background:color-mix(in srgb, var(--ok) 15%, transparent); }
+      .dt-env-target.preview    { color:var(--info); background:color-mix(in srgb, var(--info) 15%, transparent); }
+      .dt-env-target.development { color:var(--warn); background:color-mix(in srgb, var(--warn) 15%, transparent); }
+      .dt-env-value { font-family:var(--font-mono); color:var(--text-mid); flex:1; min-width:0; cursor:pointer; padding:2px 6px; border-radius:3px; transition:background 100ms; }
+      .dt-env-value:hover { background:var(--overlay-2); color:var(--text); }
+
       /* Last-deploy summary inside cloud cards */
       .dt-deploy-last { display:flex; align-items:center; gap:10px; font-size:11.5px; padding:8px 10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; }
       .dt-deploy-pill {
@@ -278,6 +294,7 @@
                  <button class="dt-btn" data-act="disconnect-cloud" data-provider="${cp.id}">Disconnect</button>`
             : `<button class="dt-btn primary" data-act="connect-cloud" data-provider="${cp.id}">Connect ${escapeHtml(cp.name)}</button>`
           }
+          ${s.connected ? `<button class="dt-btn" data-act="env" data-provider="${cp.id}" title="Manage environment variables">🔐 Env</button>` : ''}
           ${s.history.length ? `<button class="dt-btn" data-act="history" data-provider="${cp.id}" title="Deploy history">⏱ ${s.history.length}</button>` : ''}
         </div>
       </div>`;
@@ -363,6 +380,10 @@
     if (act === 'deploy')           return openDeployDialog(provider, dataset?.target || 'preview');
     if (act === 'history')          return openHistoryDialog(provider);
     if (act === 'promote')          return openPromoteDialog(provider, dataset?.url);
+    if (act === 'env')              return openEnvDialog(provider);
+    if (act === 'env-add')          return openEnvAddDialog(provider);
+    if (act === 'env-edit')         return openEnvEditDialog(provider, dataset || {});
+    if (act === 'env-delete')       return deleteEnv(provider, dataset || {});
     if (act === 'open-url')         { try { api.shell?.openExternal?.(dataset?.url); } catch {} return; }
     if (act === 'dev-start')        return startDevServer();
     if (act === 'dev-stop')         return stopDevServer(dataset?.id);
@@ -538,6 +559,181 @@
       },
       submitLabel: 'Promote',
     });
+  }
+
+  async function openEnvDialog(provider) {
+    const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
+    if (provider !== 'vercel') {
+      showDialog({
+        title: `${cp?.name || provider} · Environment variables`,
+        body: `<p class="lead">Env-var management for ${cp?.name} is on the roadmap. Today only Vercel is wired (their REST API is the cleanest); Netlify / Cloudflare Pages / Railway use different schemas and per-site/account scoping that need adapter work.</p>
+          <p class="lead">In the meantime, set vars in your provider's dashboard or via their CLI — they're picked up by the next deploy automatically.</p>`,
+        onSubmit: () => null,
+        submitLabel: 'OK',
+      });
+      return;
+    }
+
+    // Vercel — pick a project then list/edit env vars.
+    const p = projectPath();
+    let mapping = null;
+    try { const r = await api.vercel.getProjectMap(p); if (r?.ok) mapping = r.mapping; } catch {}
+
+    if (!mapping) {
+      // First-time setup: pick which Vercel project this folder maps to.
+      let projects = [];
+      try { const r = await api.vercel.listProjects(); if (r?.ok) projects = r.projects || []; } catch (err) {
+        showDialog({
+          title: 'Vercel · Environment variables',
+          body: `<p class="dt-error" style="display:block;">${escapeHtml(err.message || String(err))}</p>`,
+          onSubmit: () => null, submitLabel: 'Close',
+        });
+        return;
+      }
+      const folderName = (state.project?.name || '').toLowerCase();
+      const guess = projects.find(p => p.name.toLowerCase() === folderName);
+      const opts = projects.map(p => `<option value="${escapeHtml(p.id)}" data-name="${escapeHtml(p.name)}"${p === guess ? ' selected' : ''}>${escapeHtml(p.name)}${p.framework ? ` · ${escapeHtml(p.framework)}` : ''}</option>`).join('');
+      showDialog({
+        title: 'Pick the matching Vercel project',
+        body: `<p class="lead">We'll remember this choice for next time. Showing your ${projects.length} most recent Vercel projects.</p>
+          <label>Vercel project<select data-field="vercelProjectId">${opts}</select></label>`,
+        onSubmit: async (root) => {
+          const sel = root.querySelector('[data-field="vercelProjectId"]');
+          const id = sel.value;
+          const name = sel.options[sel.selectedIndex]?.dataset?.name;
+          if (!id) return 'Pick a project.';
+          await api.vercel.setProjectMap(p, id, name);
+          // Re-open the env dialog now that the mapping exists.
+          openEnvDialog(provider);
+          return null;
+        },
+        submitLabel: 'Use this project',
+      });
+      return;
+    }
+
+    // Mapping exists — fetch + render the env vars table.
+    let envs = [];
+    let loadError = null;
+    try {
+      const r = await api.vercel.listEnv(mapping.id);
+      if (r?.ok) envs = r.envs || [];
+      else loadError = r?.error;
+    } catch (err) { loadError = err.message; }
+
+    const renderRows = () => envs.map(e => `
+      <div class="dt-env-row" data-env-id="${escapeHtml(e.id)}" data-env-key="${escapeHtml(e.key)}">
+        <span class="dt-env-key">${escapeHtml(e.key)}</span>
+        <span class="dt-env-targets">${(e.target || []).map(t => `<span class="dt-env-target ${t}">${escapeHtml(t.slice(0, 4))}</span>`).join('')}</span>
+        <span class="dt-env-value" data-toggle-secret>${escapeHtml(maskValue(e.value, e.type))}</span>
+        <button class="dt-btn" data-act="env-edit" data-provider="${provider}" data-env-id="${escapeHtml(e.id)}" data-env-key="${escapeHtml(e.key)}" data-env-value="${escapeHtml(e.value || '')}" data-env-targets="${escapeHtml((e.target || []).join(','))}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Edit</button>
+        <button class="dt-btn danger" data-act="env-delete" data-provider="${provider}" data-env-id="${escapeHtml(e.id)}" data-env-key="${escapeHtml(e.key)}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Delete</button>
+      </div>
+    `).join('');
+
+    showDialog({
+      title: `Vercel · ${escapeHtml(mapping.name || mapping.id)} · ${envs.length} env vars`,
+      body: `${loadError ? `<p class="dt-error" style="display:block;">${escapeHtml(loadError)}</p>` : ''}
+        <p class="lead">Click any masked value to reveal. Vercel encrypts values at rest; we display them in the clear so you can edit.</p>
+        <div class="dt-env-list">${envs.length ? renderRows() : '<p class="lead">No environment variables yet.</p>'}</div>
+        <button class="dt-btn primary" data-act="env-add" data-provider="${provider}" style="margin-top:8px;">+ Add variable</button>`,
+      onSubmit: () => null,
+      submitLabel: 'Close',
+    });
+
+    // Inline reveal-on-click for masked values.
+    setTimeout(() => {
+      document.querySelectorAll('.dt-dialog [data-toggle-secret]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const row = el.closest('.dt-env-row');
+          const key = row?.dataset.envKey;
+          const env = envs.find(e => e.key === key);
+          if (!env) return;
+          el.textContent = el.dataset.revealed === '1' ? maskValue(env.value, env.type) : (env.value || '');
+          el.dataset.revealed = el.dataset.revealed === '1' ? '0' : '1';
+        });
+      });
+    }, 0);
+  }
+
+  function maskValue(v, type) {
+    if (v == null || v === '') return '(empty)';
+    if (type === 'system' || type === 'secret') return '••••••••';
+    return v.length > 12 ? v.slice(0, 4) + '••••' + v.slice(-2) : '••••';
+  }
+
+  async function openEnvAddDialog(provider) {
+    const p = projectPath();
+    let mapping = null;
+    try { const r = await api.vercel.getProjectMap(p); if (r?.ok) mapping = r.mapping; } catch {}
+    if (!mapping) return;
+    showDialog({
+      title: 'Add environment variable',
+      body: `<label>Key<input type="text" data-field="key" placeholder="MY_API_KEY" autofocus /></label>
+        <label>Value<input type="text" data-field="value" placeholder="(secret)" /></label>
+        <label>Target<select data-field="target">
+          <option value="all" selected>All (production + preview + development)</option>
+          <option value="production">Production only</option>
+          <option value="preview">Preview only</option>
+          <option value="development">Development only</option>
+        </select></label>`,
+      onSubmit: async (root) => {
+        const key = root.querySelector('[data-field="key"]').value.trim();
+        const value = root.querySelector('[data-field="value"]').value;
+        const target = root.querySelector('[data-field="target"]').value;
+        if (!key) return 'Key is required.';
+        const targets = target === 'all' ? ['production', 'preview', 'development'] : [target];
+        const r = await api.vercel.setEnv(mapping.id, key, value, targets);
+        if (!r?.ok) return r?.error || 'Save failed.';
+        openEnvDialog(provider); // re-render with fresh data
+        return null;
+      },
+      submitLabel: 'Save',
+    });
+  }
+
+  async function openEnvEditDialog(provider, ds) {
+    const p = projectPath();
+    let mapping = null;
+    try { const r = await api.vercel.getProjectMap(p); if (r?.ok) mapping = r.mapping; } catch {}
+    if (!mapping) return;
+    const targetsArr = (ds.envTargets || '').split(',').filter(Boolean);
+    const targetVal = targetsArr.length === 3 ? 'all' : (targetsArr[0] || 'all');
+    showDialog({
+      title: `Edit ${escapeHtml(ds.envKey)}`,
+      body: `<label>Key (read-only)<input type="text" value="${escapeHtml(ds.envKey)}" disabled /></label>
+        <label>Value<input type="text" data-field="value" value="${escapeHtml(ds.envValue || '')}" autofocus /></label>
+        <label>Target<select data-field="target">
+          <option value="all"${targetVal === 'all' ? ' selected' : ''}>All</option>
+          <option value="production"${targetVal === 'production' ? ' selected' : ''}>Production only</option>
+          <option value="preview"${targetVal === 'preview' ? ' selected' : ''}>Preview only</option>
+          <option value="development"${targetVal === 'development' ? ' selected' : ''}>Development only</option>
+        </select></label>`,
+      onSubmit: async (root) => {
+        const value = root.querySelector('[data-field="value"]').value;
+        const target = root.querySelector('[data-field="target"]').value;
+        const targets = target === 'all' ? ['production', 'preview', 'development'] : [target];
+        const r = await api.vercel.setEnv(mapping.id, ds.envKey, value, targets);
+        if (!r?.ok) return r?.error || 'Save failed.';
+        openEnvDialog(provider);
+        return null;
+      },
+      submitLabel: 'Save',
+    });
+  }
+
+  async function deleteEnv(provider, ds) {
+    if (!confirm(`Delete ${ds.envKey}?`)) return;
+    const p = projectPath();
+    let mapping = null;
+    try { const r = await api.vercel.getProjectMap(p); if (r?.ok) mapping = r.mapping; } catch {}
+    if (!mapping) return;
+    const r = await api.vercel.deleteEnv(mapping.id, ds.envId);
+    if (!r?.ok) {
+      bus.emit('toast:show', { type: 'error', message: r?.error || 'Delete failed' });
+      return;
+    }
+    openEnvDialog(provider);
   }
 
   async function startDevServer() {
