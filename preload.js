@@ -174,6 +174,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     init: (p) => ipcRenderer.invoke('git:init', p),
     show: (p, hash) => ipcRenderer.invoke('git:show', { projectPath: p, hash }),
     fileVersions: (p, file, staged) => ipcRenderer.invoke('git:file-versions', { projectPath: p, file, staged }),
+    blame: (p, file) => ipcRenderer.invoke('git:blame', { projectPath: p, file }),
+    commitInfo: (p, hash) => ipcRenderer.invoke('git:commit-info', { projectPath: p, hash }),
+    remoteInfo: (p) => ipcRenderer.invoke('git:remote-info', p),
+    showFile: (p, hash, file) => ipcRenderer.invoke('git:show-file', { projectPath: p, hash, file }),
+    showFileBinary: (p, hash, file) => ipcRenderer.invoke('git:show-file-binary', { projectPath: p, hash, file }),
+    listRemotes: (p) => ipcRenderer.invoke('git:list-remotes', p),
+    removeRemote: (p, name) => ipcRenderer.invoke('git:remove-remote', { projectPath: p, name }),
   },
 
   // ---------- Cloud connectors ----------
@@ -213,6 +220,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onLog: (id, handler) => {
       const ch = `devserver:log:${id}`;
       const fn = (_e, line) => handler(line);
+      ipcRenderer.on(ch, fn);
+      return () => ipcRenderer.removeListener(ch, fn);
+    },
+  },
+
+  // ---------- Debug (Node CDP) ----------
+  debug: {
+    start: (opts) => ipcRenderer.invoke('debug:start', opts),
+    stop: (sessionId) => ipcRenderer.invoke('debug:stop', { sessionId }),
+    setBreakpoints: (sessionId, filePath, lines) => ipcRenderer.invoke('debug:set-breakpoints', { sessionId, filePath, lines }),
+    continue: (sessionId) => ipcRenderer.invoke('debug:continue', { sessionId }),
+    stepOver: (sessionId) => ipcRenderer.invoke('debug:step-over', { sessionId }),
+    stepInto: (sessionId) => ipcRenderer.invoke('debug:step-into', { sessionId }),
+    stepOut: (sessionId) => ipcRenderer.invoke('debug:step-out', { sessionId }),
+    pause: (sessionId) => ipcRenderer.invoke('debug:pause', { sessionId }),
+    eval: (sessionId, expression, callFrameId) => ipcRenderer.invoke('debug:eval', { sessionId, expression, callFrameId }),
+    getProperties: (sessionId, objectId) => ipcRenderer.invoke('debug:get-properties', { sessionId, objectId }),
+    listSessions: () => ipcRenderer.invoke('debug:list-sessions'),
+    onEvent: (handler) => {
+      const ch = 'debug:event';
+      const fn = (_e, payload) => handler(payload);
       ipcRenderer.on(ch, fn);
       return () => ipcRenderer.removeListener(ch, fn);
     },
@@ -431,6 +459,41 @@ contextBridge.exposeInMainWorld('electronAPI', {
   shell: {
     openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
     showItemInFolder: (p) => ipcRenderer.invoke('shell:show-in-folder', p),
+  },
+
+  // ---------- Embedded browser ----------
+  browser: {
+    addHistory: (entry) => ipcRenderer.invoke('browser:history:add', entry),
+    listHistory: (opts) => ipcRenderer.invoke('browser:history:list', opts || {}),
+    clearHistory: () => ipcRenderer.invoke('browser:history:clear'),
+    listBookmarks: () => ipcRenderer.invoke('browser:bookmarks:list'),
+    addBookmark: (entry) => ipcRenderer.invoke('browser:bookmarks:add', entry),
+    removeBookmark: (url) => ipcRenderer.invoke('browser:bookmarks:remove', { url }),
+    openExternal: (url) => ipcRenderer.invoke('browser:open-external', url),
+    clearData: (incognito) => ipcRenderer.invoke('browser:clear-data', { incognito: !!incognito }),
+    revealFile: (p) => ipcRenderer.invoke('browser:reveal-file', p),
+    onDownload: (handler) => {
+      const fn = (_e, payload) => handler(payload);
+      ipcRenderer.on('browser:download:event', fn);
+      return () => ipcRenderer.removeListener('browser:download:event', fn);
+    },
+    onPopupRequest: (h) => { const fn = (_e, p) => h(p); ipcRenderer.on('browser:popup-request', fn); return () => ipcRenderer.removeListener('browser:popup-request', fn); },
+    // Webview preload bridging
+    getPreloadPath: () => ipcRenderer.invoke('browser:get-preload-path'),
+    // Permission/cert/auth request bridge
+    onPermissionAsk: (h) => { const fn = (_e, p) => h(p); ipcRenderer.on('browser:permission-ask', fn); return () => ipcRenderer.removeListener('browser:permission-ask', fn); },
+    respondPermission: (id, decision, remember) => ipcRenderer.invoke('browser:permission-respond', { id, decision, remember }),
+    savePermission: (origin, permission, decision) => ipcRenderer.invoke('browser:permission-save', { origin, permission, decision }),
+    onAuthAsk: (h) => { const fn = (_e, p) => h(p); ipcRenderer.on('browser:auth-ask', fn); return () => ipcRenderer.removeListener('browser:auth-ask', fn); },
+    respondAuth: (id, username, password) => ipcRenderer.invoke('browser:auth-respond', { id, username, password }),
+    onCertAsk: (h) => { const fn = (_e, p) => h(p); ipcRenderer.on('browser:cert-ask', fn); return () => ipcRenderer.removeListener('browser:cert-ask', fn); },
+    respondCert: (id, allow, remember) => ipcRenderer.invoke('browser:cert-respond', { id, allow, remember }),
+    // Save-as + print
+    saveAs: (url, suggestedName) => ipcRenderer.invoke('browser:save-as', { url, suggestedName }),
+    printToPdf: (webContentsId, suggestedName) => ipcRenderer.invoke('browser:print-to-pdf', { webContentsId, suggestedName }),
+    // AI control bridge
+    onControlRequest: (h) => { const fn = (_e, p) => h(p); ipcRenderer.on('browser:control:request', fn); return () => ipcRenderer.removeListener('browser:control:request', fn); },
+    controlRespond: (payload) => ipcRenderer.send('browser:control:response', payload),
   },
 });
 

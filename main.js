@@ -42,6 +42,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      webviewTag: true,
     },
   });
 
@@ -59,6 +60,34 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // Browser webview popups → route to a new in-IDE browser tab.
+  // Without this, target=_blank, window.open(...), and JS-driven popups
+  // either get rendered as a floating Chromium modal window inside the
+  // webview area (unusable) or are silently denied. We catch them in main
+  // via setWindowOpenHandler attached at webview-attach time and bounce
+  // the URL back to the renderer to open a fresh browser-tab.
+  mainWindow.webContents.on('did-attach-webview', (_event, wc) => {
+    try {
+      wc.setWindowOpenHandler(({ url, disposition }) => {
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('browser:popup-request', { url, disposition });
+          }
+        } catch (err) { console.warn('[browser] popup forward failed:', err); }
+        // Always deny — we open it as a new browser tab in the renderer.
+        // The disposition info lets the renderer decide foreground vs
+        // background (currently we always foreground).
+        return { action: 'deny' };
+      });
+      // Also catch will-navigate redirects that hop to a new origin —
+      // some sites use a 302 chain through a third-party tracker before
+      // the final destination. Those stay in the same webview by design,
+      // we don't need to open a new tab for them.
+    } catch (err) {
+      console.warn('[browser] setWindowOpenHandler attach failed:', err);
+    }
   });
 }
 
@@ -222,6 +251,12 @@ app.whenReady().then(() => {
   registerSearchIndexHandlers(ipcMain, ctx);
   registerExtensionHandlers(ipcMain, ctx);
   registerExtDBHandlers(ipcMain, ctx);
+  try { require('./main/ipc-browser')(ipcMain, ctx); } catch (err) { console.error('[browser] register failed:', err); }
+  try { require('./main/ipc-debug')(ipcMain, { ...ctx, app }); } catch (err) { console.error('[debug] register failed:', err); }
+  let browserCtrl = null;
+  try { browserCtrl = require('./main/browser-control')(ipcMain, ctx); } catch (err) { console.error('[browser-control] register failed:', err); }
+  // Stash on ctx so ide-tools-mcp can pick it up
+  ctx.browserExec = browserCtrl?.browserExec || (() => Promise.reject(new Error('browser control unavailable')));
   try { require('./main/diary')(ipcMain); } catch (err) { console.error('[diary] register failed:', err); }
   let secretsApi = null;
   try { secretsApi = require('./main/secrets')(ipcMain, ctx); } catch (err) { console.error('[secrets] register failed:', err); }
