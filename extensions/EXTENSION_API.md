@@ -476,6 +476,80 @@ api.terminal.onData(term.id, function (data) {
 
 ---
 
+### Themes — `PiPilot.theme`
+
+Extensions in the `themes` category register a color theme that becomes
+selectable from Settings → General → Color Theme. PiPilot persists the
+theme's CSS in `localStorage` so it applies on the next boot **before**
+your extension code runs — there's no flash of the wrong theme.
+
+| Method | Description |
+|--------|-------------|
+| `register({ id, label, dark, aceTheme, cssVars })` | Add a theme. `id` must be a unique slug; `cssVars` is an object of CSS variable names → values; `aceTheme` is any valid Ace theme name (loaded lazily from CDN). |
+| `register({ id, label, dark, aceTheme, css })` | Same, but pass a raw CSS block (must include `[data-theme="<id>"] { ... }`) for full control. |
+| `unregister(id)` | Remove a theme. Falls back to Midnight if the active theme is removed. |
+| `list()` | Array of `{ id, label, dark, source }` — `source` is `'builtin'`, `'extension'`, or `'cache'`. |
+| `current()` | The currently active theme id. |
+| `apply(id)` | Switch theme programmatically. Persists to `settings.theme`. |
+
+**Required CSS variables.** Override these for a complete theme; see
+`extensions/themes/theme-tokyo-night.js` for a working reference.
+
+```
+--bg, --surface, --surface-alt, --surface-raised
+--border, --border-hover, --scrollbar-track-bg
+--text, --text-strong, --text-mid, --text-dim, --text-faint
+--accent, --accent-hover, --accent-light, --accent-dim
+--warn, --error, --ok, --info
+```
+
+**Recommended Ace theme pairings.** Built-in: `monokai`, `dracula`,
+`github_dark`, `solarized_dark`, `solarized_light`, `tomorrow_night`,
+`tomorrow_night_eighties`, `nord_dark`, `one_dark`, `pastel_on_dark`.
+
+**Minimal example** (`extensions/themes/theme-cyberpunk.js`):
+
+```js
+(() => {
+  const reg = window.PiPilot?.theme?.register;
+  if (typeof reg !== 'function') return;
+  reg({
+    id: 'cyberpunk',
+    label: 'Cyberpunk',
+    dark: true,
+    aceTheme: 'tomorrow_night_eighties',
+    cssVars: {
+      '--bg': '#0a0a14',
+      '--surface': '#13132a',
+      '--text': '#e0e0ff',
+      '--accent': '#ff007f',
+      // …
+    },
+  });
+})();
+```
+
+**Registry entry** (`registry.json`):
+
+```json
+{
+  "id": "theme-cyberpunk",
+  "name": "Cyberpunk",
+  "description": "Neon pink + electric blue.",
+  "icon": "⚡",
+  "categories": ["themes"],
+  "version": "1.0.0",
+  "author": "you",
+  "url": "https://raw.githubusercontent.com/<you>/<repo>/main/extensions/theme-cyberpunk.js"
+}
+```
+
+For local testing during development, use `pipilot://builtin/theme-<id>`
+as the URL — the install handler reads from the app's bundled
+`extensions/themes/` directory.
+
+---
+
 ## Bus Events Reference
 
 ### Project Lifecycle

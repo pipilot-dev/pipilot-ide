@@ -308,6 +308,18 @@
       b.addEventListener('click', () => showSection(b.dataset.sec));
     });
     showSection(initialSec);
+
+    // Re-render the General section when an extension registers/removes a
+    // theme so the picker reflects newly-installed contributions live.
+    const off = bus.on('themes:registry-updated', () => {
+      const active = container.querySelector('.st-nav button.active')?.dataset?.sec;
+      if (active === 'general') showSection('general');
+    });
+    // Best-effort cleanup: when the virtual tab closes its container is
+    // detached. Use a MutationObserver on body to catch it.
+    new MutationObserver((muts, obs) => {
+      if (!document.body.contains(container)) { try { off(); } catch {} obs.disconnect(); }
+    }).observe(document.body, { childList: true, subtree: true });
   }
 
   function openSettingsTab(opts) {

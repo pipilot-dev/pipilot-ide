@@ -417,6 +417,56 @@
         "terminal",
         "productivity"
       ]
+    },
+    {
+      "id": "theme-tokyo-night",
+      "name": "Tokyo Night",
+      "description": "Dark theme inspired by the colors of downtown Tokyo at night.",
+      "icon": "🌃",
+      "categories": ["themes"],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "pipilot://builtin/theme-tokyo-night"
+    },
+    {
+      "id": "theme-nord",
+      "name": "Nord",
+      "description": "Cool, arctic palette inspired by nordtheme.com.",
+      "icon": "❄",
+      "categories": ["themes"],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "pipilot://builtin/theme-nord"
+    },
+    {
+      "id": "theme-one-dark",
+      "name": "One Dark Pro",
+      "description": "Atom's classic One Dark Pro palette, ported for PiPilot.",
+      "icon": "◐",
+      "categories": ["themes"],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "pipilot://builtin/theme-one-dark"
+    },
+    {
+      "id": "theme-catppuccin-mocha",
+      "name": "Catppuccin Mocha",
+      "description": "Soothing pastel theme from catppuccin.com — the mocha (darkest) variant.",
+      "icon": "☕",
+      "categories": ["themes"],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "pipilot://builtin/theme-catppuccin-mocha"
+    },
+    {
+      "id": "theme-monokai-pro",
+      "name": "Monokai Pro",
+      "description": "The classic Monokai palette refined for everyday use.",
+      "icon": "✦",
+      "categories": ["themes"],
+      "version": "1.0.0",
+      "author": "PiPilot",
+      "url": "pipilot://builtin/theme-monokai-pro"
     }
   ]
 }

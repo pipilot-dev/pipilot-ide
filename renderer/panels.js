@@ -6,6 +6,432 @@
   const bus = window.PiPilot.bus;
   const state = window.PiPilot.state;
 
+  // Sensible default .gitignore — keeps secrets, build outputs, OS junk, and
+  // PiPilot internal scratch out of source control. Written verbatim when a
+  // project is initialized through the Source Control panel and no
+  // .gitignore already exists.
+  const DEFAULT_GITIGNORE = `# Dependencies
+node_modules/
+bower_components/
+jspm_packages/
+.pnp/
+.pnp.js
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+vendor/
+
+# Build output
+dist/
+build/
+out/
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+.parcel-cache/
+target/
+*.tsbuildinfo
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+secrets.json
+credentials.json
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs/
+
+# Test / coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Caches
+.cache/
+.eslintcache
+.stylelintcache
+.npm/
+
+# Editor / IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# PiPilot internals
+.pipilot/checkpoints/
+.pipilot/search-index.json
+.pipilot/bug-findings.jsonl
+`;
+
+  async function ensureDefaultGitignore(projectPath) {
+    if (!projectPath) return false;
+    try {
+      const ignorePath = projectPath + '/.gitignore';
+      const s = await api.files.stat(ignorePath);
+      let existing = '';
+      if (s && s.exists) {
+        try {
+          const r = await api.files.read(ignorePath);
+          existing = (r && (r.content ?? r.data ?? r)) || '';
+          if (typeof existing !== 'string') existing = String(existing || '');
+        } catch { existing = ''; }
+        // main/ipc-git.js auto-writes a 2-line stub (.pipilot/checkpoints/
+        // + .pipilot/search-index.json) on every git:status call. If that
+        // stub is all that's there, treat as "no real .gitignore" and
+        // replace with our comprehensive default. Real user-authored
+        // gitignores will contain node_modules or similar — those we leave
+        // strictly alone.
+        const looksLikeAutoStub =
+          !/node_modules|\.env|dist\/|build\//i.test(existing) &&
+          existing.split(/\r?\n/).filter(l => l.trim() && !l.trim().startsWith('#')).length <= 4;
+        if (!looksLikeAutoStub) return false;
+      }
+      const r = await api.files.write(ignorePath, DEFAULT_GITIGNORE);
+      if (r && r.ok === false) return false;
+      // Notify with an Open action so the user can review and tune it
+      const notif = window.PiPilot.notifications;
+      if (notif) {
+        notif.show({
+          severity: 'info',
+          message: 'Created default .gitignore',
+          detail: 'Excludes node_modules, .env, build output, OS junk, and PiPilot internals.',
+          source: 'Git',
+          sticky: true,
+          actions: [{
+            label: 'Open',
+            primary: true,
+            onClick: () => bus.emit('file:open', { path: ignorePath }),
+          }, {
+            label: 'Dismiss',
+            onClick: () => {},
+          }],
+        });
+      }
+      bus.emit('files:refresh');
+      return true;
+    } catch (err) {
+      console.warn('[git] ensureDefaultGitignore failed:', err);
+      return false;
+    }
+  }
+
+  // ── Media-aware diff for binary files in the SC panel ──────
+  const SC_MEDIA_EXTS = {
+    png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', webp:'image/webp',
+    avif:'image/avif', bmp:'image/bmp', ico:'image/x-icon', svg:'image/svg+xml',
+    mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime', mkv:'video/x-matroska', m4v:'video/mp4', ogv:'video/ogg',
+    mp3:'audio/mpeg', wav:'audio/wav', ogg:'audio/ogg', flac:'audio/flac', m4a:'audio/mp4', aac:'audio/aac', opus:'audio/opus',
+    pdf:'application/pdf',
+  };
+  function isMediaPath(p) {
+    const name = (p || '').split(/[\\/]/).pop().toLowerCase();
+    const ext = name.includes('.') ? name.split('.').pop() : '';
+    return !!SC_MEDIA_EXTS[ext];
+  }
+  function hasNul(s) {
+    if (!s) return false;
+    const head = s.length > 8192 ? s.slice(0, 8192) : s;
+    return head.indexOf(String.fromCharCode(0)) !== -1;
+  }
+  function fmtBytesSC(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(2) + ' MB';
+  }
+
+  // Open a side-by-side preview of a binary file's HEAD version vs the
+  // working-tree (or staged) version. For images this lets you see the
+  // before/after at a glance — same as GitHub's binary diff view.
+  async function openWorkingTreeMediaTab(projectPath, filePath, staged) {
+    const editor = window.PiPilot?.editor;
+    if (!editor?.openVirtualTab) return;
+    const fileName = filePath.split(/[\\/]/).pop();
+    const ext = (fileName.split('.').pop() || '').toLowerCase();
+    const mime = SC_MEDIA_EXTS[ext] || 'application/octet-stream';
+    const kind = mime.startsWith('image/') ? 'image'
+              : mime.startsWith('video/') ? 'video'
+              : mime.startsWith('audio/') ? 'audio'
+              : mime === 'application/pdf' ? 'pdf'
+              : 'binary';
+    const id = `git-diff-bin://${projectPath}/${filePath}/${staged ? 'staged' : 'wt'}`;
+    editor.openVirtualTab({
+      id,
+      name: 'Diff: ' + fileName,
+      mount: async (container) => {
+        container.style.cssText = 'display:flex;flex-direction:column;height:100%;background:var(--bg);color:var(--text);';
+        container.innerHTML = `
+          <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:var(--surface);border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:11px;color:var(--text-dim);flex-shrink:0;">
+            <span style="color:var(--text-strong);font-weight:600;">${escapeHtml(filePath)}</span>
+            <span style="margin-left:auto;color:var(--text-dim);">${kind === 'binary' ? 'Binary file' : kind} · HEAD vs ${staged ? 'Staged' : 'Working Tree'}</span>
+          </div>
+          <div id="bin-grid" style="flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);overflow:hidden;">
+            <div id="pane-old" style="background:var(--bg);display:flex;flex-direction:column;min-width:0;"></div>
+            <div id="pane-new" style="background:var(--bg);display:flex;flex-direction:column;min-width:0;"></div>
+          </div>
+        `;
+        const oldPane = container.querySelector('#pane-old');
+        const newPane = container.querySelector('#pane-new');
+
+        function paneHeader(title, color) {
+          const h = document.createElement('div');
+          h.style.cssText = `padding:5px 10px;font-family:var(--font-mono);font-size:11px;color:${color};border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0;`;
+          h.textContent = title;
+          return h;
+        }
+        function paneBody() {
+          const b = document.createElement('div');
+          b.style.cssText = 'flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:auto;background:repeating-conic-gradient(#1a1a1f 0% 25%, #232329 0% 50%) 50% / 16px 16px;';
+          return b;
+        }
+        function showLoading(body) { body.innerHTML = '<div style="color:var(--text-dim);font-size:12px;">Loading…</div>'; }
+        function showMissing(body, label) { body.style.background = 'var(--bg)'; body.innerHTML = `<div style="color:var(--text-dim);font-size:12px;text-align:center;padding:24px;">${escapeHtml(label)}</div>`; }
+        function showMedia(body, base64, sz) {
+          body.innerHTML = '';
+          const dataUrl = `data:${mime};base64,${base64}`;
+          let mediaEl;
+          if (kind === 'image') {
+            mediaEl = document.createElement('img');
+            mediaEl.src = dataUrl;
+            mediaEl.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;display:block;margin:auto;box-shadow:0 4px 20px rgba(0,0,0,0.4);';
+          } else if (kind === 'video') {
+            mediaEl = document.createElement('video');
+            mediaEl.src = dataUrl; mediaEl.controls = true;
+            mediaEl.style.cssText = 'max-width:100%;max-height:100%;margin:auto;display:block;';
+          } else if (kind === 'audio') {
+            mediaEl = document.createElement('audio');
+            mediaEl.src = dataUrl; mediaEl.controls = true;
+            mediaEl.style.cssText = 'min-width:280px;margin:auto;';
+            body.style.background = 'var(--bg)';
+          } else if (kind === 'pdf') {
+            mediaEl = document.createElement('iframe');
+            mediaEl.src = dataUrl;
+            mediaEl.style.cssText = 'width:100%;height:100%;border:none;';
+            body.style.background = 'var(--bg)';
+          } else {
+            body.style.background = 'var(--bg)';
+            body.innerHTML = `<div style="color:var(--text-dim);font-size:12px;text-align:center;padding:24px;">Binary file (${escapeHtml(fmtBytesSC(sz))}) — preview not supported.</div>`;
+            return;
+          }
+          body.appendChild(mediaEl);
+          const meta = document.createElement('div');
+          meta.style.cssText = 'position:absolute;bottom:6px;right:8px;font-family:var(--font-mono);font-size:10px;color:var(--text-dim);background:rgba(0,0,0,0.6);padding:2px 6px;border-radius:3px;';
+          meta.textContent = fmtBytesSC(sz);
+          body.style.position = 'relative';
+          body.appendChild(meta);
+        }
+        function showTooLarge(body, sz, max) {
+          body.style.background = 'var(--bg)';
+          body.innerHTML = `<div style="color:var(--text-dim);font-size:12px;text-align:center;padding:24px;line-height:1.5;">${escapeHtml(fmtBytesSC(sz))} exceeds the ${escapeHtml(fmtBytesSC(max))} preview cap.</div>`;
+        }
+
+        // Build panes
+        oldPane.appendChild(paneHeader('HEAD', 'var(--text-dim)'));
+        const oldBody = paneBody(); oldPane.appendChild(oldBody);
+        newPane.appendChild(paneHeader(staged ? 'Staged' : 'Working Tree', 'var(--accent)'));
+        const newBody = paneBody(); newPane.appendChild(newBody);
+        showLoading(oldBody); showLoading(newBody);
+
+        // ── Load HEAD version (binary) ──
+        try {
+          const r = await api.git.showFileBinary(projectPath, 'HEAD', filePath);
+          if (!r || r.ok === false) showMissing(oldBody, 'Not in HEAD (new file)');
+          else if (r.tooLarge) showTooLarge(oldBody, r.size, r.maxBytes);
+          else showMedia(oldBody, r.base64, r.size);
+        } catch { showMissing(oldBody, 'Not in HEAD'); }
+
+        // ── Load working tree (or staged) version ──
+        if (staged) {
+          // Staged binary read isn't supported by our IPC layer — point user to disk.
+          showMissing(newBody, 'Staged binary preview not supported. Use the working tree.');
+        } else {
+          try {
+            const r = await api.files.read(projectPath + '/' + filePath);
+            if (!r || (r.binary === false && typeof r.content === 'string' && !r.dataUrl)) {
+              showMissing(newBody, 'No preview available');
+            } else if (r.binary && r.dataUrl) {
+              // Reuse the showMedia path by extracting base64 + size from the data URL
+              const m = /^data:[^;]+;base64,(.*)$/.exec(r.dataUrl);
+              const base64 = m ? m[1] : '';
+              showMedia(newBody, base64, r.size || 0);
+            } else if (r.binary && !r.dataUrl) {
+              showTooLarge(newBody, r.size || 0, 25 * 1024 * 1024);
+            } else {
+              // Text file but extension said media — unusual; just show the editor link
+              showMissing(newBody, 'Not previewable as media');
+            }
+          } catch {
+            const exists = await api.files.stat(projectPath + '/' + filePath).then(s => !!(s && s.exists)).catch(() => false);
+            showMissing(newBody, exists ? 'Could not read working tree' : 'File not found on disk (deleted)');
+          }
+        }
+      },
+    });
+  }
+
+  // ── Remote helpers ─────────────────────────────────────────
+  function deriveRemoteName(url, takenSet) {
+    // Pull a sensible name from the URL (e.g. https://github.com/USER/REPO.git → USER)
+    const m = (url || '').match(/[:/]([^/]+)\/[^/]+?(?:\.git)?\/?$/);
+    let base = m ? m[1].toLowerCase().replace(/[^a-z0-9_-]/g, '') : 'remote';
+    if (!takenSet || !takenSet.has(base)) return base;
+    let i = 2;
+    while (takenSet.has(base + i)) i++;
+    return base + i;
+  }
+
+  async function openManageRemotesModal(projectPath) {
+    if (!projectPath) return;
+
+    function load() {
+      return api.git.listRemotes(projectPath).then(r => (r?.ok && Array.isArray(r.remotes)) ? r.remotes : []).catch(() => []);
+    }
+
+    let remotes = await load();
+
+    // Render rows into a container element; re-call to refresh after add/remove.
+    function renderRows(listEl) {
+      listEl.innerHTML = '';
+      if (!remotes.length) {
+        const empty = el('div', { style: 'padding:18px 12px;text-align:center;color:var(--text-dim);font-size:12px;' });
+        empty.textContent = 'No remotes configured.';
+        listEl.appendChild(empty);
+        return;
+      }
+      remotes.forEach((r) => {
+        const row = el('div', { style: 'display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--border);' });
+        const meta = el('div', { style: 'flex:1;min-width:0;' });
+        const name = el('div', { style: 'font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--text-strong);' });
+        name.textContent = r.name;
+        const url = el('div', { style: 'font-family:var(--font-mono);font-size:11px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;' });
+        url.textContent = r.fetch || r.push || '';
+        url.title = url.textContent;
+        meta.appendChild(name); meta.appendChild(url);
+        row.appendChild(meta);
+
+        const removeBtn = el('button', {
+          style: 'background:transparent;border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text-dim);cursor:pointer;font-size:13px;line-height:1;',
+          title: `Remove "${r.name}"`,
+        });
+        removeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>';
+        removeBtn.addEventListener('mouseenter', () => { removeBtn.style.color = 'var(--error)'; removeBtn.style.borderColor = 'var(--error)'; });
+        removeBtn.addEventListener('mouseleave', () => { removeBtn.style.color = 'var(--text-dim)'; removeBtn.style.borderColor = 'var(--border)'; });
+        removeBtn.addEventListener('click', async () => {
+          const ok = await (window.PiPilot?.modal?.confirm?.({ title: 'Remove remote?', message: `Remove "${r.name}" (${url.textContent})?`, danger: true, confirmText: 'Remove' }) || Promise.resolve(confirm(`Remove remote "${r.name}"?`)));
+          if (!ok) return;
+          if (typeof api.git.removeRemote !== 'function') {
+            bus.emit('toast:show', { type: 'error', message: 'Remove remote API missing — fully quit and relaunch the app.', source: 'Git' });
+            return;
+          }
+          let res;
+          try {
+            res = await api.git.removeRemote(projectPath, r.name);
+          } catch (err) {
+            console.error('[git] removeRemote IPC rejected:', err);
+            bus.emit('toast:show', { type: 'error', message: 'Remove failed (IPC): ' + (err?.message || err) + '. Try fully restarting the app.', source: 'Git' });
+            return;
+          }
+          if (!res || res.ok === false) {
+            bus.emit('toast:show', { type: 'error', message: 'Remove failed: ' + (res?.error || 'unknown'), source: 'Git' });
+            return;
+          }
+          bus.emit('toast:show', { type: 'ok', message: `Removed "${r.name}"`, source: 'Git' });
+          remotes = await load();
+          renderRows(listEl);
+        });
+        row.appendChild(removeBtn);
+        listEl.appendChild(row);
+      });
+    }
+
+    return new Promise((resolve) => {
+      const body = el('div', { style: 'min-width:420px;max-width:560px;' });
+
+      // Add-remote row
+      const addRow = el('div', { style: 'display:flex;gap:6px;padding:10px;border-bottom:1px solid var(--border);background:var(--surface-alt);' });
+      const urlInput = el('input', {
+        type: 'text',
+        placeholder: 'Paste a remote URL — https://github.com/user/repo.git',
+        style: 'flex:1;height:30px;padding:0 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px;font-family:var(--font-mono);outline:none;',
+      });
+      urlInput.addEventListener('focus', () => urlInput.style.borderColor = 'var(--accent)');
+      urlInput.addEventListener('blur', () => urlInput.style.borderColor = 'var(--border)');
+      const addBtn = el('button', {
+        style: 'background:var(--accent);color:#fff;border:none;border-radius:4px;padding:0 16px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;',
+      });
+      addBtn.textContent = 'Add';
+      const listEl = el('div', { style: 'max-height:320px;overflow-y:auto;' });
+      async function doAdd() {
+        const url = urlInput.value.trim();
+        if (!url) return;
+        const taken = new Set(remotes.map(r => r.name));
+        const name = taken.has('origin') ? deriveRemoteName(url, taken) : 'origin';
+        addBtn.disabled = true; addBtn.textContent = 'Adding…';
+        let res;
+        try { res = await api.git.addRemote(projectPath, name, url); }
+        catch (err) {
+          addBtn.disabled = false; addBtn.textContent = 'Add';
+          bus.emit('toast:show', { type: 'error', message: 'Add failed (IPC): ' + (err?.message || err), source: 'Git' });
+          return;
+        }
+        addBtn.disabled = false; addBtn.textContent = 'Add';
+        if (!res || res.ok === false) {
+          bus.emit('toast:show', { type: 'error', message: 'Add failed: ' + (res?.error || 'unknown'), source: 'Git' });
+          return;
+        }
+        urlInput.value = '';
+        bus.emit('toast:show', { type: 'ok', message: `Added "${name}"`, source: 'Git' });
+        remotes = await load();
+        renderRows(listEl);
+      }
+      addBtn.addEventListener('click', doAdd);
+      urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doAdd(); });
+      addRow.appendChild(urlInput);
+      addRow.appendChild(addBtn);
+      body.appendChild(addRow);
+      body.appendChild(listEl);
+      renderRows(listEl);
+
+      // Footer with a Done button (uses the existing modal footer slot)
+      const footer = el('div', { style: 'display:flex;justify-content:flex-end;gap:8px;' });
+      const doneBtn = el('button', { style: 'background:var(--surface-alt);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 14px;font-size:12px;cursor:pointer;font-family:inherit;' });
+      doneBtn.textContent = 'Done';
+      footer.appendChild(doneBtn);
+
+      const handle = window.PiPilot.modal.show(body, {
+        title: 'Manage Remotes',
+        width: 580,
+        footer,
+        onClose: () => resolve(),
+      });
+      doneBtn.addEventListener('click', () => handle.close());
+      setTimeout(() => urlInput.focus(), 30);
+    });
+  }
+
   function injectStyles() {
     if (document.getElementById('panels-inline-styles')) return;
     const css = `
@@ -450,6 +876,11 @@
       statusMsg = { text, type };
       clearTimeout(statusMsgTimer);
       statusMsgTimer = setTimeout(() => { statusMsg = null; renderAll(); }, type === 'error' ? 5000 : 3000);
+      // Bridge to the notification system. The toast→notification policy in
+      // toast.js handles the rest (errors escalate to persistent cards,
+      // infos land in the bell's history).
+      const tt = type === 'success' ? 'ok' : type;
+      bus.emit('toast:show', { type: tt, message: text, source: 'Git' });
     }
 
     // ── initial load ───────────────────────────────────────────────────────
@@ -477,7 +908,13 @@
       `;
       container.appendChild(empty);
       container.querySelector('#git-init-btn')?.addEventListener('click', async () => {
-        await api.git.init(projectPath);
+        const r = await api.git.init(projectPath);
+        if (r && r.ok === false) {
+          showStatusMsg('Init failed: ' + r.error, 'error');
+          return;
+        }
+        await ensureDefaultGitignore(projectPath);
+        showStatusMsg('Repository initialized', 'success');
         renderGitPanel(container, projectPath);
       });
       return;
@@ -851,10 +1288,23 @@
             const row = el('div', { class: 'git-file-row' });
             row.addEventListener('click', async (e) => {
               if (e.target.closest('.git-file-actions')) return;
+              const staged = opts.isStaged || false;
+              // Route media (image / video / audio / pdf) to the binary diff
+              // viewer — the text-based openDiffTab would render these as
+              // garbled bytes.
+              if (isMediaPath(filePath)) {
+                openWorkingTreeMediaTab(projectPath, filePath, staged);
+                return;
+              }
               try {
-                const staged = opts.isStaged || false;
                 const resp = await api.git.fileVersions(projectPath, filePath, staged);
                 if (resp && window.PiPilot?.editor?.openDiffTab) {
+                  // Detect binary content even without media extension (NUL byte heuristic)
+                  const looksBinary = (resp.original && hasNul(resp.original)) || (resp.modified && hasNul(resp.modified));
+                  if (looksBinary) {
+                    openWorkingTreeMediaTab(projectPath, filePath, staged);
+                    return;
+                  }
                   window.PiPilot.editor.openDiffTab({
                     name: 'Diff: ' + fname,
                     original: resp.original || '',
@@ -980,30 +1430,8 @@
               </div>
               <div class="git-commit-meta">${escapeHtml(c.author || '')} · ${escapeHtml(timeAgo(c.timestamp || (c.date ? new Date(c.date).getTime() : 0)))}</div>
             `;
-            row.addEventListener('click', async () => {
-              try {
-                const detail = await api.git.show(projectPath, c.hash);
-                if (detail && window.PiPilot?.editor?.openVirtualTab) {
-                  window.PiPilot.editor.openVirtualTab({
-                    id: `commit:${c.hash}`,
-                    name: hash,
-                    mount: (ctn) => {
-                      ctn.style.cssText = 'padding:16px;overflow:auto;font-family:var(--font-mono);font-size:12px;color:var(--text);';
-                      const d = detail.commit || detail;
-                      ctn.innerHTML = `
-                        <div style="margin-bottom:12px;">
-                          <div style="font-size:14px;font-weight:600;color:var(--text-strong);">${escapeHtml(d.subject || d.message || '')}</div>
-                          ${d.body ? `<div style="margin-top:6px;color:var(--text-mid);white-space:pre-wrap;">${escapeHtml(d.body)}</div>` : ''}
-                          <div style="margin-top:8px;font-size:11px;color:var(--text-dim);">${escapeHtml(d.author || '')} · ${escapeHtml(d.date || '')}</div>
-                          <div style="margin-top:4px;font-size:11px;color:var(--accent);">${escapeHtml(d.hash || c.hash || '')}</div>
-                        </div>
-                        ${(d.files || []).map(f2 => `<div style="padding:2px 0;font-size:11px;color:var(--text-mid);">${escapeHtml(typeof f2 === 'string' ? f2 : f2.file || f2.path || '')}</div>`).join('')}
-                        ${d.diff ? `<pre style="margin-top:12px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:4px;overflow-x:auto;font-size:11px;white-space:pre-wrap;">${escapeHtml(d.diff.slice(0, 10000))}</pre>` : ''}
-                      `;
-                    },
-                  });
-                }
-              } catch {}
+            row.addEventListener('click', () => {
+              bus.emit('git:show-commit', { hash: c.hash });
             });
             list.appendChild(row);
           });
@@ -1033,33 +1461,51 @@
           { icon: ICONS.pull,   label: 'Pull (Rebase)', action: async () => { showStatusMsg('Pulling (rebase)…','info'); try { const r = await api.git.pull(projectPath,{rebase:true}); if(r?.ok===false) showStatusMsg('Pull failed: '+r.error,'error'); else { showStatusMsg('Pulled (rebased)'); gitStatus=await loadStatus(); } } catch(e){showStatusMsg('Pull failed: '+e.message,'error');} } },
           { icon: ICONS.push,   label: 'Push', action: async () => { showStatusMsg('Pushing…','info'); try { const r = await api.git.push(projectPath); if(r?.ok===false) showStatusMsg('Push failed: '+r.error,'error'); else { showStatusMsg('Pushed successfully'); gitStatus=await loadStatus(); } } catch(e){showStatusMsg('Push failed: '+e.message,'error');} } },
           { type: 'sep' },
-          { icon: ICONS.plus,   label: 'Stage All Changes', action: async () => { try { await api.git.add(projectPath, '.'); gitStatus=await loadStatus(); } catch {} } },
-          { icon: '', label: 'Unstage All', action: async () => { for (const f of stagedFiles) { try { await api.git.unstage(projectPath, typeof f==='string'?f:f.path); } catch {} } gitStatus=await loadStatus(); } },
+          { icon: ICONS.plus,   label: 'Stage All Changes', action: async () => {
+            try { const r = await api.git.add(projectPath, '.'); if (r?.ok === false) throw new Error(r.error); showStatusMsg('Staged all changes'); gitStatus = await loadStatus(); }
+            catch (e) { showStatusMsg('Stage all failed: ' + e.message, 'error'); }
+          } },
+          { icon: '', label: 'Unstage All', action: async () => {
+            try {
+              for (const f of stagedFiles) {
+                const r = await api.git.unstage(projectPath, typeof f === 'string' ? f : f.path);
+                if (r?.ok === false) throw new Error(r.error);
+              }
+              showStatusMsg('Unstaged all changes');
+              gitStatus = await loadStatus();
+            } catch (e) { showStatusMsg('Unstage all failed: ' + e.message, 'error'); }
+          } },
           { icon: ICONS.reset,  label: 'Discard All Changes', danger: true, action: async () => {
             const ok = await (window.PiPilot?.modal?.confirm?.({ title:'Discard ALL changes?', message:'This will discard every uncommitted change. Cannot be undone.', danger:true, confirmText:'Discard All' }) || Promise.resolve(confirm('Discard ALL changes?')));
             if (!ok) return;
             try { await api.git.discard(projectPath, '.'); gitStatus=await loadStatus(); } catch (e) { showStatusMsg('Discard failed: '+e.message,'error'); }
           }},
           { type: 'sep' },
-          { icon: ICONS.stash,  label: 'Stash', action: async () => { try { await api.git.stash(projectPath,{action:'push'}); showStatusMsg('Stashed'); gitStatus=await loadStatus(); } catch(e){showStatusMsg('Stash failed: '+e.message,'error');} } },
-          { icon: ICONS.stash,  label: 'Pop Stash', action: async () => { try { const r=await api.git.stash(projectPath,{action:'pop'}); if(r?.ok===false) showStatusMsg('Pop failed: '+r.error,'error'); else { showStatusMsg('Stash popped'); gitStatus=await loadStatus(); } } catch(e){showStatusMsg('Pop failed: '+e.message,'error');} } },
+          { icon: ICONS.stash,  label: 'Stash', action: async () => { try { const r = await api.git.stash(projectPath,{action:'push'}); if(r?.ok===false) throw new Error(r.error); showStatusMsg('Stashed'); gitStatus=await loadStatus(); } catch(e){showStatusMsg('Stash failed: '+e.message,'error');} } },
+          { icon: ICONS.stash,  label: 'Pop Stash', action: async () => { try { const r = await api.git.stash(projectPath,{action:'pop'}); if(r?.ok===false) throw new Error(r.error); showStatusMsg('Stash popped'); gitStatus=await loadStatus(); } catch(e){showStatusMsg('Pop failed: '+e.message,'error');} } },
+          { icon: ICONS.stash,  label: 'Apply Stash', action: async () => { try { const r = await api.git.stash(projectPath,{action:'apply'}); if(r?.ok===false) throw new Error(r.error); showStatusMsg('Stash applied'); gitStatus=await loadStatus(); } catch(e){showStatusMsg('Apply failed: '+e.message,'error');} } },
+          { icon: ICONS.trash,  label: 'Drop Stash', danger: true, action: async () => {
+            const ok = await (window.PiPilot?.modal?.confirm?.({ title:'Drop latest stash?', message:'This permanently removes the most recent stash entry.', danger:true, confirmText:'Drop' }) || Promise.resolve(confirm('Drop the latest stash?')));
+            if (!ok) return;
+            try { const r = await api.git.stash(projectPath,{action:'drop'}); if(r?.ok===false) throw new Error(r.error); showStatusMsg('Stash dropped'); gitStatus=await loadStatus(); } catch(e){showStatusMsg('Drop failed: '+e.message,'error');}
+          } },
           { type: 'sep' },
           { icon: ICONS.merge,  label: 'Merge Branch…', action: async () => {
-            const b = window.prompt('Branch name to merge into current:');
+            const b = await window.PiPilot.modal.prompt({ title: 'Merge Branch', label: 'Branch name to merge into current:', placeholder: 'feature/foo', confirmText: 'Merge' });
             if (!b) return;
             showStatusMsg('Merging…','info');
             try { const r = await api.git.merge(projectPath, b); if (r?.ok === false) throw new Error(r.error); showStatusMsg('Merged ' + b); gitStatus = await loadStatus(); }
             catch (e) { showStatusMsg('Merge failed: ' + e.message, 'error'); }
           } },
           { icon: ICONS.cherry, label: 'Cherry-pick Commit…', action: async () => {
-            const h = window.prompt('Commit hash to cherry-pick:');
+            const h = await window.PiPilot.modal.prompt({ title: 'Cherry-pick Commit', label: 'Commit hash:', placeholder: 'a1b2c3d', confirmText: 'Cherry-pick' });
             if (!h) return;
             showStatusMsg('Cherry-picking…','info');
             try { const r = await api.git.cherryPick(projectPath, h); if (r?.ok === false) throw new Error(r.error); showStatusMsg('Cherry-picked'); gitStatus = await loadStatus(); }
             catch (e) { showStatusMsg('Cherry-pick failed: ' + e.message, 'error'); }
           } },
           { icon: ICONS.trash,  label: 'Delete Branch…', danger: true, action: async () => {
-            const b = window.prompt('Branch name to delete:');
+            const b = await window.PiPilot.modal.prompt({ title: 'Delete Branch', label: 'Branch name to delete:', placeholder: 'feature/old', confirmText: 'Continue' });
             if (!b) return;
             const ok = await (window.PiPilot?.modal?.confirm?.({ title:'Delete branch?', message:`Delete ${b}?`, danger:true, confirmText:'Delete' }) || Promise.resolve(confirm(`Delete branch ${b}?`)));
             if (!ok) return;
@@ -1068,13 +1514,13 @@
           } },
           { type: 'sep' },
           { icon: ICONS.reset,  label: 'Reset (soft)', action: async () => {
-            const ref = window.prompt('Reset to (e.g. HEAD~1):', 'HEAD~1');
+            const ref = await window.PiPilot.modal.prompt({ title: 'Reset (soft)', label: 'Reset to:', defaultValue: 'HEAD~1', placeholder: 'HEAD~1', confirmText: 'Reset' });
             if (!ref) return;
             try { const r = await api.git.reset(projectPath, 'soft', ref); if (r?.ok === false) throw new Error(r.error); showStatusMsg('Reset soft'); gitStatus = await loadStatus(); }
             catch (e) { showStatusMsg('Reset failed: ' + e.message, 'error'); }
           } },
           { icon: ICONS.reset,  label: 'Reset (mixed)', action: async () => {
-            const ref = window.prompt('Reset to:', 'HEAD~1');
+            const ref = await window.PiPilot.modal.prompt({ title: 'Reset (mixed)', label: 'Reset to:', defaultValue: 'HEAD~1', placeholder: 'HEAD~1', confirmText: 'Reset' });
             if (!ref) return;
             try { const r = await api.git.reset(projectPath, 'mixed', ref); if (r?.ok === false) throw new Error(r.error); showStatusMsg('Reset mixed'); gitStatus = await loadStatus(); }
             catch (e) { showStatusMsg('Reset failed: ' + e.message, 'error'); }
@@ -1087,13 +1533,24 @@
           } },
           { type: 'sep' },
           { icon: ICONS.remote, label: 'Add Remote…', action: async () => {
-            const name = window.prompt('Remote name:', 'origin');
-            if (!name) return;
-            const url = window.prompt('Remote URL (e.g. https://github.com/user/repo.git):');
-            if (!url) return;
-            try { const r = await api.git.addRemote(projectPath, name, url); if (r?.ok === false) throw new Error(r.error); showStatusMsg('Remote added'); gitStatus = await loadStatus(); }
+            const url = await window.PiPilot.modal.prompt({
+              title: 'Add Remote',
+              label: 'Paste the remote URL:',
+              placeholder: 'https://github.com/user/repo.git',
+              confirmText: 'Add',
+            });
+            if (!url || !url.trim()) return;
+            // Auto-pick a name: 'origin' if free, else 'upstream', else extract from URL
+            let name = 'origin';
+            try {
+              const r = await api.git.listRemotes(projectPath);
+              const existing = new Set((r?.remotes || []).map(x => x.name));
+              if (existing.has('origin')) name = existing.has('upstream') ? deriveRemoteName(url, existing) : 'upstream';
+            } catch {}
+            try { const r = await api.git.addRemote(projectPath, name, url.trim()); if (r?.ok === false) throw new Error(r.error); showStatusMsg(`Added "${name}"`); gitStatus = await loadStatus(); }
             catch (e) { showStatusMsg('Add remote failed: ' + e.message, 'error'); }
           } },
+          { icon: ICONS.remote, label: 'Manage Remotes…', action: async () => { await openManageRemotesModal(projectPath); gitStatus = await loadStatus(); } },
           { icon: ICONS.refresh,label: 'Refresh', action: async () => { gitStatus=await loadStatus(); showStatusMsg('Refreshed','info'); } },
         ];
 
@@ -1101,7 +1558,12 @@
           if (a.type === 'sep') { menu.appendChild(el('div', { class: 'git-menu-sep' })); return; }
           const item = el('button', { class: 'git-menu-item' + (a.danger ? ' danger' : '') });
           item.innerHTML = (a.icon ? svgIcon(a.icon, 12, 'style="margin-right:8px;vertical-align:middle;flex-shrink:0"') : '<span style="display:inline-block;width:20px"></span>') + escapeHtml(a.label);
-          item.addEventListener('click', () => { showActionsMenu = false; a.action().then ? a.action().then(() => renderAll()) : (() => { a.action(); renderAll(); })(); });
+          item.addEventListener('click', async () => {
+            showActionsMenu = false;
+            renderAll(); // close menu immediately
+            try { await a.action(); } catch (err) { showStatusMsg(a.label + ' failed: ' + (err?.message || err), 'error'); }
+            renderAll();
+          });
           menu.appendChild(item);
         });
         document.body.appendChild(menu);
@@ -1153,6 +1615,8 @@
   async function renderExtensionsPanel(container, projectPath) {
     container.innerHTML = '';
     let activeTab = 'extensions';
+    let extQuery = '';
+    let extCategory = 'all'; // 'all' | 'themes' | 'editor' | …
 
     async function render() {
       container.innerHTML = '';
@@ -1306,6 +1770,80 @@
       const builtins = builtinsResp?.builtins || [];
       const settings = settingsResp?.settings || {};
 
+      // ── Search box + category chips ───────────────────────────────
+      const searchRow = el('div', {
+        style: { display: 'flex', flexDirection: 'column', gap: '6px', padding: '4px 0 10px', position: 'sticky', top: '0', background: 'var(--surface)', zIndex: '2' }
+      });
+      const searchInput = el('input', {
+        type: 'text',
+        placeholder: 'Search extensions, themes, authors…',
+        value: extQuery,
+        style: {
+          background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)',
+          padding: '6px 10px', borderRadius: '4px', fontSize: '12px', width: '100%',
+          fontFamily: 'inherit', outline: 'none',
+        },
+      });
+      searchInput.addEventListener('input', () => {
+        extQuery = searchInput.value.trim().toLowerCase();
+        applyFilter();
+      });
+
+      // Pull all category names dynamically from registry + installed.
+      const allCats = new Set();
+      for (const r of registry) (r.categories || []).forEach(c => allCats.add(c));
+      for (const i of Object.values(installed)) (i.categories || []).forEach(c => allCats.add(c));
+      const categoryOrder = ['all', 'themes', ...[...allCats].filter(c => c !== 'themes').sort()];
+
+      const chipsRow = el('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '4px' } });
+      for (const cat of categoryOrder) {
+        const chip = el('button', {
+          dataset: { cat },
+          style: {
+            background: cat === extCategory ? 'var(--accent)' : 'var(--surface-alt)',
+            color: cat === extCategory ? '#fff' : 'var(--text-mid)',
+            border: '1px solid ' + (cat === extCategory ? 'var(--accent)' : 'var(--border)'),
+            borderRadius: '999px', padding: '2px 9px', fontSize: '10.5px',
+            fontFamily: 'inherit', cursor: 'pointer', textTransform: 'capitalize',
+            transition: 'background 120ms, color 120ms',
+          },
+          onClick: () => { extCategory = cat; render(); },
+        }, cat === 'all' ? 'All' : cat);
+        chipsRow.appendChild(chip);
+      }
+
+      searchRow.appendChild(searchInput);
+      searchRow.appendChild(chipsRow);
+      sec.appendChild(searchRow);
+
+      function matchesFilter(meta) {
+        const cats = meta.categories || [];
+        if (extCategory !== 'all' && !cats.includes(extCategory)) return false;
+        if (!extQuery) return true;
+        const haystack = [meta.name, meta.id, meta.description, meta.author, ...(cats || [])]
+          .filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(extQuery);
+      }
+      function applyFilter() {
+        sec.querySelectorAll('[data-ext-card]').forEach(card => {
+          const id = card.dataset.extId;
+          // Built-ins don't filter — they always show; otherwise read meta from data attrs.
+          if (card.dataset.builtin === '1') {
+            card.style.display = extQuery || extCategory !== 'all' ? 'none' : '';
+            return;
+          }
+          const cats = (card.dataset.cats || '').split(',').filter(Boolean);
+          const ok = matchesFilter({
+            id,
+            name: card.dataset.name || '',
+            description: card.dataset.desc || '',
+            author: card.dataset.author || '',
+            categories: cats,
+          });
+          card.style.display = ok ? '' : 'none';
+        });
+      }
+
       // ── Built-in extensions (always present, can't be uninstalled) ──
       // These render BEFORE marketplace extensions with a "Built-in" badge
       // and a settings-gear button instead of a toggle. The gear opens
@@ -1315,6 +1853,9 @@
         const enabled = settings[b.settingsKey] !== false;
         const card = el('div', { class: 'connector-card builtin-ext' });
         card.style.flexWrap = 'wrap';
+        card.dataset.extCard = '1';
+        card.dataset.builtin = '1';
+        card.dataset.extId = b.id;
 
         const icon = el('div', { class: 'icon', style: { fontSize: '18px' } }, '⚡');
 
@@ -1413,8 +1954,18 @@
       for (const ext of allExtensions) {
         const card = el('div', { class: 'connector-card' });
         card.style.flexWrap = 'wrap';
+        card.dataset.extCard = '1';
+        card.dataset.extId = ext.id;
+        card.dataset.name = ext.name || ext.id;
+        card.dataset.desc = ext.description || '';
+        card.dataset.author = ext.author || '';
+        card.dataset.cats = (ext.categories || []).join(',');
 
-        const icon = el('div', { class: 'icon', style: { fontSize: '18px' } }, ext.icon || '⚡');
+        // Apply current filter immediately (so newly rendered cards respect search/category).
+        if (!matchesFilter(ext)) card.style.display = 'none';
+
+        const isThemeExt = (ext.categories || []).includes('themes');
+        const icon = el('div', { class: 'icon', style: { fontSize: '18px' } }, ext.icon || (isThemeExt ? '🎨' : '⚡'));
         const info = el('div', { class: 'info' },
           el('div', { class: 'name', style: { display: 'flex', alignItems: 'center', gap: '6px' } },
             ext.name || ext.id,
