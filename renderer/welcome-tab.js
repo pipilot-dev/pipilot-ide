@@ -10,6 +10,25 @@
   const AI_POWER_ID = '__walkthrough_ai_power__';
   const RECENT_FILES_PREFIX = 'pipilot:recent-files:';
 
+  // Bump the version string for a walkthrough whenever its content meaningfully
+  // changes — the welcome card will then show an "Updated" pill until the user
+  // re-opens the walkthrough at least once.
+  const WALKTHROUGH_VERSIONS = {
+    'getting-started': '1',
+    'ai-power': '2', // bumped — show "Updated" badge
+  };
+
+  function clampPct(n) {
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(100, n));
+  }
+  function markWalkthroughSeen(id) {
+    try { localStorage.setItem('pipilot.walkthrough.seen.' + id, WALKTHROUGH_VERSIONS[id] || '1'); } catch {}
+  }
+  function setWalkthroughProgress(id, pct) {
+    try { localStorage.setItem('pipilot.walkthrough.progress.' + id, String(clampPct(pct))); } catch {}
+  }
+
   function normalizeProjectKey(projectPath) {
     return String(projectPath || '').replace(/\\/g, '/').toLowerCase();
   }
@@ -167,42 +186,42 @@
           </div>
 
           <div class="wt-col">
-            <section class="wt-section" style="--wt-anim-delay:120ms;">
-              <div class="wt-section-head">
-                <span class="wt-section-num">03</span>
-                <h2 class="wt-section-title">Walkthroughs</h2>
-                <span class="wt-section-rule"></span>
-              </div>
+            <section class="wt-section wt-section-vscode" style="--wt-anim-delay:120ms;">
+              <h2 class="wt-vscode-h2">Walkthroughs</h2>
               <div class="wt-walkthroughs">
-                <button class="wt-walkthrough-card" data-walkthrough="getting-started">
-                  <div class="wt-wk-icon wt-wk-icon-cool">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
-                  </div>
-                  <div class="wt-wk-info">
-                    <div class="wt-wk-title">Get Started with PiPilot</div>
+                <button class="wt-wk-card featured" data-walkthrough="getting-started" data-wk-id="getting-started">
+                  <span class="wt-wk-pennant" aria-hidden="true">
+                    <svg viewBox="0 0 36 36" width="36" height="36">
+                      <path d="M0 0 L36 0 L36 14 L18 36 L0 18 Z" fill="var(--accent, #4a8cff)"/>
+                      <path d="M14 7l1.6 4.8h5l-4 2.9 1.5 4.8-4.1-3-4.1 3 1.5-4.8-4-2.9h5z" fill="#ffffff"/>
+                    </svg>
+                  </span>
+                  <div class="wt-wk-body">
+                    <div class="wt-wk-title-row">
+                      <span class="wt-wk-title">Get Started with PiPilot</span>
+                    </div>
                     <div class="wt-wk-desc">Customize your editor, learn the basics, and start coding.</div>
                   </div>
-                  <span class="wt-wk-arrow">→</span>
+                  <div class="wt-wk-progress" aria-hidden="true"><div class="wt-wk-progress-fill"></div></div>
                 </button>
-                <button class="wt-walkthrough-card" data-walkthrough="ai-power">
-                  <div class="wt-wk-icon wt-wk-icon-warm">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  </div>
-                  <div class="wt-wk-info">
-                    <div class="wt-wk-title">AI Power User</div>
+                <button class="wt-wk-card" data-walkthrough="ai-power" data-wk-id="ai-power">
+                  <span class="wt-wk-icon-line">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12a4 4 0 0 1 4-4M12 16a4 4 0 0 0 4-4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
+                  </span>
+                  <div class="wt-wk-body">
+                    <div class="wt-wk-title-row">
+                      <span class="wt-wk-title">AI Power User</span>
+                      <span class="wt-wk-badge" data-show="updated">Updated</span>
+                    </div>
                     <div class="wt-wk-desc">Your AI pair programmer to write code faster and smarter.</div>
                   </div>
-                  <span class="wt-wk-arrow">→</span>
+                  <div class="wt-wk-progress" aria-hidden="true"><div class="wt-wk-progress-fill"></div></div>
                 </button>
               </div>
             </section>
 
-            <section class="wt-section" style="--wt-anim-delay:200ms;">
-              <div class="wt-section-head">
-                <span class="wt-section-num">04</span>
-                <h2 class="wt-section-title">Help</h2>
-                <span class="wt-section-rule"></span>
-              </div>
+            <section class="wt-section wt-section-vscode" style="--wt-anim-delay:200ms;">
+              <h2 class="wt-vscode-h2">Help</h2>
               <div class="wt-actions">
                 <button class="wt-action" data-action="docs">
                   <span class="wt-action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg></span>
@@ -426,9 +445,24 @@
     container.querySelector('[data-action="docs"]')?.addEventListener('click', openDocsTab);
     container.querySelector('[data-action="shortcuts"]')?.addEventListener('click', openShortcutsTab);
 
-    // Walkthroughs
+    // Walkthroughs — wire clicks + paint progress + Updated badge from localStorage
     container.querySelector('[data-walkthrough="getting-started"]')?.addEventListener('click', openGettingStartedTab);
     container.querySelector('[data-walkthrough="ai-power"]')?.addEventListener('click', openAIPowerTab);
+    container.querySelectorAll('.wt-wk-card[data-wk-id]').forEach((card) => {
+      const id = card.dataset.wkId;
+      const pct = clampPct(parseInt(localStorage.getItem('pipilot.walkthrough.progress.' + id) || '0', 10));
+      card.dataset.progress = pct;
+      const fill = card.querySelector('.wt-wk-progress-fill');
+      if (fill) fill.style.width = pct + '%';
+      const badge = card.querySelector('.wt-wk-badge[data-show="updated"]');
+      if (badge) {
+        // Show "Updated" if the walkthrough version on disk is newer than what
+        // the user last opened. Default visible until user opens it once.
+        const lastSeen = localStorage.getItem('pipilot.walkthrough.seen.' + id) || '';
+        const current = WALKTHROUGH_VERSIONS[id] || '1';
+        badge.dataset.visible = lastSeen === current ? '0' : '1';
+      }
+    });
 
     // Show on startup checkbox
     const cb = container.querySelector('#wt-show-on-startup');
@@ -523,6 +557,7 @@
 
   // ── Getting Started Walkthrough ──
   function openGettingStartedTab() {
+    markWalkthroughSeen('getting-started');
     const editor = window.PiPilot?.editor;
     if (!editor) return;
     editor.openVirtualTab({
@@ -570,6 +605,7 @@
 
   // ── AI Power User Walkthrough ──
   function openAIPowerTab() {
+    markWalkthroughSeen('ai-power');
     const editor = window.PiPilot?.editor;
     if (!editor) return;
     editor.openVirtualTab({
@@ -658,7 +694,7 @@
   width: 100%;
   box-sizing: border-box;
   overflow-x: hidden;
-  background: #16161a;
+  background: var(--bg);
   font-family: var(--font-sans);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -698,8 +734,8 @@
 .wt-bg-grid {
   position: absolute; inset: 0;
   background-image:
-    linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px);
+    linear-gradient(var(--overlay-1) 1px, transparent 1px),
+    linear-gradient(90deg, var(--overlay-1) 1px, transparent 1px);
   background-size: 56px 56px;
   mask-image: radial-gradient(ellipse at 50% 30%, black 35%, transparent 80%);
   -webkit-mask-image: radial-gradient(ellipse at 50% 30%, black 35%, transparent 80%);
@@ -753,8 +789,8 @@
   align-self: flex-start;
   padding: 5px 11px;
   border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--overlay-2);
+  background: var(--overlay-1);
   backdrop-filter: blur(8px);
   font-family: var(--font-mono);
   font-size: 10px;
@@ -785,7 +821,7 @@
   width: 64px; height: 64px;
   border-radius: 16px;
   box-shadow:
-    0 1px 0 rgba(255,255,255,0.08) inset,
+    0 1px 0 var(--overlay-2) inset,
     0 14px 40px rgba(255,107,53,0.35),
     0 4px 14px rgba(0,0,0,0.5);
 }
@@ -812,7 +848,7 @@
   letter-spacing: -0.035em;
   line-height: 0.95;
   color: var(--text-strong);
-  background: linear-gradient(180deg, #f5f5f8 0%, #c7c7d0 100%);
+  background: linear-gradient(180deg, var(--text-strong) 0%, var(--text-mid) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -857,7 +893,7 @@
 }
 .wt-meta-sep {
   width: 1px; height: 10px;
-  background: rgba(255,255,255,0.1);
+  background: var(--overlay-3);
 }
 
 /* ── Resume Card (Yesterday Card) ─────────────────────────────── */
@@ -907,7 +943,7 @@
   height: 26px;
   border-radius: 50%;
   background: rgba(20,20,26,0.8);
-  border: 1px solid rgba(255,255,255,0.12);
+  border: 1px solid var(--overlay-3);
   color: var(--text-mid);
   cursor: pointer;
   display: flex;
@@ -937,11 +973,11 @@
   border-radius: 50%;
   border: none;
   padding: 0;
-  background: rgba(255,255,255,0.18);
+  background: var(--overlay-4);
   cursor: pointer;
   transition: background 0.15s, transform 0.15s, width 0.2s;
 }
-.wt-resume-dot:hover { background: rgba(255,255,255,0.35); }
+.wt-resume-dot:hover { background: var(--overlay-4); }
 .wt-resume-dot.active {
   background: var(--accent-light, #ffb38a);
   width: 18px;
@@ -977,9 +1013,9 @@
 .wt-resume-body strong { color: var(--text-strong); font-weight: 600; }
 .wt-resume-body em { color: var(--text-strong); font-style: italic; }
 .wt-resume-body a { color: var(--info); text-decoration: none; border-bottom: 1px dotted rgba(108,182,255,0.4); }
-.wt-resume-body a:hover { color: #8ec6ff; border-bottom-color: #8ec6ff; }
+.wt-resume-body a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 .wt-resume-body code:not(pre code) {
-  background: rgba(255,255,255,0.06);
+  background: var(--overlay-2);
   color: var(--accent-light);
   padding: 1px 5px;
   border-radius: 3px;
@@ -988,7 +1024,7 @@
 }
 .wt-resume-body pre {
   background: rgba(0,0,0,0.3);
-  border: 1px solid rgba(255,255,255,0.05);
+  border: 1px solid var(--overlay-2);
   padding: 8px 10px;
   border-radius: 4px;
   margin: 6px 0;
@@ -1034,18 +1070,18 @@
 .wt-resume-btn[disabled] {
   opacity: 0.5;
   cursor: not-allowed;
-  background: rgba(255,255,255,0.06);
-  border-color: rgba(255,255,255,0.12);
+  background: var(--overlay-2);
+  border-color: var(--overlay-3);
   color: var(--text-mid);
 }
 .wt-resume-btn:disabled:hover,
-.wt-resume-btn[disabled]:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.12); }
+.wt-resume-btn[disabled]:hover { background: var(--overlay-2); border-color: var(--overlay-3); }
 .wt-resume-btn.ghost {
   background: transparent;
-  border-color: rgba(255,255,255,0.1);
+  border-color: var(--overlay-3);
   color: var(--text-mid);
 }
-.wt-resume-btn.ghost:hover { color: var(--text-strong); border-color: rgba(255,255,255,0.18); }
+.wt-resume-btn.ghost:hover { color: var(--text-strong); border-color: var(--overlay-4); }
 
 /* ── Two-column main ──────────────────────────────────────────── */
 .wt-main {
@@ -1084,7 +1120,7 @@
 .wt-section-rule {
   flex: 1;
   height: 1px;
-  background: linear-gradient(90deg, rgba(255,255,255,0.08), rgba(255,255,255,0));
+  background: linear-gradient(90deg, var(--overlay-2), transparent);
 }
 
 /* ── Action buttons (Start, Help) ─────────────────────────────── */
@@ -1096,8 +1132,8 @@
   align-items: center;
   gap: 12px;
   padding: 11px 14px;
-  background: rgba(255,255,255,0.012);
-  border: 1px solid rgba(255,255,255,0.05);
+  background: var(--overlay-1);
+  border: 1px solid var(--overlay-2);
   border-radius: 10px;
   cursor: pointer;
   text-align: left;
@@ -1108,8 +1144,8 @@
   transition: border-color 0.22s ease, background 0.22s ease, transform 0.22s ease;
 }
 .wt-action:hover {
-  border-color: rgba(255,255,255,0.13);
-  background: rgba(255,255,255,0.028);
+  border-color: var(--overlay-3);
+  background: var(--overlay-1);
   transform: translateY(-1px);
 }
 .wt-action:active { transform: translateY(0); }
@@ -1119,11 +1155,11 @@
   justify-content: center;
   width: 28px; height: 28px;
   border-radius: 7px;
-  background: rgba(255,255,255,0.025);
+  background: var(--overlay-1);
   color: var(--text-mid);
   transition: color 0.22s ease, background 0.22s ease;
 }
-.wt-action:hover .wt-action-icon { color: var(--text-strong); background: rgba(255,255,255,0.05); }
+.wt-action:hover .wt-action-icon { color: var(--text-strong); background: var(--overlay-2); }
 .wt-action-label { color: var(--text); transition: color 0.22s ease; }
 .wt-action:hover .wt-action-label { color: var(--text-strong); }
 .wt-action-arrow {
@@ -1164,7 +1200,7 @@
   border-radius: 8px;
   transition: background 0.18s ease;
 }
-.wt-recent-row:hover { background: rgba(255,255,255,0.022); }
+.wt-recent-row:hover { background: var(--overlay-1); }
 .wt-recent-item {
   display: grid;
   grid-template-columns: 14px 1fr;
@@ -1235,85 +1271,123 @@
   letter-spacing: 0.02em;
 }
 
-/* ── Walkthrough cards ───────────────────────────────────────── */
-.wt-walkthroughs { display: flex; flex-direction: column; gap: 6px; }
-.wt-walkthrough-card {
+/* ── VS Code-style section header (no number prefix) ───────── */
+.wt-section-vscode .wt-vscode-h2 {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  margin: 0 0 12px 0;
+  padding: 0;
+}
+
+/* ── VS Code-style walkthrough cards ───────────────────────── */
+.wt-walkthroughs { display: flex; flex-direction: column; gap: 8px; }
+
+.wt-wk-card {
   position: relative;
   display: grid;
-  grid-template-columns: 30px 1fr auto;
+  grid-template-columns: 28px 1fr;
+  column-gap: 12px;
   align-items: center;
-  gap: 10px;
   width: 100%;
-  padding: 9px 12px;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.005)),
-    var(--surface);
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 9px;
+  min-height: 54px;
+  padding: 10px 14px 14px 14px;   /* extra bottom padding leaves room for the progress bar */
+  background: var(--overlay-1);
+  border: 1px solid var(--overlay-2);
+  border-radius: 6px;
   cursor: pointer;
   text-align: left;
   font-family: var(--font-sans);
   overflow: hidden;
-  transition: transform 0.28s cubic-bezier(0.2,0.7,0.2,1), border-color 0.22s ease, box-shadow 0.28s ease;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
-.wt-walkthrough-card::before {
-  content: '';
-  position: absolute; inset: 0;
-  background: radial-gradient(circle at 0% 100%, rgba(255,107,53,0.12), transparent 55%);
-  opacity: 0;
-  transition: opacity 0.32s ease;
-  pointer-events: none;
+.wt-wk-card:hover {
+  background: var(--overlay-2);
+  border-color: var(--overlay-2);
 }
-.wt-walkthrough-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(255,107,53,0.32);
-  box-shadow: 0 12px 28px rgba(0,0,0,0.32), 0 0 0 1px rgba(255,107,53,0.05);
+.wt-wk-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
-.wt-walkthrough-card:hover::before { opacity: 1; }
-.wt-wk-icon {
+
+/* Featured pennant — anchored to the top-left corner (overlaps padding) */
+.wt-wk-pennant {
   position: relative;
-  width: 30px; height: 30px;
-  border-radius: 8px;
-  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  display: inline-block;
+  margin: -10px 0 -10px -14px;
+  align-self: stretch;
+}
+.wt-wk-pennant svg {
+  position: absolute;
+  top: 0; left: 0;
+  width: 36px; height: 36px;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+}
+
+/* Plain icon for non-featured cards */
+.wt-wk-icon-line {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  color: var(--accent, #4a8cff);
   flex-shrink: 0;
-  color: #fff;
 }
-.wt-wk-icon svg { width: 14px; height: 14px; }
-.wt-wk-icon-cool {
-  background: linear-gradient(135deg, #4a90e2 0%, #1e6cc7 100%);
-  box-shadow: 0 3px 10px rgba(74,144,226,0.3), inset 0 1px 0 rgba(255,255,255,0.18);
+
+.wt-wk-body { min-width: 0; }
+.wt-wk-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.wt-wk-icon-warm {
-  background: linear-gradient(135deg, #FF8C61 0%, #FF6B35 100%);
-  box-shadow: 0 3px 10px rgba(255,107,53,0.35), inset 0 1px 0 rgba(255,255,255,0.18);
-}
-.wt-wk-info { flex: 1; min-width: 0; }
 .wt-wk-title {
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 600;
   letter-spacing: -0.005em;
   color: var(--text-strong);
-  margin-bottom: 1px;
   line-height: 1.3;
 }
 .wt-wk-desc {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
   line-height: 1.4;
+  margin-top: 2px;
 }
-.wt-wk-arrow {
-  font-family: var(--font-mono);
-  color: var(--text-faint);
-  font-size: 13px;
-  transform: translateX(-4px);
-  opacity: 0;
-  transition: opacity 0.28s ease, transform 0.28s ease, color 0.28s ease;
+.wt-wk-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent, #4a8cff);
+  color: #fff;
+  line-height: 14px;
+  letter-spacing: 0.02em;
 }
-.wt-walkthrough-card:hover .wt-wk-arrow {
-  opacity: 1;
-  transform: translateX(0);
-  color: var(--accent-light);
+.wt-wk-badge[data-show="updated"][data-visible="0"] { display: none; }
+
+/* Progress bar pinned to the bottom of the card */
+.wt-wk-progress {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 3px;
+  background: var(--overlay-2);
+  overflow: hidden;
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
 }
+.wt-wk-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent, #4a8cff);
+  transition: width 0.35s ease;
+}
+.wt-wk-card[data-progress="0"] .wt-wk-progress { display: none; }
 
 /* ── Footer ──────────────────────────────────────────────────── */
 .wt-footer {
@@ -1323,7 +1397,7 @@
   flex-wrap: wrap;
   gap: 16px;
   padding-top: 28px;
-  border-top: 1px solid rgba(255,255,255,0.05);
+  border-top: 1px solid var(--overlay-2);
 }
 .wt-checkbox {
   display: inline-flex;
@@ -1337,7 +1411,7 @@
   width: 14px; height: 14px;
   border-radius: 4px;
   border: 1.5px solid var(--border-hover);
-  background: rgba(255,255,255,0.02);
+  background: var(--overlay-1);
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -1422,7 +1496,7 @@
   border-radius: 14px;
   background: radial-gradient(circle at top right, rgba(255,107,53,0.16), transparent 48%),
               radial-gradient(circle at 18% 120%, rgba(74,144,229,0.16), transparent 42%),
-              linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0));
+              linear-gradient(180deg, var(--overlay-1), transparent);
   padding: 24px;
 }
 .wt-docs-kicker {
@@ -1431,7 +1505,7 @@
   gap: 8px;
   padding: 4px 9px;
   border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.12);
+  border: 1px solid var(--overlay-3);
   background: rgba(0,0,0,0.18);
   font-family: var(--font-mono);
   font-size: 10px;
@@ -1492,7 +1566,7 @@
 .wt-docs-section {
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent 30%), var(--surface);
+  background: linear-gradient(180deg, var(--overlay-1), transparent 30%), var(--surface);
   padding: 14px;
 }
 .wt-docs-section-head {
@@ -1525,7 +1599,7 @@
   font-size: 12px;
   color: var(--text-mid);
   line-height: 1.6;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  border-bottom: 1px solid var(--overlay-2);
 }
 .wt-docs-list li:last-child { border-bottom: none; }
 .wt-docs-list li strong { color: var(--text-strong); font-weight: 600; }
@@ -1553,14 +1627,14 @@
   border-radius: 14px;
   background: radial-gradient(circle at top right, rgba(255,107,53,0.14), transparent 45%),
               radial-gradient(circle at 0% 100%, rgba(74,144,229,0.14), transparent 40%),
-              linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0));
+              linear-gradient(180deg, var(--overlay-1), transparent);
   padding: 22px;
 }
 .wt-panel-kicker {
   display: inline-flex;
   padding: 4px 9px;
   border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.12);
+  border: 1px solid var(--overlay-3);
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.12em;
@@ -1578,7 +1652,7 @@
 .wt-shortcuts-card {
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent 30%), var(--surface);
+  background: linear-gradient(180deg, var(--overlay-1), transparent 30%), var(--surface);
   padding: 12px;
 }
 .wt-shortcuts-card h2 {
@@ -1589,7 +1663,7 @@
   color: var(--text-mid);
 }
 .wt-shortcuts-table { display: flex; flex-direction: column; gap: 2px; }
-.wt-shortcut-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.wt-shortcut-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--overlay-2); }
 .wt-shortcut-row:last-child { border-bottom: none; }
 .wt-kbd {
   display: inline-flex;
@@ -1611,7 +1685,7 @@
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 20px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent 30%), var(--surface);
+  background: linear-gradient(180deg, var(--overlay-1), transparent 30%), var(--surface);
 }
 .wt-about-top {
   display: flex;
@@ -1619,7 +1693,7 @@
   gap: 14px;
   padding-bottom: 16px;
   margin-bottom: 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 1px solid var(--overlay-2);
 }
 .wt-about-logo {
   width: 52px;
@@ -1646,7 +1720,7 @@
 .wt-about-note {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid rgba(255,255,255,0.06);
+  border-top: 1px solid var(--overlay-2);
   font-size: 11px;
   color: var(--text-dim);
 }
@@ -1936,6 +2010,8 @@
       buildDocumentationHTML: buildDocumentationViewHTML,
       openShortcuts: openShortcutsTab,
       openAbout: openAboutTab,
+      setWalkthroughProgress,
+      markWalkthroughSeen,
     };
   }
 

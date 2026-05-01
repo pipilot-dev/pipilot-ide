@@ -27,6 +27,14 @@
   --error: #e5534b;
   --ok: #56d364;
   --info: #6cb6ff;
+
+  /* Theme-aware highlight overlays. Light = subtle highlight on dark
+     bgs / subtle shade on light bgs. Use these instead of literal
+     rgba(255,255,255,X) so light themes don't disappear. */
+  --overlay-1: rgba(255, 255, 255, 0.025);
+  --overlay-2: rgba(255, 255, 255, 0.06);
+  --overlay-3: rgba(255, 255, 255, 0.10);
+  --overlay-4: rgba(255, 255, 255, 0.18);
 }
 
 /* Carbon — neutral dark, cyan accent */
@@ -54,6 +62,11 @@
   --error: #ff5b5b;
   --ok: #55e0a4;
   --info: #7fb6ff;
+
+  --overlay-1: rgba(255, 255, 255, 0.025);
+  --overlay-2: rgba(255, 255, 255, 0.06);
+  --overlay-3: rgba(255, 255, 255, 0.10);
+  --overlay-4: rgba(255, 255, 255, 0.18);
 }
 
 /* Dracula — purple/pink palette */
@@ -81,6 +94,11 @@
   --error: #ff5555;
   --ok: #50fa7b;
   --info: #8be9fd;
+
+  --overlay-1: rgba(255, 255, 255, 0.03);
+  --overlay-2: rgba(255, 255, 255, 0.07);
+  --overlay-3: rgba(255, 255, 255, 0.12);
+  --overlay-4: rgba(255, 255, 255, 0.20);
 }
 
 /* Solarized Dark */
@@ -108,6 +126,11 @@
   --error: #dc322f;
   --ok: #859900;
   --info: #268bd2;
+
+  --overlay-1: rgba(255, 255, 255, 0.02);
+  --overlay-2: rgba(255, 255, 255, 0.05);
+  --overlay-3: rgba(255, 255, 255, 0.09);
+  --overlay-4: rgba(255, 255, 255, 0.16);
 }
 
 /* Solarized Light — needs careful inversion of text scale */
@@ -135,6 +158,13 @@
   --error: #dc322f;
   --ok: #859900;
   --info: #268bd2;
+
+  /* Light themes flip the overlay polarity — black tints darken the
+     surface instead of white tints lightening it. */
+  --overlay-1: rgba(0, 0, 0, 0.025);
+  --overlay-2: rgba(0, 0, 0, 0.05);
+  --overlay-3: rgba(0, 0, 0, 0.09);
+  --overlay-4: rgba(0, 0, 0, 0.15);
 }
 
 /* GitHub Dark */
@@ -162,6 +192,11 @@
   --error: #f85149;
   --ok: #3fb950;
   --info: #58a6ff;
+
+  --overlay-1: rgba(255, 255, 255, 0.025);
+  --overlay-2: rgba(255, 255, 255, 0.06);
+  --overlay-3: rgba(255, 255, 255, 0.10);
+  --overlay-4: rgba(255, 255, 255, 0.18);
 }
 
 /* Non-themed tokens (fonts, sizing, layout) */
