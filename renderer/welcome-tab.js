@@ -580,6 +580,7 @@
       { id: 'source-control', title: 'Track changes with Git', desc: 'Stage, commit, push, and manage branches from the Source Control panel.', action: 'Open Source Control', event: 'open-git' },
       { id: 'preview', title: 'Preview your project', desc: 'Start a dev server and see live changes in the built-in preview panel.', action: 'Open Preview', event: 'open-preview' },
       { id: 'customize', title: 'Customize your settings', desc: 'Adjust font size, themes, auto-save, and editor behavior from Settings.', action: 'Open Settings', event: 'open-settings' },
+      { id: 'docs', title: 'Read the docs', desc: 'Full reference for every feature — AI agent, deploy hub, debugger, themes, extensions, and more.', action: 'Open Docs', event: 'open-help' },
     ];
 
     return `<div class="wt-walkthrough">
@@ -663,6 +664,7 @@
         else if (event === 'open-git') bus.emit('panel:switch', 'git');
         else if (event === 'open-preview') bus.emit('devserver:start');
         else if (event === 'open-settings') bus.emit('modal:settings');
+        else if (event === 'open-help')     window.PiPilot?.help?.open?.();
         else if (event === 'open-problems') bus.emit('bottom:show', 'problems');
         else if (event === 'focus-editor') { /* just close the tab */ }
         else if (event === 'generate-wiki') {
