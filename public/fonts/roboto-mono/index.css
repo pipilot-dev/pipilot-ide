@@ -1,0 +1,39 @@
+/* @fontsource/roboto-mono — latin-ext-400.css */
+/* roboto-mono-latin-ext-400-normal */
+@font-face {
+  font-family: 'Roboto Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url(./files/roboto-mono-latin-ext-400-normal.woff2) format('woff2');
+}
+
+/* @fontsource/roboto-mono — latin-400.css */
+/* roboto-mono-latin-400-normal */
+@font-face {
+  font-family: 'Roboto Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url(./files/roboto-mono-latin-400-normal.woff2) format('woff2');
+}
+
+/* @fontsource/roboto-mono — latin-ext-700.css */
+/* roboto-mono-latin-ext-700-normal */
+@font-face {
+  font-family: 'Roboto Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url(./files/roboto-mono-latin-ext-700-normal.woff2) format('woff2');
+}
+
+/* @fontsource/roboto-mono — latin-700.css */
+/* roboto-mono-latin-700-normal */
+@font-face {
+  font-family: 'Roboto Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url(./files/roboto-mono-latin-700-normal.woff2) format('woff2');
+}

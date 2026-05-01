@@ -24,17 +24,22 @@
   //               the font is applied; null = the user must already have it
   //   ligatures — true if the font has programming ligatures (calt+liga)
   //   source    — 'builtin' | 'extension' | 'cache'
+  // Built-in fonts ship as bundled woff2 files under public/fonts/<id>/.
+  // The bundles are generated at install time by scripts/copy-fonts.js
+  // (postinstall hook). Works fully offline; ~520 KB total for the set.
+  // Cascadia Code stays uninstalled — it's a Windows-system font and
+  // isn't redistributable through @fontsource.
   const FONTS = [
-    { id: 'jetbrains-mono',  label: 'JetBrains Mono',   family: '"JetBrains Mono"',   url: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap',  ligatures: true,  source: 'builtin' },
-    { id: 'fira-code',       label: 'Fira Code',        family: '"Fira Code"',        url: 'https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&display=swap',       ligatures: true,  source: 'builtin' },
-    { id: 'cascadia-code',   label: 'Cascadia Code',    family: '"Cascadia Code"',    url: null,                                                                                       ligatures: true,  source: 'builtin' },
-    { id: 'ibm-plex-mono',   label: 'IBM Plex Mono',    family: '"IBM Plex Mono"',    url: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap',   ligatures: false, source: 'builtin' },
-    { id: 'source-code-pro', label: 'Source Code Pro',  family: '"Source Code Pro"',  url: 'https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;500;700&display=swap', ligatures: false, source: 'builtin' },
-    { id: 'roboto-mono',     label: 'Roboto Mono',      family: '"Roboto Mono"',      url: 'https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&display=swap',     ligatures: false, source: 'builtin' },
-    { id: 'hack',            label: 'Hack',             family: '"Hack"',             url: 'https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css',                              ligatures: false, source: 'builtin' },
-    { id: 'inconsolata',     label: 'Inconsolata',      family: '"Inconsolata"',      url: 'https://fonts.googleapis.com/css2?family=Inconsolata:wght@400;500;700&display=swap',     ligatures: false, source: 'builtin' },
-    { id: 'space-mono',      label: 'Space Mono',       family: '"Space Mono"',       url: 'https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap',          ligatures: false, source: 'builtin' },
-    { id: 'ubuntu-mono',     label: 'Ubuntu Mono',      family: '"Ubuntu Mono"',      url: 'https://fonts.googleapis.com/css2?family=Ubuntu+Mono:wght@400;700&display=swap',          ligatures: false, source: 'builtin' },
+    { id: 'jetbrains-mono',  label: 'JetBrains Mono',   family: '"JetBrains Mono"',   url: 'public/fonts/jetbrains-mono/index.css',  ligatures: true,  source: 'builtin' },
+    { id: 'fira-code',       label: 'Fira Code',        family: '"Fira Code"',        url: 'public/fonts/fira-code/index.css',       ligatures: true,  source: 'builtin' },
+    { id: 'cascadia-code',   label: 'Cascadia Code',    family: '"Cascadia Code"',    url: null,                                     ligatures: true,  source: 'builtin' },
+    { id: 'ibm-plex-mono',   label: 'IBM Plex Mono',    family: '"IBM Plex Mono"',    url: 'public/fonts/ibm-plex-mono/index.css',   ligatures: false, source: 'builtin' },
+    { id: 'source-code-pro', label: 'Source Code Pro',  family: '"Source Code Pro"',  url: 'public/fonts/source-code-pro/index.css', ligatures: false, source: 'builtin' },
+    { id: 'roboto-mono',     label: 'Roboto Mono',      family: '"Roboto Mono"',      url: 'public/fonts/roboto-mono/index.css',     ligatures: false, source: 'builtin' },
+    { id: 'inconsolata',     label: 'Inconsolata',      family: '"Inconsolata"',      url: 'public/fonts/inconsolata/index.css',     ligatures: false, source: 'builtin' },
+    { id: 'space-mono',      label: 'Space Mono',       family: '"Space Mono"',       url: 'public/fonts/space-mono/index.css',      ligatures: false, source: 'builtin' },
+    { id: 'ubuntu-mono',     label: 'Ubuntu Mono',      family: '"Ubuntu Mono"',      url: 'public/fonts/ubuntu-mono/index.css',     ligatures: false, source: 'builtin' },
+    { id: 'dm-mono',         label: 'DM Mono',          family: '"DM Mono"',          url: 'public/fonts/dm-mono/index.css',         ligatures: false, source: 'builtin' },
   ];
   const DEFAULT_ID = 'jetbrains-mono';
 
@@ -204,12 +209,28 @@
   });
 
   // Push the resolved CSS into the Ace editor whenever a font is applied.
-  // Decouples ace-editor.js from the font registry — it just consumes
-  // whatever value lands here.
-  bus.on('fonts:applied', ({ css }) => {
+  // Two subtleties Ace doesn't handle for us:
+  //   1. The web font may not have downloaded by the time setOption fires —
+  //      Ace would render with the next fallback in the stack and the user
+  //      sees no visual change. Wait for document.fonts.load() so the actual
+  //      face is ready before we tell Ace to switch.
+  //   2. Ace caches per-character measurements based on the previous font.
+  //      setOption('fontFamily', X) updates the inline CSS but the cursor
+  //      position / line widths stay stuck on the old metrics until a
+  //      forced reflow. renderer.updateFontSize() invalidates the cache
+  //      and triggers a full re-measure + redraw.
+  bus.on('fonts:applied', async ({ css, font }) => {
     const editor = window.PiPilot?.editor?.getAce?.();
     if (!editor || !css) return;
-    try { editor.setOption('fontFamily', css); } catch {}
+    if (font && font.family && document.fonts && typeof document.fonts.load === 'function') {
+      try { await document.fonts.load(`14px ${font.family}`); } catch {}
+    }
+    try {
+      editor.setOption('fontFamily', css);
+      if (editor.renderer && typeof editor.renderer.updateFontSize === 'function') {
+        editor.renderer.updateFontSize();
+      }
+    } catch {}
   });
   // Editor came up after fonts.js already ran — push the current font in.
   bus.on('ace:ready', () => {
