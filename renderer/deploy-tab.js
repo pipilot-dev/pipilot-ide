@@ -164,7 +164,7 @@
     { id: 'netlify',    name: 'Netlify',          icon: '◈',  desc: 'JAMstack + functions',    wired: true,  authUrl: 'https://app.netlify.com/user/applications#personal-access-tokens' },
     { id: 'cloudflare', name: 'Cloudflare Pages', icon: '☁',  desc: 'Edge static + Workers',  wired: true,  authUrl: 'https://dash.cloudflare.com/profile/api-tokens' },
     { id: 'railway',    name: 'Railway',          icon: '🚂', desc: 'Full-stack PaaS',         wired: true,  authUrl: 'https://railway.com/account/tokens' },
-    { id: 'render',     name: 'Render',           icon: '◉',  desc: 'Static + servers + DBs',  wired: false, authUrl: 'https://dashboard.render.com/u/settings#api-keys' },
+    { id: 'render',     name: 'Render',           icon: '◉',  desc: 'Static + servers + DBs',  wired: true,  authUrl: 'https://dashboard.render.com/u/settings#api-keys' },
   ];
 
   // ── State ─────────────────────────────────────────────────────────
@@ -288,8 +288,10 @@
         <div class="dt-card-actions">
           ${s.connected
             ? cp.wired
-              ? `<button class="dt-btn primary" data-act="deploy" data-provider="${cp.id}" data-target="preview" title="Deploy to a preview URL">▶ Deploy preview</button>
-                 <button class="dt-btn" data-act="deploy" data-provider="${cp.id}" data-target="production" title="Deploy to production">→ Production</button>`
+              ? cp.id === 'render'
+                ? `<button class="dt-btn primary" data-act="deploy" data-provider="${cp.id}" data-target="production" title="Trigger a Render deploy from the linked git repo">▶ Trigger Deploy</button>`
+                : `<button class="dt-btn primary" data-act="deploy" data-provider="${cp.id}" data-target="preview" title="Deploy to a preview URL">▶ Deploy preview</button>
+                   <button class="dt-btn" data-act="deploy" data-provider="${cp.id}" data-target="production" title="Deploy to production">→ Production</button>`
               : `<button class="dt-btn" disabled>Coming soon</button>
                  <button class="dt-btn" data-act="disconnect-cloud" data-provider="${cp.id}">Disconnect</button>`
             : `<button class="dt-btn primary" data-act="connect-cloud" data-provider="${cp.id}">Connect ${escapeHtml(cp.name)}</button>`
@@ -393,6 +395,10 @@
     if (act === 'cf-env-add')    return openCfEnvAddDialog(dataset || {});
     if (act === 'cf-env-edit')   return openCfEnvEditDialog(dataset || {});
     if (act === 'cf-env-delete') return deleteCfEnv(dataset || {});
+    if (act === 'render-rollback')   return openRenderRollbackDialog(dataset || {});
+    if (act === 'render-env-add')    return openRenderEnvAddDialog(dataset || {});
+    if (act === 'render-env-edit')   return openRenderEnvEditDialog(dataset || {});
+    if (act === 'render-env-delete') return deleteRenderEnv(dataset || {});
     if (act === 'open-url')         { try { api.shell?.openExternal?.(dataset?.url); } catch {} return; }
     if (act === 'dev-start')        return startDevServer();
     if (act === 'dev-stop')         return stopDevServer(dataset?.id);
@@ -437,6 +443,7 @@
   async function openDeployDialog(provider, target) {
     const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
     const isProd = target === 'production';
+    if (provider === 'render') return openRenderDeployDialog();
 
     // Pull the provider's extraConfig spec + previously-saved values so
     // the dialog can render input rows for things like Cloudflare's
@@ -546,7 +553,109 @@
     if (provider === 'cloudflare' && h.metadata?.deploymentId && h.metadata?.projectName) {
       return `<button class="dt-btn" data-act="cf-rollback" data-provider="${provider}" data-deployment-id="${escapeHtml(h.metadata.deploymentId)}" data-project-name="${escapeHtml(h.metadata.projectName)}" data-account-id="${escapeHtml(h.config?.accountId || '')}" data-url="${escapeHtml(h.url || '')}" title="Roll back production to this deployment" style="flex:0 0 auto;padding:3px 10px;font-size:10.5px;">↑ Rollback</button>`;
     }
+    if (provider === 'render' && h.metadata?.deployId && h.metadata?.serviceId) {
+      return `<button class="dt-btn" data-act="render-rollback" data-deploy-id="${escapeHtml(h.metadata.deployId)}" data-service-id="${escapeHtml(h.metadata.serviceId)}" data-url="${escapeHtml(h.url || '')}" title="Roll back to this deploy" style="flex:0 0 auto;padding:3px 10px;font-size:10.5px;">↑ Rollback</button>`;
+    }
     return '';
+  }
+
+  function openRenderRollbackDialog(ds) {
+    const url = ds.url || '';
+    showDialog({
+      title: 'Roll back Render deploy',
+      body: `<p class="lead">Roll back to <a href="#" data-act="open-url" data-url="${escapeHtml(url)}" style="color:var(--accent);">${escapeHtml(shortenUrl(url))}</a>.</p>
+        <p class="lead" style="color:var(--warn);">⚠ Render will redeploy this commit. Live URL switches when the build finishes.</p>`,
+      onSubmit: async (root, ctxBtns) => {
+        ctxBtns.disable();
+        const r = await api.render.rollback(ds.serviceId, ds.deployId);
+        if (!r?.ok) { ctxBtns.enable(); return r?.error || 'Rollback failed.'; }
+        ctxBtns.replaceSubmit('Open Site', () => {
+          try { api.shell?.openExternal?.(url); } catch {}
+          ctxBtns.close();
+        });
+        await refresh();
+        return null;
+      },
+      submitLabel: 'Roll back',
+    });
+  }
+
+  async function openRenderEnvDialog() {
+    const p = projectPath();
+    let mapping = null;
+    try { const r = await api.render.getServiceMap(p); if (r?.ok) mapping = r.mapping; } catch {}
+    if (!mapping) {
+      showDialog({
+        title: 'Render · Env vars',
+        body: `<p class="lead">Pick a Render service first by triggering a deploy. We'll remember the mapping.</p>`,
+        onSubmit: () => null, submitLabel: 'OK',
+      });
+      return;
+    }
+    let envs = [];
+    let loadError = null;
+    try {
+      const r = await api.render.listEnv(mapping.id);
+      if (r?.ok) envs = r.envs || []; else loadError = r?.error;
+    } catch (err) { loadError = err.message; }
+
+    const renderRows = () => envs.map(e => `
+      <div class="dt-env-row" data-env-key="${escapeHtml(e.key)}">
+        <span class="dt-env-key">${escapeHtml(e.key)}</span>
+        <span class="dt-env-value" data-toggle-secret>${escapeHtml(maskValue(e.value))}</span>
+        <button class="dt-btn" data-act="render-env-edit" data-env-key="${escapeHtml(e.key)}" data-env-value="${escapeHtml(e.value || '')}" data-service-id="${escapeHtml(mapping.id)}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Edit</button>
+        <button class="dt-btn danger" data-act="render-env-delete" data-env-key="${escapeHtml(e.key)}" data-service-id="${escapeHtml(mapping.id)}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Delete</button>
+      </div>
+    `).join('');
+
+    showDialog({
+      title: `Render · ${escapeHtml(mapping.name || mapping.id)} · ${envs.length} env vars`,
+      body: `${loadError ? `<p class="dt-error" style="display:block;">${escapeHtml(loadError)}</p>` : ''}
+        <p class="lead">Vars apply to the service. Changes take effect on the next deploy.</p>
+        <div class="dt-env-list">${envs.length ? renderRows() : '<p class="lead">No env vars yet.</p>'}</div>
+        <button class="dt-btn primary" data-act="render-env-add" data-service-id="${escapeHtml(mapping.id)}" style="margin-top:8px;">+ Add variable</button>`,
+      onSubmit: () => null, submitLabel: 'Close',
+    });
+    setTimeout(() => wireRevealClicks(envs), 0);
+  }
+
+  async function openRenderEnvAddDialog(ds) {
+    showDialog({
+      title: 'Add Render env var',
+      body: `<label>Key<input type="text" data-field="key" placeholder="MY_API_KEY" autofocus /></label>
+        <label>Value<input type="text" data-field="value" placeholder="(secret)" /></label>`,
+      onSubmit: async (root) => {
+        const key = root.querySelector('[data-field="key"]').value.trim();
+        const value = root.querySelector('[data-field="value"]').value;
+        if (!key) return 'Key is required.';
+        const r = await api.render.setEnv(ds.serviceId, key, value);
+        if (!r?.ok) return r?.error || 'Save failed.';
+        openRenderEnvDialog();
+        return null;
+      },
+      submitLabel: 'Save',
+    });
+  }
+  async function openRenderEnvEditDialog(ds) {
+    showDialog({
+      title: `Edit ${escapeHtml(ds.envKey)}`,
+      body: `<label>Key (read-only)<input type="text" value="${escapeHtml(ds.envKey)}" disabled /></label>
+        <label>Value<input type="text" data-field="value" value="${escapeHtml(ds.envValue || '')}" autofocus /></label>`,
+      onSubmit: async (root) => {
+        const value = root.querySelector('[data-field="value"]').value;
+        const r = await api.render.setEnv(ds.serviceId, ds.envKey, value);
+        if (!r?.ok) return r?.error || 'Save failed.';
+        openRenderEnvDialog();
+        return null;
+      },
+      submitLabel: 'Save',
+    });
+  }
+  async function deleteRenderEnv(ds) {
+    if (!confirm(`Delete ${ds.envKey}?`)) return;
+    const r = await api.render.deleteEnv(ds.serviceId, ds.envKey);
+    if (!r?.ok) { bus.emit('toast:show', { type: 'error', message: r?.error || 'Delete failed' }); return; }
+    openRenderEnvDialog();
   }
 
   async function rerunDeploy(provider, target) {
@@ -641,6 +750,7 @@
     const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
     if (provider === 'netlify')    return openNetlifyEnvDialog();
     if (provider === 'cloudflare') return openCloudflareEnvDialog();
+    if (provider === 'render')     return openRenderEnvDialog();
     if (provider !== 'vercel') {
       showDialog({
         title: `${cp?.name || provider} · Environment variables`,
@@ -819,6 +929,88 @@
   function lastSuccessfulDeploy(provider) {
     const list = state.cloud[provider]?.history || [];
     return list.find(h => h.status === 'success');
+  }
+
+  async function openRenderDeployDialog() {
+    const p = projectPath();
+    let mapping = null;
+    try { const r = await api.render.getServiceMap(p); if (r?.ok) mapping = r.mapping; } catch {}
+
+    if (!mapping) {
+      let services = [];
+      try { const r = await api.render.listServices(); if (r?.ok) services = r.services || []; } catch (err) {
+        showDialog({
+          title: 'Render · Pick a service',
+          body: `<p class="dt-error" style="display:block;">${escapeHtml(err.message || String(err))}</p>`,
+          onSubmit: () => null, submitLabel: 'Close',
+        });
+        return;
+      }
+      if (!services.length) {
+        showDialog({
+          title: 'Render · No services',
+          body: `<p class="lead">No Render services found under your account. Create one at <a href="https://dashboard.render.com/select-repo?type=web" target="_blank" style="color:var(--accent);">dashboard.render.com</a> first — Render deploys from a git repo, so push your project to GitHub/GitLab and link it from Render's dashboard.</p>`,
+          onSubmit: () => null, submitLabel: 'OK',
+        });
+        return;
+      }
+      const folderName = (state.project?.name || '').toLowerCase();
+      const guess = services.find(s => s.name.toLowerCase() === folderName);
+      const opts = services.map(s => `<option value="${escapeHtml(s.id)}" data-name="${escapeHtml(s.name)}" data-url="${escapeHtml(s.url || '')}"${s === guess ? ' selected' : ''}>${escapeHtml(s.name)}${s.type ? ` · ${escapeHtml(s.type)}` : ''}</option>`).join('');
+      showDialog({
+        title: 'Pick the matching Render service',
+        body: `<p class="lead">We'll remember this choice. Render deploys from the linked git repo, so make sure you've pushed before triggering.</p>
+          <label>Service<select data-field="serviceId">${opts}</select></label>`,
+        onSubmit: async (root) => {
+          const sel = root.querySelector('[data-field="serviceId"]');
+          const id = sel.value;
+          const name = sel.options[sel.selectedIndex]?.dataset?.name;
+          const url = sel.options[sel.selectedIndex]?.dataset?.url;
+          if (!id) return 'Pick a service.';
+          await api.render.setServiceMap(p, id, name, url);
+          openRenderDeployDialog();
+          return null;
+        },
+        submitLabel: 'Use this service',
+      });
+      return;
+    }
+
+    showDialog({
+      title: `Deploy to Render · ${escapeHtml(mapping.name || mapping.id)}`,
+      body: `<p class="lead">Triggers Render to pull from your linked git repo + build + deploy. Streams status as it progresses (typical: 1-3 minutes).</p>
+        <label class="row toggle"><input type="checkbox" data-field="clearCache" /> <span>Clear build cache</span></label>
+        <div data-progress style="display:none;"><div class="dt-log" data-log></div></div>`,
+      onSubmit: async (root, ctxBtns) => {
+        const clearCache = root.querySelector('[data-field="clearCache"]').checked;
+        root.querySelector('[data-progress]').style.display = 'block';
+        const log = root.querySelector('[data-log]');
+        const writeLog = (cls, text) => {
+          const div = document.createElement('div');
+          if (cls) div.className = cls;
+          div.textContent = text;
+          log.appendChild(div);
+          log.scrollTop = log.scrollHeight;
+        };
+        ctxBtns.disable();
+        const off = api.deploy.onEvent((evt) => {
+          if (evt.type === 'log')   writeLog('', evt.line);
+          else if (evt.type === 'error') writeLog('err', '✗ ' + evt.message);
+          else if (evt.type === 'done')  writeLog('ok', '✓ Live: ' + (evt.url || mapping.url || '(check Render dashboard)'));
+        });
+        const r = await api.render.deploy(projectPath(), mapping.id, clearCache);
+        try { off(); } catch {}
+        if (!r?.ok) { ctxBtns.enable(); return r?.error || 'Deploy failed.'; }
+        const finalUrl = r.url || mapping.url;
+        ctxBtns.replaceSubmit(finalUrl ? 'Open Site' : 'Done', () => {
+          if (finalUrl) try { api.shell?.openExternal?.(finalUrl); } catch {}
+          ctxBtns.close();
+        });
+        await refresh();
+        return null;
+      },
+      submitLabel: 'Trigger Deploy',
+    });
   }
 
   async function openNetlifyEnvDialog() {

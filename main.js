@@ -277,6 +277,7 @@ app.whenReady().then(() => {
   try { require('./main/vercel-api')(ipcMain, ctx); } catch (err) { console.error('[vercel-api] register failed:', err); }
   try { require('./main/netlify-api')(ipcMain, ctx); } catch (err) { console.error('[netlify-api] register failed:', err); }
   try { require('./main/cloudflare-api')(ipcMain, ctx); } catch (err) { console.error('[cloudflare-api] register failed:', err); }
+  try { require('./main/render-api')(ipcMain, ctx); } catch (err) { console.error('[render-api] register failed:', err); }
   try { require('./main/missions')(ipcMain, ctx, { getSecret: secretsApi?.getSecret, githubInvalidate: githubApi?.invalidate, ghEnsure: ghCliApi?.ensureForMission }); } catch (err) { console.error('[missions] register failed:', err); }
 
   createWindow();

@@ -412,6 +412,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteEnv: (accountId, projectName, key, target) => ipcRenderer.invoke('cloudflare:delete-env', { accountId, projectName, key, target }),
   },
 
+  render: {
+    listServices: () => ipcRenderer.invoke('render:list-services'),
+    getServiceMap: (projectPath) => ipcRenderer.invoke('render:get-service-map', { projectPath }),
+    setServiceMap: (projectPath, serviceId, serviceName, serviceUrl) => ipcRenderer.invoke('render:set-service-map', { projectPath, serviceId, serviceName, serviceUrl }),
+    deploy: (projectPath, serviceId, clearCache) => ipcRenderer.invoke('render:deploy', { projectPath, serviceId, clearCache }),
+    rollback: (serviceId, deployId) => ipcRenderer.invoke('render:rollback', { serviceId, deployId }),
+    listEnv: (serviceId) => ipcRenderer.invoke('render:list-env', { serviceId }),
+    setEnv: (serviceId, key, value) => ipcRenderer.invoke('render:set-env', { serviceId, key, value }),
+    deleteEnv: (serviceId, key) => ipcRenderer.invoke('render:delete-env', { serviceId, key }),
+  },
+
   deploy: {
     listProviders: () => ipcRenderer.invoke('deploy:list-providers'),
     history: (provider) => ipcRenderer.invoke('deploy:history', { provider }),
