@@ -8,20 +8,85 @@
   const FIT_JS = 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js';
   const LINKS_JS = 'https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js';
 
-  const THEME = {
-    background: '#16161a',
-    foreground: '#b0b0b8',
-    cursor: '#FF6B35',
-    selectionBackground: 'rgba(255,107,53,0.3)',
-    black: '#16161a',
-    red: '#e5534b',
-    green: '#56d364',
-    yellow: '#e5a639',
-    blue: '#6cb6ff',
-    magenta: '#d2a8ff',
-    cyan: '#76e4f7',
-    white: '#b0b0b8',
+  // Per-theme xterm palettes. ANSI colors are theme-authentic; the rest
+  // (background, foreground, cursor, selection) get derived from CSS vars
+  // at apply-time so a custom theme without an entry here still looks right.
+  const ANSI_BY_THEME = {
+    'midnight': {
+      black: '#16161a', red: '#e5534b', green: '#56d364', yellow: '#e5a639',
+      blue: '#6cb6ff',  magenta: '#d2a8ff', cyan: '#76e4f7', white: '#b0b0b8',
+      brightBlack: '#42424a', brightRed: '#ff6e66', brightGreen: '#7ee787',
+      brightYellow: '#ffc060', brightBlue: '#9ecbff', brightMagenta: '#e2c8ff',
+      brightCyan: '#9aedfe', brightWhite: '#d9d9de',
+    },
+    'carbon': {
+      black: '#0d0f12', red: '#ff5b5b', green: '#55e0a4', yellow: '#ffaa33',
+      blue: '#7fb6ff',  magenta: '#c792ea', cyan: '#00d8ff', white: '#c0c5cc',
+      brightBlack: '#404550', brightRed: '#ff7878', brightGreen: '#7eecbb',
+      brightYellow: '#ffc15c', brightBlue: '#a3cbff', brightMagenta: '#dab0f4',
+      brightCyan: '#5fe6ff', brightWhite: '#e6eaf0',
+    },
+    'dracula': {
+      black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
+      blue: '#bd93f9',  magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
+      brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94',
+      brightYellow: '#ffffa5', brightBlue: '#d6acff', brightMagenta: '#ff92df',
+      brightCyan: '#a4ffff', brightWhite: '#ffffff',
+    },
+    'github-dark': {
+      black: '#484f58', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
+      blue: '#58a6ff',  magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4',
+      brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364',
+      brightYellow: '#e3b341', brightBlue: '#79c0ff', brightMagenta: '#d2a8ff',
+      brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
+    },
+    'solarized-dark': {
+      black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+      blue: '#268bd2',  magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+      brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75',
+      brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4',
+      brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
+    },
+    'solarized-light': {
+      black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+      blue: '#268bd2',  magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+      brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75',
+      brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4',
+      brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
+    },
   };
+
+  function readVar(name, fallback) {
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return v || fallback;
+    } catch { return fallback; }
+  }
+  function rgbaWithAlpha(hex, alpha) {
+    const m = /^#?([a-f0-9]{6})$/i.exec(hex || '');
+    if (!m) return `rgba(255,107,53,${alpha})`;
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+  }
+
+  function paletteForTheme(themeId) {
+    const ansi = ANSI_BY_THEME[themeId] || ANSI_BY_THEME.midnight;
+    const bg     = readVar('--bg',          '#16161a');
+    const fg     = readVar('--text',        '#b0b0b8');
+    const accent = readVar('--accent',      '#FF6B35');
+    return {
+      background: bg,
+      foreground: fg,
+      cursor: accent,
+      cursorAccent: bg,
+      selectionBackground: rgbaWithAlpha(accent, 0.3),
+      ...ansi,
+    };
+  }
+
+  // Live mutable palette — replaced when theme changes; new terminals
+  // grab the current value, existing terminals get pushed to.
+  let THEME = paletteForTheme(document.documentElement.getAttribute('data-theme') || 'midnight');
 
   let cssInjected = false;
   let libPromise = null;
@@ -464,6 +529,24 @@
     const size = Number(p.value) || 13;
     for (const entry of terminals) {
       try { entry.term.options.fontSize = size; entry.fit && entry.fit.fit && entry.fit.fit(); } catch {}
+    }
+  });
+
+  // Live-apply theme changes — recolor the xterm palette + xterm host bg.
+  bus.on('theme:applied', (p) => {
+    THEME = paletteForTheme(p?.id || 'midnight');
+    for (const entry of terminals) {
+      try { entry.term.options.theme = THEME; } catch {}
+      try { if (entry.div) entry.div.style.background = THEME.background; } catch {}
+    }
+    // Update the host shell's hardcoded bg in the inline style block too,
+    // so the gap around terminals matches the theme.
+    const styleEl = document.getElementById('terminal-inline-styles');
+    if (styleEl) {
+      const bg = THEME.background;
+      styleEl.textContent = styleEl.textContent
+        .replace(/background:\s*#16161a/g, `background: ${bg}`)
+        .replace(/background-color:\s*#16161a/g, `background-color: ${bg}`);
     }
   });
 
