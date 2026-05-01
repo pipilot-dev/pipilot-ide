@@ -398,6 +398,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteEnv: (vercelProjectId, envId) => ipcRenderer.invoke('vercel:delete-env', { vercelProjectId, envId }),
   },
 
+  netlify: {
+    restoreDeploy: (siteSlug, deployId) => ipcRenderer.invoke('netlify:restore-deploy', { siteSlug, deployId }),
+    listEnv: (siteSlug) => ipcRenderer.invoke('netlify:list-env', { siteSlug }),
+    setEnv: (siteSlug, key, value) => ipcRenderer.invoke('netlify:set-env', { siteSlug, key, value }),
+    deleteEnv: (siteSlug, key) => ipcRenderer.invoke('netlify:delete-env', { siteSlug, key }),
+  },
+
+  cloudflarePages: {
+    rollbackDeployment: (accountId, projectName, deploymentId) => ipcRenderer.invoke('cloudflare:rollback-deployment', { accountId, projectName, deploymentId }),
+    listEnv: (accountId, projectName) => ipcRenderer.invoke('cloudflare:list-env', { accountId, projectName }),
+    setEnv: (accountId, projectName, key, value, target) => ipcRenderer.invoke('cloudflare:set-env', { accountId, projectName, key, value, target }),
+    deleteEnv: (accountId, projectName, key, target) => ipcRenderer.invoke('cloudflare:delete-env', { accountId, projectName, key, target }),
+  },
+
   deploy: {
     listProviders: () => ipcRenderer.invoke('deploy:list-providers'),
     history: (provider) => ipcRenderer.invoke('deploy:history', { provider }),

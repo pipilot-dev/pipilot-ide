@@ -55,6 +55,13 @@ const PROVIDERS = {
       const matches = output.match(/https:\/\/[a-z0-9-]+\.vercel\.app/gi);
       return matches ? matches[matches.length - 1] : null;
     },
+    parseMetadata: (output) => {
+      // The deployment URL's leftmost subdomain is a hash that uniquely
+      // identifies the deployment — same id Vercel's promote API accepts.
+      const url = (output.match(/https:\/\/[a-z0-9-]+\.vercel\.app/gi) || []).pop();
+      const deploymentId = url ? url.match(/^https:\/\/([a-z0-9-]+)\./)?.[1] : null;
+      return { deploymentId };
+    },
     estimatedFirstRunSeconds: 30,
   },
   netlify: {
@@ -69,6 +76,20 @@ const PROVIDERS = {
     parseUrl: (output) => {
       const m = output.match(/https:\/\/[a-z0-9-]+(--[a-z0-9-]+)?\.netlify\.app/gi);
       return m ? m[m.length - 1] : null;
+    },
+    parseMetadata: (output) => {
+      // Netlify CLI output:
+      //   Logs:              https://app.netlify.com/sites/<site>/deploys/<deploy_id>
+      //   Unique Deploy URL: https://<deploy_id>--<site>.netlify.app
+      //   Website URL:       https://<site>.netlify.app
+      // We pull both the site slug and the deploy id from the logs URL,
+      // which is the most reliable source.
+      const logsMatch = output.match(/https:\/\/app\.netlify\.com\/sites\/([a-z0-9-]+)\/deploys\/([a-f0-9]+)/i);
+      if (logsMatch) return { siteSlug: logsMatch[1], deployId: logsMatch[2] };
+      // Fallback: derive from the unique deploy URL.
+      const uniq = output.match(/https:\/\/([a-f0-9]+)--([a-z0-9-]+)\.netlify\.app/i);
+      if (uniq) return { siteSlug: uniq[2], deployId: uniq[1] };
+      return {};
     },
     estimatedFirstRunSeconds: 45,
   },
@@ -90,6 +111,18 @@ const PROVIDERS = {
     parseUrl: (output) => {
       const m = output.match(/https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.pages\.dev/gi);
       return m ? m[m.length - 1] : null;
+    },
+    parseMetadata: (output, { config } = {}) => {
+      // Wrangler prints either a numeric/alpha deployment id or just
+      // "Deployment ID: <uuid>". The deploy URL's subdomain hash also
+      // uniquely identifies it for the rollback API call.
+      const url = (output.match(/https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.pages\.dev/gi) || []).pop();
+      const subdomain = url ? url.match(/^https:\/\/([a-z0-9-]+)\./)?.[1] : null;
+      const explicit = output.match(/Deployment\s+(?:ID|UUID):\s*([a-f0-9-]{8,})/i)?.[1];
+      return {
+        deploymentId: explicit || subdomain || null,
+        projectName: config?.projectName || null,
+      };
     },
     estimatedFirstRunSeconds: 40,
     extraConfig: [
@@ -365,6 +398,7 @@ module.exports = function register(ipcMain, ctx) {
             id: runId, provider, projectPath, target: target || 'preview',
             status: 'error', startedAt, finishedAt: Date.now(),
             url: null, error: String(err?.message || err),
+            config,  // remember config so "Re-run" works without re-prompting
           });
           resolve(fail(err));
         });
@@ -372,18 +406,21 @@ module.exports = function register(ipcMain, ctx) {
           const finishedAt = Date.now();
           if (code === 0) {
             const url = cfg.parseUrl(outputBuf);
-            emit(ctx, runId, 'done', { url, code });
+            const metadata = typeof cfg.parseMetadata === 'function'
+              ? cfg.parseMetadata(outputBuf, { config }) : {};
+            emit(ctx, runId, 'done', { url, code, metadata });
             await appendHistory({
               id: runId, provider, projectPath, target: target || 'preview',
               status: 'success', startedAt, finishedAt, url,
+              metadata, config,
             });
-            resolve(ok({ runId, url }));
+            resolve(ok({ runId, url, metadata }));
           } else {
             emit(ctx, runId, 'error', { message: `CLI exited with code ${code}${signal ? ' (signal ' + signal + ')' : ''}` });
             await appendHistory({
               id: runId, provider, projectPath, target: target || 'preview',
               status: 'error', startedAt, finishedAt,
-              url: null, error: `exit ${code}`,
+              url: null, error: `exit ${code}`, config,
             });
             resolve(fail(new Error(`exit ${code}`)));
           }

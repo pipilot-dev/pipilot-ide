@@ -384,6 +384,15 @@
     if (act === 'env-add')          return openEnvAddDialog(provider);
     if (act === 'env-edit')         return openEnvEditDialog(provider, dataset || {});
     if (act === 'env-delete')       return deleteEnv(provider, dataset || {});
+    if (act === 'rerun')            return rerunDeploy(provider, dataset?.target || 'preview');
+    if (act === 'restore')          return openNetlifyRestoreDialog(dataset || {});
+    if (act === 'cf-rollback')      return openCloudflareRollbackDialog(dataset || {});
+    if (act === 'netlify-env-add')    return openNetlifyEnvAddDialog(dataset || {});
+    if (act === 'netlify-env-edit')   return openNetlifyEnvEditDialog(dataset || {});
+    if (act === 'netlify-env-delete') return deleteNetlifyEnv(dataset || {});
+    if (act === 'cf-env-add')    return openCfEnvAddDialog(dataset || {});
+    if (act === 'cf-env-edit')   return openCfEnvEditDialog(dataset || {});
+    if (act === 'cf-env-delete') return deleteCfEnv(dataset || {});
     if (act === 'open-url')         { try { api.shell?.openExternal?.(dataset?.url); } catch {} return; }
     if (act === 'dev-start')        return startDevServer();
     if (act === 'dev-stop')         return stopDevServer(dataset?.id);
@@ -511,7 +520,8 @@
             <span style="font-size:10px;color:var(--text-dim);">${escapeHtml(h.target || 'preview')}</span>
             <span style="font-size:10px;color:var(--text-dim);">${formatRel(h.finishedAt)}</span>
             <span style="font-size:10px;color:var(--text-dim);">${Math.round(((h.finishedAt - h.startedAt) || 0) / 1000)}s</span>
-            ${(provider === 'vercel' && h.status === 'success' && h.url && h.target !== 'production') ? `<button class="dt-btn" data-act="promote" data-provider="${provider}" data-url="${escapeHtml(h.url)}" title="Promote this deployment to production" style="flex:0 0 auto;padding:3px 10px;font-size:10.5px;">↑ Promote</button>` : ''}
+            <button class="dt-btn" data-act="rerun" data-provider="${provider}" data-target="${escapeHtml(h.target || 'preview')}" title="Deploy again with the same config" style="flex:0 0 auto;padding:3px 10px;font-size:10.5px;">↻ Re-run</button>
+            ${rollbackButtonHtml(provider, h)}
           </div>`).join('')
       : '<p class="lead">No deploys yet for this provider.</p>';
     showDialog({
@@ -519,6 +529,72 @@
       body: `<div style="max-height:380px;overflow:auto;">${rows}</div>`,
       onSubmit: () => null,
       submitLabel: 'Close',
+    });
+  }
+
+  // Per-provider rollback button: each one has different requirements
+  // (Vercel needs only the URL, Netlify needs site_id + deploy_id,
+  // Cloudflare needs project_name + deployment_id).
+  function rollbackButtonHtml(provider, h) {
+    if (h.status !== 'success' || h.target === 'production') return '';
+    if (provider === 'vercel' && h.url) {
+      return `<button class="dt-btn" data-act="promote" data-provider="${provider}" data-url="${escapeHtml(h.url)}" title="Promote this deployment to production" style="flex:0 0 auto;padding:3px 10px;font-size:10.5px;">↑ Promote</button>`;
+    }
+    if (provider === 'netlify' && h.metadata?.siteSlug && h.metadata?.deployId) {
+      return `<button class="dt-btn" data-act="restore" data-provider="${provider}" data-deploy-id="${escapeHtml(h.metadata.deployId)}" data-site-slug="${escapeHtml(h.metadata.siteSlug)}" data-url="${escapeHtml(h.url || '')}" title="Restore this deploy to your published URL" style="flex:0 0 auto;padding:3px 10px;font-size:10.5px;">↑ Restore</button>`;
+    }
+    if (provider === 'cloudflare' && h.metadata?.deploymentId && h.metadata?.projectName) {
+      return `<button class="dt-btn" data-act="cf-rollback" data-provider="${provider}" data-deployment-id="${escapeHtml(h.metadata.deploymentId)}" data-project-name="${escapeHtml(h.metadata.projectName)}" data-account-id="${escapeHtml(h.config?.accountId || '')}" data-url="${escapeHtml(h.url || '')}" title="Roll back production to this deployment" style="flex:0 0 auto;padding:3px 10px;font-size:10.5px;">↑ Rollback</button>`;
+    }
+    return '';
+  }
+
+  async function rerunDeploy(provider, target) {
+    // history records carry their own `config` so we just call run with
+    // no extra args — the main-side handler will merge with savedConfig
+    // (which is the same thing) and proceed.
+    openDeployDialog(provider, target);
+  }
+
+  function openNetlifyRestoreDialog(ds) {
+    const url = ds.url || '';
+    showDialog({
+      title: 'Restore deploy',
+      body: `<p class="lead">Restore <a href="#" data-act="open-url" data-url="${escapeHtml(url)}" style="color:var(--accent);">${escapeHtml(shortenUrl(url))}</a> to your published site.</p>
+        <p class="lead" style="color:var(--warn);">⚠ Your live site URL will switch to this deploy immediately.</p>`,
+      onSubmit: async (root, ctxBtns) => {
+        ctxBtns.disable();
+        const r = await api.netlify.restoreDeploy(ds.siteSlug, ds.deployId);
+        if (!r?.ok) { ctxBtns.enable(); return r?.error || 'Restore failed.'; }
+        ctxBtns.replaceSubmit('Open Site', () => {
+          try { api.shell?.openExternal?.(url); } catch {}
+          ctxBtns.close();
+        });
+        await refresh();
+        return null;
+      },
+      submitLabel: 'Restore',
+    });
+  }
+
+  function openCloudflareRollbackDialog(ds) {
+    const url = ds.url || '';
+    showDialog({
+      title: 'Roll back to this deployment',
+      body: `<p class="lead">Roll Cloudflare Pages production back to <a href="#" data-act="open-url" data-url="${escapeHtml(url)}" style="color:var(--accent);">${escapeHtml(shortenUrl(url))}</a>.</p>
+        <p class="lead" style="color:var(--warn);">⚠ Your live URL will switch to this deployment immediately.</p>`,
+      onSubmit: async (root, ctxBtns) => {
+        ctxBtns.disable();
+        const r = await api.cloudflarePages.rollbackDeployment(ds.accountId || null, ds.projectName, ds.deploymentId);
+        if (!r?.ok) { ctxBtns.enable(); return r?.error || 'Rollback failed.'; }
+        ctxBtns.replaceSubmit('Open Site', () => {
+          try { api.shell?.openExternal?.(url); } catch {}
+          ctxBtns.close();
+        });
+        await refresh();
+        return null;
+      },
+      submitLabel: 'Roll back',
     });
   }
 
@@ -563,13 +639,13 @@
 
   async function openEnvDialog(provider) {
     const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
+    if (provider === 'netlify')    return openNetlifyEnvDialog();
+    if (provider === 'cloudflare') return openCloudflareEnvDialog();
     if (provider !== 'vercel') {
       showDialog({
         title: `${cp?.name || provider} · Environment variables`,
-        body: `<p class="lead">Env-var management for ${cp?.name} is on the roadmap. Today only Vercel is wired (their REST API is the cleanest); Netlify / Cloudflare Pages / Railway use different schemas and per-site/account scoping that need adapter work.</p>
-          <p class="lead">In the meantime, set vars in your provider's dashboard or via their CLI — they're picked up by the next deploy automatically.</p>`,
-        onSubmit: () => null,
-        submitLabel: 'OK',
+        body: `<p class="lead">Env-var management for ${cp?.name} isn't wired yet. Set vars in your provider's dashboard or via their CLI — the next deploy will pick them up.</p>`,
+        onSubmit: () => null, submitLabel: 'OK',
       });
       return;
     }
@@ -734,6 +810,198 @@
       return;
     }
     openEnvDialog(provider);
+  }
+
+  // Find the most recent successful deploy for a provider so we can
+  // pull the captured metadata (siteSlug for Netlify, projectName +
+  // accountId for Cloudflare). If the user hasn't deployed yet, we
+  // can't infer these — surface a clear "deploy first" message.
+  function lastSuccessfulDeploy(provider) {
+    const list = state.cloud[provider]?.history || [];
+    return list.find(h => h.status === 'success');
+  }
+
+  async function openNetlifyEnvDialog() {
+    const last = lastSuccessfulDeploy('netlify');
+    const siteSlug = last?.metadata?.siteSlug;
+    if (!siteSlug) {
+      showDialog({
+        title: 'Netlify · Environment variables',
+        body: `<p class="lead">Run a Netlify deploy from this project at least once so we can capture the site ID, then come back to manage env vars.</p>`,
+        onSubmit: () => null, submitLabel: 'OK',
+      });
+      return;
+    }
+
+    let envs = [];
+    let loadError = null;
+    try {
+      const r = await api.netlify.listEnv(siteSlug);
+      if (r?.ok) envs = r.envs || [];
+      else loadError = r?.error;
+    } catch (err) { loadError = err.message; }
+
+    const renderRows = () => envs.map(e => `
+      <div class="dt-env-row" data-env-key="${escapeHtml(e.key)}">
+        <span class="dt-env-key">${escapeHtml(e.key)}</span>
+        <span class="dt-env-targets">${(e.targets || []).map(t => `<span class="dt-env-target ${t === 'production' || t === 'all' ? 'production' : t}">${escapeHtml((t || 'all').slice(0, 4))}</span>`).join('')}</span>
+        <span class="dt-env-value" data-toggle-secret>${escapeHtml(maskValue(e.value))}</span>
+        <button class="dt-btn" data-act="netlify-env-edit" data-env-key="${escapeHtml(e.key)}" data-env-value="${escapeHtml(e.value || '')}" data-site-slug="${escapeHtml(siteSlug)}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Edit</button>
+        <button class="dt-btn danger" data-act="netlify-env-delete" data-env-key="${escapeHtml(e.key)}" data-site-slug="${escapeHtml(siteSlug)}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Delete</button>
+      </div>
+    `).join('');
+
+    showDialog({
+      title: `Netlify · ${escapeHtml(siteSlug)} · ${envs.length} env vars`,
+      body: `${loadError ? `<p class="dt-error" style="display:block;">${escapeHtml(loadError)}</p>` : ''}
+        <p class="lead">Vars apply to all contexts (production / preview / branch deploys). Click any masked value to reveal.</p>
+        <div class="dt-env-list">${envs.length ? renderRows() : '<p class="lead">No environment variables yet.</p>'}</div>
+        <button class="dt-btn primary" data-act="netlify-env-add" data-site-slug="${escapeHtml(siteSlug)}" style="margin-top:8px;">+ Add variable</button>`,
+      onSubmit: () => null, submitLabel: 'Close',
+    });
+    setTimeout(() => wireRevealClicks(envs), 0);
+  }
+
+  async function openCloudflareEnvDialog() {
+    const last = lastSuccessfulDeploy('cloudflare');
+    const projectName = last?.metadata?.projectName || last?.config?.projectName;
+    const accountId = last?.config?.accountId || null;
+    if (!projectName) {
+      showDialog({
+        title: 'Cloudflare Pages · Environment variables',
+        body: `<p class="lead">Deploy to Cloudflare Pages once so we know the project name, then come back to manage env vars.</p>`,
+        onSubmit: () => null, submitLabel: 'OK',
+      });
+      return;
+    }
+
+    let envs = [];
+    let loadError = null;
+    try {
+      const r = await api.cloudflarePages.listEnv(accountId, projectName);
+      if (r?.ok) envs = r.envs || [];
+      else loadError = r?.error;
+    } catch (err) { loadError = err.message; }
+
+    const renderRows = () => envs.map(e => `
+      <div class="dt-env-row" data-env-key="${escapeHtml(e.key)}">
+        <span class="dt-env-key">${escapeHtml(e.key)}</span>
+        <span class="dt-env-targets"><span class="dt-env-target ${e.target}">${escapeHtml(e.target.slice(0, 4))}</span></span>
+        <span class="dt-env-value" data-toggle-secret>${escapeHtml(maskValue(e.value, e.type))}</span>
+        <button class="dt-btn" data-act="cf-env-edit" data-env-key="${escapeHtml(e.key)}" data-env-value="${escapeHtml(e.value || '')}" data-env-target="${escapeHtml(e.target)}" data-project-name="${escapeHtml(projectName)}" data-account-id="${escapeHtml(accountId || '')}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Edit</button>
+        <button class="dt-btn danger" data-act="cf-env-delete" data-env-key="${escapeHtml(e.key)}" data-env-target="${escapeHtml(e.target)}" data-project-name="${escapeHtml(projectName)}" data-account-id="${escapeHtml(accountId || '')}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Delete</button>
+      </div>
+    `).join('');
+
+    showDialog({
+      title: `Cloudflare Pages · ${escapeHtml(projectName)} · ${envs.length} env vars`,
+      body: `${loadError ? `<p class="dt-error" style="display:block;">${escapeHtml(loadError)}</p>` : ''}
+        <p class="lead">Vars are scoped per environment (production vs preview). Adding the same key to both targets requires two entries.</p>
+        <div class="dt-env-list">${envs.length ? renderRows() : '<p class="lead">No environment variables yet.</p>'}</div>
+        <button class="dt-btn primary" data-act="cf-env-add" data-project-name="${escapeHtml(projectName)}" data-account-id="${escapeHtml(accountId || '')}" style="margin-top:8px;">+ Add variable</button>`,
+      onSubmit: () => null, submitLabel: 'Close',
+    });
+    setTimeout(() => wireRevealClicks(envs), 0);
+  }
+
+  function wireRevealClicks(envs) {
+    document.querySelectorAll('.dt-dialog [data-toggle-secret]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const row = el.closest('.dt-env-row');
+        const key = row?.dataset.envKey;
+        const env = envs.find(e => e.key === key);
+        if (!env) return;
+        el.textContent = el.dataset.revealed === '1' ? maskValue(env.value, env.type) : (env.value || '');
+        el.dataset.revealed = el.dataset.revealed === '1' ? '0' : '1';
+      });
+    });
+  }
+
+  async function openNetlifyEnvAddDialog(ds) {
+    showDialog({
+      title: 'Add Netlify env var',
+      body: `<label>Key<input type="text" data-field="key" placeholder="MY_API_KEY" autofocus /></label>
+        <label>Value<input type="text" data-field="value" placeholder="(secret)" /></label>`,
+      onSubmit: async (root) => {
+        const key = root.querySelector('[data-field="key"]').value.trim();
+        const value = root.querySelector('[data-field="value"]').value;
+        if (!key) return 'Key is required.';
+        const r = await api.netlify.setEnv(ds.siteSlug, key, value);
+        if (!r?.ok) return r?.error || 'Save failed.';
+        openNetlifyEnvDialog();
+        return null;
+      },
+      submitLabel: 'Save',
+    });
+  }
+  async function openCfEnvAddDialog(ds) {
+    showDialog({
+      title: 'Add Cloudflare Pages env var',
+      body: `<label>Key<input type="text" data-field="key" placeholder="MY_API_KEY" autofocus /></label>
+        <label>Value<input type="text" data-field="value" placeholder="(secret)" /></label>
+        <label>Target<select data-field="target">
+          <option value="all" selected>Production + Preview</option>
+          <option value="production">Production only</option>
+          <option value="preview">Preview only</option>
+        </select></label>`,
+      onSubmit: async (root) => {
+        const key = root.querySelector('[data-field="key"]').value.trim();
+        const value = root.querySelector('[data-field="value"]').value;
+        const target = root.querySelector('[data-field="target"]').value;
+        if (!key) return 'Key is required.';
+        const targets = target === 'all' ? ['production', 'preview'] : [target];
+        const r = await api.cloudflarePages.setEnv(ds.accountId || null, ds.projectName, key, value, targets);
+        if (!r?.ok) return r?.error || 'Save failed.';
+        openCloudflareEnvDialog();
+        return null;
+      },
+      submitLabel: 'Save',
+    });
+  }
+
+  async function openNetlifyEnvEditDialog(ds) {
+    showDialog({
+      title: `Edit ${escapeHtml(ds.envKey)}`,
+      body: `<label>Key (read-only)<input type="text" value="${escapeHtml(ds.envKey)}" disabled /></label>
+        <label>Value<input type="text" data-field="value" value="${escapeHtml(ds.envValue || '')}" autofocus /></label>`,
+      onSubmit: async (root) => {
+        const value = root.querySelector('[data-field="value"]').value;
+        const r = await api.netlify.setEnv(ds.siteSlug, ds.envKey, value);
+        if (!r?.ok) return r?.error || 'Save failed.';
+        openNetlifyEnvDialog();
+        return null;
+      },
+      submitLabel: 'Save',
+    });
+  }
+  async function openCfEnvEditDialog(ds) {
+    showDialog({
+      title: `Edit ${escapeHtml(ds.envKey)} (${escapeHtml(ds.envTarget)})`,
+      body: `<label>Key (read-only)<input type="text" value="${escapeHtml(ds.envKey)}" disabled /></label>
+        <label>Target (read-only)<input type="text" value="${escapeHtml(ds.envTarget)}" disabled /></label>
+        <label>Value<input type="text" data-field="value" value="${escapeHtml(ds.envValue || '')}" autofocus /></label>`,
+      onSubmit: async (root) => {
+        const value = root.querySelector('[data-field="value"]').value;
+        const r = await api.cloudflarePages.setEnv(ds.accountId || null, ds.projectName, ds.envKey, value, [ds.envTarget]);
+        if (!r?.ok) return r?.error || 'Save failed.';
+        openCloudflareEnvDialog();
+        return null;
+      },
+      submitLabel: 'Save',
+    });
+  }
+
+  async function deleteNetlifyEnv(ds) {
+    if (!confirm(`Delete ${ds.envKey}?`)) return;
+    const r = await api.netlify.deleteEnv(ds.siteSlug, ds.envKey);
+    if (!r?.ok) { bus.emit('toast:show', { type: 'error', message: r?.error || 'Delete failed' }); return; }
+    openNetlifyEnvDialog();
+  }
+  async function deleteCfEnv(ds) {
+    if (!confirm(`Delete ${ds.envKey} (${ds.envTarget})?`)) return;
+    const r = await api.cloudflarePages.deleteEnv(ds.accountId || null, ds.projectName, ds.envKey, [ds.envTarget]);
+    if (!r?.ok) { bus.emit('toast:show', { type: 'error', message: r?.error || 'Delete failed' }); return; }
+    openCloudflareEnvDialog();
   }
 
   async function startDevServer() {
