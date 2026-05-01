@@ -132,4 +132,42 @@ module.exports = function register(ipcMain, ctx) {
       return ok({ project: result });
     } catch (err) { return fail(err); }
   });
+
+  // ── Custom domains ────────────────────────────────────────────────
+  ipcMain.handle('cloudflare:list-domains', async (_e, { accountId, projectName } = {}) => {
+    try {
+      if (!projectName) throw new Error('projectName required');
+      const aid = await resolveAccountId(accountId);
+      const list = await api(`/accounts/${encodeURIComponent(aid)}/pages/projects/${encodeURIComponent(projectName)}/domains`);
+      const domains = (Array.isArray(list) ? list : []).map(d => ({
+        name: d.name,
+        verified: d.status === 'active',
+        status: d.status,
+        certificateStatus: d.certificate_authority,
+      }));
+      return ok({ domains });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('cloudflare:add-domain', async (_e, { accountId, projectName, domain } = {}) => {
+    try {
+      if (!projectName || !domain) throw new Error('projectName + domain required');
+      const aid = await resolveAccountId(accountId);
+      const result = await api(`/accounts/${encodeURIComponent(aid)}/pages/projects/${encodeURIComponent(projectName)}/domains`, {
+        method: 'POST', body: JSON.stringify({ name: domain }),
+      });
+      return ok({ domain: result });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('cloudflare:delete-domain', async (_e, { accountId, projectName, domain } = {}) => {
+    try {
+      if (!projectName || !domain) throw new Error('projectName + domain required');
+      const aid = await resolveAccountId(accountId);
+      await api(`/accounts/${encodeURIComponent(aid)}/pages/projects/${encodeURIComponent(projectName)}/domains/${encodeURIComponent(domain)}`, {
+        method: 'DELETE',
+      });
+      return ok({});
+    } catch (err) { return fail(err); }
+  });
 };

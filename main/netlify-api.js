@@ -108,4 +108,46 @@ module.exports = function register(ipcMain, ctx) {
       return ok({});
     } catch (err) { return fail(err); }
   });
+
+  // ── Custom domains ────────────────────────────────────────────────
+  // Netlify stores them on the site object: custom_domain (primary) +
+  // domain_aliases (extras). PATCH the site to add/remove.
+  ipcMain.handle('netlify:list-domains', async (_e, { siteSlug } = {}) => {
+    try {
+      if (!siteSlug) throw new Error('siteSlug required');
+      const site = await api(`/api/v1/sites/${encodeURIComponent(siteSlug)}`);
+      const domains = [];
+      if (site?.custom_domain) domains.push({ name: site.custom_domain, primary: true, verified: !!site.ssl_url });
+      for (const a of site?.domain_aliases || []) domains.push({ name: a, primary: false, verified: true });
+      return ok({ domains });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('netlify:add-domain', async (_e, { siteSlug, domain, primary } = {}) => {
+    try {
+      if (!siteSlug || !domain) throw new Error('siteSlug + domain required');
+      const site = await api(`/api/v1/sites/${encodeURIComponent(siteSlug)}`);
+      const patch = primary
+        ? { custom_domain: domain, domain_aliases: site?.domain_aliases || [] }
+        : { domain_aliases: [...new Set([...(site?.domain_aliases || []), domain])] };
+      await api(`/api/v1/sites/${encodeURIComponent(siteSlug)}`, {
+        method: 'PATCH', body: JSON.stringify(patch),
+      });
+      return ok({});
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('netlify:delete-domain', async (_e, { siteSlug, domain } = {}) => {
+    try {
+      if (!siteSlug || !domain) throw new Error('siteSlug + domain required');
+      const site = await api(`/api/v1/sites/${encodeURIComponent(siteSlug)}`);
+      const patch = {};
+      if (site?.custom_domain === domain) patch.custom_domain = null;
+      patch.domain_aliases = (site?.domain_aliases || []).filter(d => d !== domain);
+      await api(`/api/v1/sites/${encodeURIComponent(siteSlug)}`, {
+        method: 'PATCH', body: JSON.stringify(patch),
+      });
+      return ok({});
+    } catch (err) { return fail(err); }
+  });
 };

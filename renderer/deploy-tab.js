@@ -105,6 +105,15 @@
       .dt-dialog .actions { display:flex; gap:8px; margin-top:6px; justify-content:flex-end; }
       .dt-error { color:var(--error); font-size:11.5px; padding:8px 10px; background:color-mix(in srgb, var(--error) 12%, transparent); border-radius:5px; }
 
+      /* Domains list */
+      .dt-domain-list { display:flex; flex-direction:column; gap:6px; max-height:340px; overflow:auto; padding:4px 0; }
+      .dt-domain-row { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--bg); border:1px solid var(--border); border-radius:5px; font-size:12px; }
+      .dt-domain-name { flex:1; min-width:0; font-family:var(--font-mono); color:var(--text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .dt-domain-status { font-size:10px; padding:1px 7px; border-radius:999px; font-weight:500; letter-spacing:0.03em; flex:0 0 auto; }
+      .dt-domain-status.ok { color:var(--ok); background:color-mix(in srgb, var(--ok) 15%, transparent); }
+      .dt-domain-status.pending { color:var(--warn); background:color-mix(in srgb, var(--warn) 15%, transparent); }
+      .dt-domain-primary { font-size:10px; padding:1px 7px; border-radius:999px; color:var(--accent); background:var(--accent-dim); flex:0 0 auto; font-weight:500; letter-spacing:0.03em; }
+
       /* Env vars list */
       .dt-env-list { display:flex; flex-direction:column; gap:6px; max-height:340px; overflow:auto; padding:4px 0; }
       .dt-env-row { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--bg); border:1px solid var(--border); border-radius:5px; font-size:11.5px; }
@@ -297,6 +306,7 @@
             : `<button class="dt-btn primary" data-act="connect-cloud" data-provider="${cp.id}">Connect ${escapeHtml(cp.name)}</button>`
           }
           ${s.connected ? `<button class="dt-btn" data-act="env" data-provider="${cp.id}" title="Manage environment variables">🔐 Env</button>` : ''}
+          ${s.connected ? `<button class="dt-btn" data-act="domains" data-provider="${cp.id}" title="Manage custom domains">🌐 Domains</button>` : ''}
           ${s.history.length ? `<button class="dt-btn" data-act="history" data-provider="${cp.id}" title="Deploy history">⏱ ${s.history.length}</button>` : ''}
         </div>
       </div>`;
@@ -399,6 +409,9 @@
     if (act === 'render-env-add')    return openRenderEnvAddDialog(dataset || {});
     if (act === 'render-env-edit')   return openRenderEnvEditDialog(dataset || {});
     if (act === 'render-env-delete') return deleteRenderEnv(dataset || {});
+    if (act === 'domains')           return openDomainsDialog(provider);
+    if (act === 'domain-add')        return openDomainAddDialog(provider);
+    if (act === 'domain-delete')     return deleteDomain(provider, dataset || {});
     if (act === 'open-url')         { try { api.shell?.openExternal?.(dataset?.url); } catch {} return; }
     if (act === 'dev-start')        return startDevServer();
     if (act === 'dev-stop')         return stopDevServer(dataset?.id);
@@ -1194,6 +1207,120 @@
     const r = await api.cloudflarePages.deleteEnv(ds.accountId || null, ds.projectName, ds.envKey, [ds.envTarget]);
     if (!r?.ok) { bus.emit('toast:show', { type: 'error', message: r?.error || 'Delete failed' }); return; }
     openCloudflareEnvDialog();
+  }
+
+  // ── Custom domains (unified dialog across providers) ─────────────
+  async function getDomainContext(provider) {
+    const p = projectPath();
+    if (provider === 'vercel') {
+      let mapping = null;
+      try { const r = await api.vercel.getProjectMap(p); if (r?.ok) mapping = r.mapping; } catch {}
+      return mapping ? { ok: true, label: mapping.name || mapping.id, projectId: mapping.id } : { ok: false, error: 'Pick a Vercel project (Env vars dialog) first.' };
+    }
+    if (provider === 'netlify') {
+      const last = lastSuccessfulDeploy('netlify');
+      const siteSlug = last?.metadata?.siteSlug;
+      return siteSlug ? { ok: true, label: siteSlug, siteSlug } : { ok: false, error: 'Deploy to Netlify once first so we capture the site ID.' };
+    }
+    if (provider === 'cloudflare') {
+      const last = lastSuccessfulDeploy('cloudflare');
+      const projectName = last?.metadata?.projectName || last?.config?.projectName;
+      const accountId = last?.config?.accountId || null;
+      return projectName ? { ok: true, label: projectName, projectName, accountId } : { ok: false, error: 'Deploy to Cloudflare Pages once first.' };
+    }
+    if (provider === 'render') {
+      let mapping = null;
+      try { const r = await api.render.getServiceMap(p); if (r?.ok) mapping = r.mapping; } catch {}
+      return mapping ? { ok: true, label: mapping.name || mapping.id, serviceId: mapping.id } : { ok: false, error: 'Trigger a Render deploy first to pick the service.' };
+    }
+    return { ok: false, error: `Custom domains aren't wired for ${provider} yet.` };
+  }
+
+  async function listDomains(provider, ctx) {
+    if (provider === 'vercel')     return api.vercel.listDomains(ctx.projectId);
+    if (provider === 'netlify')    return api.netlify.listDomains(ctx.siteSlug);
+    if (provider === 'cloudflare') return api.cloudflarePages.listDomains(ctx.accountId, ctx.projectName);
+    if (provider === 'render')     return api.render.listDomains(ctx.serviceId);
+    return { ok: false, error: 'unsupported' };
+  }
+
+  async function openDomainsDialog(provider) {
+    const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
+    const ctx = await getDomainContext(provider);
+    if (!ctx.ok) {
+      showDialog({
+        title: `${cp?.name || provider} · Custom domains`,
+        body: `<p class="lead">${escapeHtml(ctx.error)}</p>`,
+        onSubmit: () => null, submitLabel: 'OK',
+      });
+      return;
+    }
+
+    let domains = [];
+    let loadError = null;
+    try {
+      const r = await listDomains(provider, ctx);
+      if (r?.ok) domains = r.domains || []; else loadError = r?.error;
+    } catch (err) { loadError = err.message; }
+
+    const renderRows = () => domains.map(d => `
+      <div class="dt-domain-row">
+        <span class="dt-domain-name">${escapeHtml(d.name)}</span>
+        <span class="dt-domain-status ${d.verified ? 'ok' : 'pending'}" title="${escapeHtml(d.status || '')}">${d.verified ? '✓ verified' : '○ pending'}</span>
+        ${d.primary ? '<span class="dt-domain-primary">primary</span>' : ''}
+        <button class="dt-btn" data-act="open-url" data-url="https://${escapeHtml(d.name)}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Open</button>
+        <button class="dt-btn danger" data-act="domain-delete" data-provider="${provider}" data-domain="${escapeHtml(d.name)}" data-domain-id="${escapeHtml(d.id || '')}" style="flex:0 0 auto;padding:3px 9px;font-size:10.5px;">Remove</button>
+      </div>
+    `).join('');
+
+    showDialog({
+      title: `${cp?.name || provider} · ${escapeHtml(ctx.label)} · ${domains.length} domain${domains.length === 1 ? '' : 's'}`,
+      body: `${loadError ? `<p class="dt-error" style="display:block;">${escapeHtml(loadError)}</p>` : ''}
+        <p class="lead">After adding a domain you'll need to point its DNS at the provider — they show the exact target in their dashboard. SSL provisioning is automatic and usually completes in &lt; 5 min.</p>
+        <div class="dt-domain-list">${domains.length ? renderRows() : '<p class="lead">No custom domains yet.</p>'}</div>
+        <button class="dt-btn primary" data-act="domain-add" data-provider="${provider}" style="margin-top:8px;">+ Add domain</button>`,
+      onSubmit: () => null, submitLabel: 'Close',
+    });
+  }
+
+  async function openDomainAddDialog(provider) {
+    const cp = CLOUD_PROVIDERS.find(c => c.id === provider);
+    const ctx = await getDomainContext(provider);
+    if (!ctx.ok) return;
+    const showPrimary = provider === 'netlify';
+    showDialog({
+      title: `Add custom domain to ${cp?.name || provider}`,
+      body: `<label>Domain<input type="text" data-field="domain" placeholder="example.com" autofocus /></label>
+        ${showPrimary ? `<label class="row toggle"><input type="checkbox" data-field="primary" /> <span>Set as primary domain</span></label>` : ''}
+        <p class="lead">After saving, configure your DNS to point this domain at ${cp?.name}. The provider's dashboard has the exact CNAME / A record to add.</p>`,
+      onSubmit: async (root) => {
+        const domain = root.querySelector('[data-field="domain"]').value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+        if (!domain || !/\./.test(domain)) return 'Enter a valid domain name (e.g. example.com).';
+        const primary = !!root.querySelector('[data-field="primary"]')?.checked;
+        let r;
+        if (provider === 'vercel')     r = await api.vercel.addDomain(ctx.projectId, domain);
+        else if (provider === 'netlify')    r = await api.netlify.addDomain(ctx.siteSlug, domain, primary);
+        else if (provider === 'cloudflare') r = await api.cloudflarePages.addDomain(ctx.accountId, ctx.projectName, domain);
+        else if (provider === 'render')     r = await api.render.addDomain(ctx.serviceId, domain);
+        if (!r?.ok) return r?.error || 'Add failed.';
+        openDomainsDialog(provider);
+        return null;
+      },
+      submitLabel: 'Add domain',
+    });
+  }
+
+  async function deleteDomain(provider, ds) {
+    if (!confirm(`Remove ${ds.domain} from ${provider}?`)) return;
+    const ctx = await getDomainContext(provider);
+    if (!ctx.ok) return;
+    let r;
+    if (provider === 'vercel')     r = await api.vercel.deleteDomain(ctx.projectId, ds.domain);
+    else if (provider === 'netlify')    r = await api.netlify.deleteDomain(ctx.siteSlug, ds.domain);
+    else if (provider === 'cloudflare') r = await api.cloudflarePages.deleteDomain(ctx.accountId, ctx.projectName, ds.domain);
+    else if (provider === 'render')     r = await api.render.deleteDomain(ctx.serviceId, ds.domainId);
+    if (!r?.ok) { bus.emit('toast:show', { type: 'error', message: r?.error || 'Delete failed' }); return; }
+    openDomainsDialog(provider);
   }
 
   async function startDevServer() {

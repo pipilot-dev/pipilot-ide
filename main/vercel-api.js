@@ -162,4 +162,40 @@ module.exports = function register(ipcMain, ctx) {
       return ok({});
     } catch (err) { return fail(err); }
   });
+
+  // ── Custom domains ────────────────────────────────────────────────
+  ipcMain.handle('vercel:list-domains', async (_e, { vercelProjectId } = {}) => {
+    try {
+      if (!vercelProjectId) throw new Error('vercelProjectId required');
+      const data = await api(`/v9/projects/${encodeURIComponent(vercelProjectId)}/domains`);
+      const domains = (data?.domains || []).map(d => ({
+        name: d.name,
+        verified: !!d.verified,
+        verification: d.verification || [],     // [{type, domain, value, reason}, ...] (DNS hints)
+        gitBranch: d.gitBranch || null,
+      }));
+      return ok({ domains });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('vercel:add-domain', async (_e, { vercelProjectId, domain } = {}) => {
+    try {
+      if (!vercelProjectId || !domain) throw new Error('vercelProjectId + domain required');
+      const result = await api(`/v10/projects/${encodeURIComponent(vercelProjectId)}/domains`, {
+        method: 'POST',
+        body: JSON.stringify({ name: domain }),
+      });
+      return ok({ domain: result });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('vercel:delete-domain', async (_e, { vercelProjectId, domain } = {}) => {
+    try {
+      if (!vercelProjectId || !domain) throw new Error('vercelProjectId + domain required');
+      await api(`/v9/projects/${encodeURIComponent(vercelProjectId)}/domains/${encodeURIComponent(domain)}`, {
+        method: 'DELETE',
+      });
+      return ok({});
+    } catch (err) { return fail(err); }
+  });
 };

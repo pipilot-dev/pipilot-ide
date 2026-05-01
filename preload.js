@@ -396,6 +396,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listEnv: (vercelProjectId) => ipcRenderer.invoke('vercel:list-env', { vercelProjectId }),
     setEnv: (vercelProjectId, key, value, target) => ipcRenderer.invoke('vercel:set-env', { vercelProjectId, key, value, target }),
     deleteEnv: (vercelProjectId, envId) => ipcRenderer.invoke('vercel:delete-env', { vercelProjectId, envId }),
+    listDomains: (vercelProjectId) => ipcRenderer.invoke('vercel:list-domains', { vercelProjectId }),
+    addDomain: (vercelProjectId, domain) => ipcRenderer.invoke('vercel:add-domain', { vercelProjectId, domain }),
+    deleteDomain: (vercelProjectId, domain) => ipcRenderer.invoke('vercel:delete-domain', { vercelProjectId, domain }),
   },
 
   netlify: {
@@ -403,6 +406,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listEnv: (siteSlug) => ipcRenderer.invoke('netlify:list-env', { siteSlug }),
     setEnv: (siteSlug, key, value) => ipcRenderer.invoke('netlify:set-env', { siteSlug, key, value }),
     deleteEnv: (siteSlug, key) => ipcRenderer.invoke('netlify:delete-env', { siteSlug, key }),
+    listDomains: (siteSlug) => ipcRenderer.invoke('netlify:list-domains', { siteSlug }),
+    addDomain: (siteSlug, domain, primary) => ipcRenderer.invoke('netlify:add-domain', { siteSlug, domain, primary }),
+    deleteDomain: (siteSlug, domain) => ipcRenderer.invoke('netlify:delete-domain', { siteSlug, domain }),
   },
 
   cloudflarePages: {
@@ -410,6 +416,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listEnv: (accountId, projectName) => ipcRenderer.invoke('cloudflare:list-env', { accountId, projectName }),
     setEnv: (accountId, projectName, key, value, target) => ipcRenderer.invoke('cloudflare:set-env', { accountId, projectName, key, value, target }),
     deleteEnv: (accountId, projectName, key, target) => ipcRenderer.invoke('cloudflare:delete-env', { accountId, projectName, key, target }),
+    listDomains: (accountId, projectName) => ipcRenderer.invoke('cloudflare:list-domains', { accountId, projectName }),
+    addDomain: (accountId, projectName, domain) => ipcRenderer.invoke('cloudflare:add-domain', { accountId, projectName, domain }),
+    deleteDomain: (accountId, projectName, domain) => ipcRenderer.invoke('cloudflare:delete-domain', { accountId, projectName, domain }),
   },
 
   render: {
@@ -421,6 +430,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listEnv: (serviceId) => ipcRenderer.invoke('render:list-env', { serviceId }),
     setEnv: (serviceId, key, value) => ipcRenderer.invoke('render:set-env', { serviceId, key, value }),
     deleteEnv: (serviceId, key) => ipcRenderer.invoke('render:delete-env', { serviceId, key }),
+    listDomains: (serviceId) => ipcRenderer.invoke('render:list-domains', { serviceId }),
+    addDomain: (serviceId, domain) => ipcRenderer.invoke('render:add-domain', { serviceId, domain }),
+    deleteDomain: (serviceId, domainId) => ipcRenderer.invoke('render:delete-domain', { serviceId, domainId }),
   },
 
   deploy: {

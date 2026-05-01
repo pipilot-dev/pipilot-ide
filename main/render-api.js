@@ -247,4 +247,42 @@ module.exports = function register(ipcMain, ctx) {
       return ok({});
     } catch (err) { return fail(err); }
   });
+
+  // ── Custom domains ────────────────────────────────────────────────
+  ipcMain.handle('render:list-domains', async (_e, { serviceId } = {}) => {
+    try {
+      if (!serviceId) throw new Error('serviceId required');
+      const wrapped = await api(`/v1/services/${encodeURIComponent(serviceId)}/custom-domains?limit=50`);
+      const domains = (Array.isArray(wrapped) ? wrapped : []).map(w => {
+        const d = w.customDomain || w;
+        return {
+          name: d.name,
+          id: d.id,
+          verified: d.verificationStatus === 'verified',
+          status: d.verificationStatus,
+        };
+      });
+      return ok({ domains });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('render:add-domain', async (_e, { serviceId, domain } = {}) => {
+    try {
+      if (!serviceId || !domain) throw new Error('serviceId + domain required');
+      const result = await api(`/v1/services/${encodeURIComponent(serviceId)}/custom-domains`, {
+        method: 'POST', body: JSON.stringify({ name: domain }),
+      });
+      return ok({ domain: result });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('render:delete-domain', async (_e, { serviceId, domainId } = {}) => {
+    try {
+      if (!serviceId || !domainId) throw new Error('serviceId + domainId required');
+      await api(`/v1/services/${encodeURIComponent(serviceId)}/custom-domains/${encodeURIComponent(domainId)}`, {
+        method: 'DELETE',
+      });
+      return ok({});
+    } catch (err) { return fail(err); }
+  });
 };
