@@ -57,7 +57,7 @@ Extensions activate immediately on install. No restart required.
 }
 ```
 
-**Categories**: `editor`, `productivity`, `sidebar`, `status-bar`, `css`, `git`, `ai`, `themes`, `terminal`, `diagnostics`
+**Categories**: `editor`, `productivity`, `sidebar`, `status-bar`, `css`, `git`, `ai`, `themes`, `fonts`, `terminal`, `diagnostics`
 
 ---
 
@@ -547,6 +547,72 @@ your extension code runs — there's no flash of the wrong theme.
 For local testing during development, use `pipilot://builtin/theme-<id>`
 as the URL — the install handler reads from the app's bundled
 `extensions/themes/` directory.
+
+---
+
+### Fonts — `PiPilot.fonts`
+
+Extensions in the `fonts` category register a coding font that becomes
+selectable from Settings → General → Font Family. Web-hosted fonts are
+lazy-loaded the first time they're applied (the `<link>` tag is added
+to `<head>`); the user's first selection pays the download cost,
+subsequent uses are served from the browser cache. Same persistence
+model as themes — extension-registered fonts are cached in
+`localStorage` so they survive a relaunch even before the owning
+extension loads.
+
+| Method | Description |
+|--------|-------------|
+| `register({ id, label, family, url, ligatures })` | Add a font. `id` must be a unique slug; `family` is the CSS font-family value (already quoted if it contains spaces); `url` is an optional CSS stylesheet URL (Google Fonts, jsDelivr, etc.) loaded the first time the font is applied; `ligatures` defaults to `false`. |
+| `unregister(id)` | Remove a font. Falls back to JetBrains Mono if the active font is removed. |
+| `list()` | Array of `{ id, label, family, url, ligatures, source }` — `source` is `'builtin'`, `'extension'`, or `'cache'`. |
+| `current()` | The currently active font id (or raw CSS string if the user pasted a custom stack). |
+| `apply(id)` | Switch font programmatically. Persists to `settings.fontFamily`. |
+
+**Built-in fonts** (always present, no install needed): `jetbrains-mono`,
+`fira-code`, `cascadia-code`, `ibm-plex-mono`, `source-code-pro`,
+`roboto-mono`, `hack`, `inconsolata`, `space-mono`, `ubuntu-mono`.
+
+**Minimal example** (`extensions/fonts/font-mononoki.js`):
+
+```js
+(() => {
+  const reg = window.PiPilot?.fonts?.register;
+  if (typeof reg !== 'function') return;
+  reg({
+    id: 'mononoki',
+    label: 'Mononoki',
+    family: '"mononoki"',
+    url: 'https://cdn.jsdelivr.net/npm/typeface-mononoki@0.0.71/index.css',
+    ligatures: false,
+  });
+})();
+```
+
+**Registry entry** (`registry.json`):
+
+```json
+{
+  "id": "font-mononoki",
+  "name": "Mononoki",
+  "description": "Designed for sourcecode and terminal use.",
+  "icon": "Aa",
+  "categories": ["fonts"],
+  "version": "1.0.0",
+  "author": "you",
+  "url": "https://raw.githubusercontent.com/<you>/<repo>/main/extensions/fonts/font-mononoki.js"
+}
+```
+
+**Ligatures.** Settings → General has a `Programming Ligatures` toggle
+that applies `font-feature-settings: 'calt' 1, 'liga' 1, 'clig' 1` to
+the Ace editor. If your font has ligatures, set `ligatures: true` in
+the registration so users know — the toggle works for any font
+regardless, but the hint helps the picker show the right metadata.
+
+For local testing during development, use `pipilot://builtin/font-<id>`
+as the URL — the install handler reads from the app's bundled
+`extensions/fonts/` directory.
 
 ---
 

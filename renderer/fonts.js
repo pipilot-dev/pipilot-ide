@@ -1,0 +1,234 @@
+// PiPilot IDE — Font registry + loader.
+// Owns the list of monospace fonts the user can pick in Settings → General.
+// Built-ins ship with the IDE; extensions can register their own via
+// PiPilot.fonts.register(). Web-hosted fonts are lazy-loaded from a CDN
+// the first time they're applied, then cached by the browser.
+//
+// Persistence mirrors theme.js: extension-registered fonts get cached in
+// localStorage so they survive a relaunch even before the owning extension
+// loads.
+
+(() => {
+  const bus = window.PiPilot?.bus;
+  const api = window.electronAPI;
+  if (!bus || !api) return;
+
+  const FALLBACK_STACK = '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace';
+
+  // Each entry:
+  //   id        — unique slug (used in settings.fontFamily so we can map back)
+  //   label     — picker display
+  //   family    — CSS font-family value to apply (already quoted if needed)
+  //   stack     — full fallback stack appended after `family`
+  //   url       — optional CSS URL (e.g. Google Fonts) loaded the first time
+  //               the font is applied; null = the user must already have it
+  //   ligatures — true if the font has programming ligatures (calt+liga)
+  //   source    — 'builtin' | 'extension' | 'cache'
+  const FONTS = [
+    { id: 'jetbrains-mono',  label: 'JetBrains Mono',   family: '"JetBrains Mono"',   url: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap',  ligatures: true,  source: 'builtin' },
+    { id: 'fira-code',       label: 'Fira Code',        family: '"Fira Code"',        url: 'https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&display=swap',       ligatures: true,  source: 'builtin' },
+    { id: 'cascadia-code',   label: 'Cascadia Code',    family: '"Cascadia Code"',    url: null,                                                                                       ligatures: true,  source: 'builtin' },
+    { id: 'ibm-plex-mono',   label: 'IBM Plex Mono',    family: '"IBM Plex Mono"',    url: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap',   ligatures: false, source: 'builtin' },
+    { id: 'source-code-pro', label: 'Source Code Pro',  family: '"Source Code Pro"',  url: 'https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;500;700&display=swap', ligatures: false, source: 'builtin' },
+    { id: 'roboto-mono',     label: 'Roboto Mono',      family: '"Roboto Mono"',      url: 'https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&display=swap',     ligatures: false, source: 'builtin' },
+    { id: 'hack',            label: 'Hack',             family: '"Hack"',             url: 'https://cdn.jsdelivr.net/npm/hack-font@3/build/web/hack.css',                              ligatures: false, source: 'builtin' },
+    { id: 'inconsolata',     label: 'Inconsolata',      family: '"Inconsolata"',      url: 'https://fonts.googleapis.com/css2?family=Inconsolata:wght@400;500;700&display=swap',     ligatures: false, source: 'builtin' },
+    { id: 'space-mono',      label: 'Space Mono',       family: '"Space Mono"',       url: 'https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap',          ligatures: false, source: 'builtin' },
+    { id: 'ubuntu-mono',     label: 'Ubuntu Mono',      family: '"Ubuntu Mono"',      url: 'https://fonts.googleapis.com/css2?family=Ubuntu+Mono:wght@400;700&display=swap',          ligatures: false, source: 'builtin' },
+  ];
+  const DEFAULT_ID = 'jetbrains-mono';
+
+  // Tracks which fonts have already had their stylesheet injected so we
+  // don't add duplicate <link> elements.
+  const loaded = new Set();
+  function loadStylesheet(id, url) {
+    if (!url || loaded.has(id)) return;
+    loaded.add(id);
+    if (document.querySelector(`link[data-font-id="${id.replace(/[^a-z0-9_-]/gi, '')}"]`)) return;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = url;
+    link.setAttribute('data-font-id', id);
+    document.head.appendChild(link);
+  }
+
+  function find(idOrFamily) {
+    if (!idOrFamily) return null;
+    const exact = FONTS.find(f => f.id === idOrFamily);
+    if (exact) return exact;
+    // Try matching by family (e.g. settings.fontFamily contained '"Fira Code"').
+    const norm = String(idOrFamily).toLowerCase();
+    return FONTS.find(f => norm.includes(f.family.toLowerCase().replace(/"/g, '')))
+        || null;
+  }
+
+  function buildStack(font) {
+    return `${font.family}, ${FALLBACK_STACK}`;
+  }
+
+  // Whatever is in settings.fontFamily is what the editor uses. Built-in
+  // fonts store their id (e.g. "fira-code"); custom strings are passed
+  // through verbatim. apply() handles both.
+  function apply(value, { fromSettings = true } = {}) {
+    if (!value) value = DEFAULT_ID;
+    const font = find(value);
+    let cssValue;
+    if (font) {
+      loadStylesheet(font.id, font.url);
+      cssValue = buildStack(font);
+    } else {
+      // Custom user value (raw CSS font-family stack) — apply as-is.
+      cssValue = String(value);
+    }
+    document.documentElement.style.setProperty('--font-mono', cssValue);
+    bus.emit('fonts:applied', { value, font, css: cssValue });
+    return cssValue;
+  }
+
+  // ── Persistence cache (extension-registered fonts) ──────────────────
+  const CACHE_KEY = 'pipilot.fonts.cache';
+  function readCache() {
+    try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '{}') || {}; }
+    catch { return {}; }
+  }
+  function writeCache(cache) {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+  }
+  function rememberInCache(entry) {
+    if (entry.source === 'builtin') return;
+    const cache = readCache();
+    cache[entry.id] = {
+      label: entry.label,
+      family: entry.family,
+      url: entry.url || null,
+      ligatures: !!entry.ligatures,
+    };
+    writeCache(cache);
+  }
+  (function rehydrateCache() {
+    const cache = readCache();
+    for (const [id, entry] of Object.entries(cache)) {
+      if (FONTS.some(f => f.id === id)) continue;
+      FONTS.push({
+        id, label: entry.label || id, family: entry.family || `"${id}"`,
+        url: entry.url || null, ligatures: !!entry.ligatures, source: 'cache',
+      });
+    }
+  })();
+
+  // ── Public API ──────────────────────────────────────────────────────
+  function register(font) {
+    if (!font || typeof font.id !== 'string' || !font.id.trim()) {
+      throw new Error('fonts.register: { id } is required');
+    }
+    const id = font.id.trim();
+    if (!/^[a-z0-9][a-z0-9_-]*$/i.test(id)) {
+      throw new Error(`fonts.register: id "${id}" must be a slug`);
+    }
+    if (FONTS.some(f => f.id === id && f.source === 'builtin')) {
+      throw new Error(`fonts.register: cannot override built-in font "${id}"`);
+    }
+    if (!font.family || typeof font.family !== 'string') {
+      throw new Error('fonts.register: { family } is required (CSS font-family value)');
+    }
+    const entry = {
+      id,
+      label: font.label || id,
+      family: font.family.trim(),
+      url: font.url || null,
+      ligatures: !!font.ligatures,
+      source: font.source || 'extension',
+    };
+    const idx = FONTS.findIndex(f => f.id === id);
+    if (idx >= 0) FONTS[idx] = entry;
+    else FONTS.push(entry);
+    rememberInCache(entry);
+    bus.emit('fonts:registry-updated', { fonts: list() });
+    // If this font was the active selection, re-apply now that it's registered.
+    const current = window.PiPilot?.state?.settings?.fontFamily;
+    if (current && (current === id || current === entry.family)) apply(current);
+    return true;
+  }
+
+  function unregister(id) {
+    const idx = FONTS.findIndex(f => f.id === id);
+    if (idx < 0) return false;
+    if (FONTS[idx].source === 'builtin') return false;
+    FONTS.splice(idx, 1);
+    const cache = readCache();
+    if (cache[id]) { delete cache[id]; writeCache(cache); }
+    // Drop the loaded stylesheet so a re-install gets a fresh fetch.
+    loaded.delete(id);
+    document.querySelector(`link[data-font-id="${id.replace(/[^a-z0-9_-]/gi, '')}"]`)?.remove();
+    // If active, fall back to default.
+    const current = window.PiPilot?.state?.settings?.fontFamily;
+    if (current === id) {
+      apply(DEFAULT_ID);
+      api.settings.set('fontFamily', DEFAULT_ID).catch(() => {});
+      bus.emit('settings:changed', { key: 'fontFamily', value: DEFAULT_ID });
+    }
+    bus.emit('fonts:registry-updated', { fonts: list() });
+    return true;
+  }
+
+  function list() {
+    return FONTS.map(f => ({ id: f.id, label: f.label, family: f.family, url: f.url, ligatures: f.ligatures, source: f.source }));
+  }
+
+  // ── Ligature wiring ─────────────────────────────────────────────────
+  // Toggles font-feature-settings on the Ace editor host so ligature-
+  // capable fonts (Fira Code, JetBrains Mono, Cascadia Code) render
+  // glyphs like => != === ≠ etc. as combined characters.
+  function applyLigatures(on) {
+    let st = document.getElementById('pipilot-font-ligatures');
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'pipilot-font-ligatures';
+      document.head.appendChild(st);
+    }
+    st.textContent = on
+      ? `.ace_editor, .ace_editor * { font-feature-settings: 'calt' 1, 'liga' 1, 'clig' 1; font-variant-ligatures: contextual; }`
+      : `.ace_editor, .ace_editor * { font-feature-settings: 'calt' 0, 'liga' 0, 'clig' 0; font-variant-ligatures: none; }`;
+  }
+
+  // ── Boot apply + settings sync ──────────────────────────────────────
+  bus.on('settings:loaded', () => {
+    const v = window.PiPilot?.state?.settings?.fontFamily || DEFAULT_ID;
+    apply(v);
+    applyLigatures(!!window.PiPilot?.state?.settings?.fontLigatures);
+  });
+  bus.on('settings:changed', (p) => {
+    if (!p) return;
+    if (p.key === 'fontFamily') apply(p.value);
+    if (p.key === 'fontLigatures') applyLigatures(!!p.value);
+  });
+
+  // Push the resolved CSS into the Ace editor whenever a font is applied.
+  // Decouples ace-editor.js from the font registry — it just consumes
+  // whatever value lands here.
+  bus.on('fonts:applied', ({ css }) => {
+    const editor = window.PiPilot?.editor?.getAce?.();
+    if (!editor || !css) return;
+    try { editor.setOption('fontFamily', css); } catch {}
+  });
+  // Editor came up after fonts.js already ran — push the current font in.
+  bus.on('ace:ready', () => {
+    const v = window.PiPilot?.state?.settings?.fontFamily || DEFAULT_ID;
+    apply(v);
+    applyLigatures(!!window.PiPilot?.state?.settings?.fontLigatures);
+  });
+
+  window.PiPilot.fonts = {
+    list,
+    current: () => window.PiPilot?.state?.settings?.fontFamily || DEFAULT_ID,
+    apply: (id) => {
+      const css = apply(id);
+      api.settings.set('fontFamily', id).catch(() => {});
+      bus.emit('settings:changed', { key: 'fontFamily', value: id });
+      return css;
+    },
+    register,
+    unregister,
+    DEFAULT_ID,
+  };
+})();

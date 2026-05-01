@@ -96,6 +96,7 @@ module.exports = function register(ipcMain, ctx) {
       // Look in extensions/themes/ first, then extensions/ root.
       const candidates = [
         path.join(sourceDir, 'themes', `${wantedId}.js`),
+        path.join(sourceDir, 'fonts', `${wantedId}.js`),
         path.join(sourceDir, `${wantedId}.js`),
       ];
       for (const p of candidates) {

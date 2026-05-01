@@ -246,10 +246,16 @@
     ace.config.set('themePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7');
     ace.config.set('basePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7');
 
-    const customFont = (state.settings?.fontFamily || '').trim();
+    // fonts.js owns font resolution: it applies the saved value (id or
+    // raw CSS) and returns the final stack to use here. If fonts.js
+    // hasn't loaded for some reason, fall back to whatever the user
+    // typed verbatim, then to the JetBrains Mono default.
+    const resolvedFont = window.PiPilot?.fonts?.apply?.(state.settings?.fontFamily)
+      || (state.settings?.fontFamily || '').trim()
+      || '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace';
     aceEditor = ace.edit(hostEl, {
       theme: 'ace/theme/midnight',
-      fontFamily: customFont || '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace',
+      fontFamily: resolvedFont,
       fontSize: state.settings?.fontSize || 13,
       showPrintMargin: false,
       highlightActiveLine: true,
@@ -1554,10 +1560,9 @@
       try {
         if (!changedKey || changedKey === 'wordWrap') aceEditor.setOption('wrap', wantWrap);
         if (!changedKey || changedKey === 'fontSize') aceEditor.setOption('fontSize', state.settings?.fontSize || 13);
-        if (!changedKey || changedKey === 'fontFamily') {
-          const f = (state.settings?.fontFamily || '').trim();
-          aceEditor.setOption('fontFamily', f || '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace');
-        }
+        // fontFamily is handled entirely by fonts.js (it resolves font ids
+        // from the registry, lazy-loads web stylesheets, and pushes the
+        // resolved CSS into Ace via the fonts:applied bus event).
         if (!changedKey || changedKey === 'cursorStyle') {
           aceEditor.setOption('cursorStyle', state.settings?.cursorStyle === 'block' ? 'ace' : 'slim');
         }
@@ -1570,7 +1575,7 @@
   bus.on('settings:loaded', () => reapplyEditorSettings(null));
   bus.on('settings:changed', (payload) => {
     if (!payload) return;
-    if (['wordWrap', 'tabSize', 'fontSize', 'fontFamily', 'cursorStyle', 'lineNumbers'].includes(payload.key)) {
+    if (['wordWrap', 'tabSize', 'fontSize', 'cursorStyle', 'lineNumbers'].includes(payload.key)) {
       reapplyEditorSettings(payload.key);
     }
   });

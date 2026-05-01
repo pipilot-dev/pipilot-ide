@@ -127,6 +127,23 @@
       <div class="ctl"><label class="st-switch"><input type="checkbox" data-key="${key}" ${checked ? 'checked' : ''} /><span class="knob"></span></label></div>
     </div>`;
   }
+  // Font picker: select with each option in its own font, plus a sibling
+  // text input that's hidden unless the special "__custom__" option wins.
+  function rowFontPicker(key, label, desc, value, options, customValue) {
+    const opts = options.map(o =>
+      `<option value="${escapeHtml(o.v)}"${o.v === value ? ' selected' : ''} style="${o.style || ''}">${escapeHtml(o.t)}</option>`
+    ).join('');
+    const isCustom = value === '__custom__';
+    return `<div class="st-row st-row-font">
+      <div class="lbl"><div class="t">${label}</div>${desc ? `<small class="d">${desc}</small>` : ''}</div>
+      <div class="ctl" style="flex-direction:column;align-items:flex-end;gap:6px;">
+        <select data-key="${key}" data-font-picker>${opts}</select>
+        <input type="text" data-key="${key}" data-font-custom value="${escapeHtml(customValue || '')}"
+               placeholder='e.g. "Fira Code", monospace'
+               style="display:${isCustom ? 'block' : 'none'};min-width:240px;" />
+      </div>
+    </div>`;
+  }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   }
@@ -135,13 +152,24 @@
     if (id === 'general') {
       const themes = window.PiPilot?.theme?.list?.() || [{ id: 'midnight', label: 'Midnight Studio' }];
       const currentTheme = window.PiPilot?.theme?.current?.() || 'midnight';
+      const fonts = window.PiPilot?.fonts?.list?.() || [];
+      const currentFont = settings.fontFamily || window.PiPilot?.fonts?.DEFAULT_ID || 'jetbrains-mono';
+      const isCustomFont = currentFont && !fonts.some(f => f.id === currentFont || f.family === currentFont);
+      // Each option previews in its own font. Custom… reveals the text input.
+      const fontOpts = fonts.map(f => ({
+        v: f.id,
+        t: f.label,
+        style: `font-family: ${f.family}, ui-monospace, Consolas, monospace;`,
+      }));
+      fontOpts.push({ v: '__custom__', t: 'Custom (CSS stack)…', style: '' });
       return `
         <h2>General</h2>
         <p class="lead">Editor look-and-feel.</p>
         <div class="st-card">
           ${rowSelect('theme', 'Color Theme', 'Applies live to the entire IDE — workbench colors and the editor syntax theme.', currentTheme, themes.map(t => ({ v: t.id, t: t.label })))}
           ${rowRange('fontSize', 'Editor Font Size', 'Base font size in pixels. Live-updates the editor.', settings.fontSize || 13, 10, 24)}
-          ${rowText('fontFamily', 'Font Family', 'CSS font-family stack. Leave blank for the JetBrains Mono default.', settings.fontFamily || '', { placeholder: 'JetBrains Mono, Consolas, monospace' })}
+          ${rowFontPicker('fontFamily', 'Font Family', 'Pick a built-in coding font (lazy-loaded from CDN) or paste a custom CSS stack.', isCustomFont ? '__custom__' : currentFont, fontOpts, isCustomFont ? currentFont : '')}
+          ${rowSwitch('fontLigatures', 'Programming Ligatures', 'Render glyphs like => != === as combined symbols (looks great with Fira Code, JetBrains Mono, Cascadia Code).', !!settings.fontLigatures)}
           ${rowSelect('cursorStyle', 'Cursor Style', 'Caret rendering in code editors.', settings.cursorStyle || 'line', [
             { v: 'line', t: 'Line' },
             { v: 'block', t: 'Block' },
@@ -232,7 +260,41 @@
   }
 
   function wireInputs(root, settings) {
+    // Font picker is a dual-input control (select + custom-text). They
+    // share data-key="fontFamily" so the generic loop below would
+    // double-bind them — handle the pair specially first.
+    const fontSelect = root.querySelector('select[data-font-picker]');
+    const fontCustom = root.querySelector('input[data-font-custom]');
+    if (fontSelect && fontCustom) {
+      const saveFont = async (value) => {
+        settings.fontFamily = value;
+        try {
+          await api.settings.set('fontFamily', value);
+          bus.emit('settings:changed', { key: 'fontFamily', value });
+          flashSaved(root);
+        } catch (err) { console.warn('[settings-tab] font save failed:', err); }
+      };
+      fontSelect.addEventListener('change', () => {
+        const v = fontSelect.value;
+        if (v === '__custom__') {
+          fontCustom.style.display = 'block';
+          fontCustom.focus();
+          if (fontCustom.value.trim()) saveFont(fontCustom.value.trim());
+          return;
+        }
+        fontCustom.style.display = 'none';
+        saveFont(v);
+      });
+      fontCustom.addEventListener('change', () => {
+        if (fontSelect.value !== '__custom__') return;
+        const v = fontCustom.value.trim();
+        if (v) saveFont(v);
+      });
+    }
+
     root.querySelectorAll('[data-key]').forEach((input) => {
+      // Skip the font picker pair — handled above.
+      if (input.dataset.fontPicker !== undefined || input.dataset.fontCustom !== undefined) return;
       const key = input.dataset.key;
       const handler = async () => {
         let value;
@@ -310,11 +372,15 @@
     showSection(initialSec);
 
     // Re-render the General section when an extension registers/removes a
-    // theme so the picker reflects newly-installed contributions live.
-    const off = bus.on('themes:registry-updated', () => {
+    // theme OR a font so the pickers reflect newly-installed contributions
+    // live. Both refresh the same section.
+    const refreshGeneral = () => {
       const active = container.querySelector('.st-nav button.active')?.dataset?.sec;
       if (active === 'general') showSection('general');
-    });
+    };
+    const off1 = bus.on('themes:registry-updated', refreshGeneral);
+    const off2 = bus.on('fonts:registry-updated', refreshGeneral);
+    const off = () => { try { off1(); } catch {} try { off2(); } catch {} };
     // Best-effort cleanup: when the virtual tab closes its container is
     // detached. Use a MutationObserver on body to catch it.
     new MutationObserver((muts, obs) => {

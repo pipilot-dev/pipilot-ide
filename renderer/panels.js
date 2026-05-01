@@ -1793,7 +1793,9 @@ $RECYCLE.BIN/
       const allCats = new Set();
       for (const r of registry) (r.categories || []).forEach(c => allCats.add(c));
       for (const i of Object.values(installed)) (i.categories || []).forEach(c => allCats.add(c));
-      const categoryOrder = ['all', 'themes', ...[...allCats].filter(c => c !== 'themes').sort()];
+      const pinned = ['themes', 'fonts'];
+      const categoryOrder = ['all', ...pinned.filter(p => allCats.has(p)),
+        ...[...allCats].filter(c => !pinned.includes(c)).sort()];
 
       const chipsRow = el('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '4px' } });
       for (const cat of categoryOrder) {
@@ -1965,7 +1967,8 @@ $RECYCLE.BIN/
         if (!matchesFilter(ext)) card.style.display = 'none';
 
         const isThemeExt = (ext.categories || []).includes('themes');
-        const icon = el('div', { class: 'icon', style: { fontSize: '18px' } }, ext.icon || (isThemeExt ? '🎨' : '⚡'));
+        const isFontExt  = (ext.categories || []).includes('fonts');
+        const icon = el('div', { class: 'icon', style: { fontSize: '18px' } }, ext.icon || (isThemeExt ? '🎨' : isFontExt ? 'Aa' : '⚡'));
         const info = el('div', { class: 'info' },
           el('div', { class: 'name', style: { display: 'flex', alignItems: 'center', gap: '6px' } },
             ext.name || ext.id,
