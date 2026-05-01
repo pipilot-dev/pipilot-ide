@@ -137,8 +137,8 @@
     return `<div class="st-row st-row-font">
       <div class="lbl"><div class="t">${label}</div>${desc ? `<small class="d">${desc}</small>` : ''}</div>
       <div class="ctl" style="flex-direction:column;align-items:flex-end;gap:6px;">
-        <select data-key="${key}" data-font-picker>${opts}</select>
-        <input type="text" data-key="${key}" data-font-custom value="${escapeHtml(customValue || '')}"
+        <select data-key="${key}" data-font-picker="1">${opts}</select>
+        <input type="text" data-key="${key}" data-font-custom="1" value="${escapeHtml(customValue || '')}"
                placeholder='e.g. "Fira Code", monospace'
                style="display:${isCustom ? 'block' : 'none'};min-width:240px;" />
       </div>
@@ -267,6 +267,7 @@
     const fontCustom = root.querySelector('input[data-font-custom]');
     if (fontSelect && fontCustom) {
       const saveFont = async (value) => {
+        console.log('[settings-tab] saving font:', value);
         settings.fontFamily = value;
         try {
           await api.settings.set('fontFamily', value);
@@ -276,6 +277,7 @@
       };
       fontSelect.addEventListener('change', () => {
         const v = fontSelect.value;
+        console.log('[settings-tab] font select changed →', v);
         if (v === '__custom__') {
           fontCustom.style.display = 'block';
           fontCustom.focus();
@@ -290,6 +292,8 @@
         const v = fontCustom.value.trim();
         if (v) saveFont(v);
       });
+    } else {
+      console.warn('[settings-tab] font picker elements missing — select:', !!fontSelect, 'custom:', !!fontCustom);
     }
 
     root.querySelectorAll('[data-key]').forEach((input) => {

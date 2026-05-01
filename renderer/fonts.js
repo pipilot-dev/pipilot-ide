@@ -43,18 +43,35 @@
   ];
   const DEFAULT_ID = 'jetbrains-mono';
 
-  // Tracks which fonts have already had their stylesheet injected so we
-  // don't add duplicate <link> elements.
-  const loaded = new Set();
+  // Tracks per-font stylesheet load promises so the Ace push waits for
+  // the <link> to actually parse before measuring. document.fonts.load
+  // can't resolve a FontFace that hasn't been declared yet, so calling
+  // it before the @font-face parses returns an empty set immediately
+  // and Ace renders with the fallback.
+  const loadPromises = new Map();
   function loadStylesheet(id, url) {
-    if (!url || loaded.has(id)) return;
-    loaded.add(id);
-    if (document.querySelector(`link[data-font-id="${id.replace(/[^a-z0-9_-]/gi, '')}"]`)) return;
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = url;
-    link.setAttribute('data-font-id', id);
-    document.head.appendChild(link);
+    if (!url) return Promise.resolve();
+    if (loadPromises.has(id)) return loadPromises.get(id);
+    const safeId = id.replace(/[^a-z0-9_-]/gi, '');
+    let link = document.querySelector(`link[data-font-id="${safeId}"]`);
+    const p = new Promise((resolve) => {
+      if (link && link.sheet) return resolve();
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = url;
+        link.setAttribute('data-font-id', safeId);
+        document.head.appendChild(link);
+      }
+      link.addEventListener('load', () => resolve(), { once: true });
+      link.addEventListener('error', () => resolve(), { once: true });
+      // Safety net: a stylesheet that's already cached may have fired
+      // load before we attached the listener. Resolve after a frame if
+      // the sheet is reachable.
+      requestAnimationFrame(() => { if (link.sheet) resolve(); });
+    });
+    loadPromises.set(id, p);
+    return p;
   }
 
   function find(idOrFamily) {
@@ -86,6 +103,7 @@
       cssValue = String(value);
     }
     document.documentElement.style.setProperty('--font-mono', cssValue);
+    console.log('[fonts] apply', { value, family: font?.family, url: font?.url, css: cssValue });
     bus.emit('fonts:applied', { value, font, css: cssValue });
     return cssValue;
   }
@@ -222,9 +240,17 @@
   bus.on('fonts:applied', async ({ css, font }) => {
     const editor = window.PiPilot?.editor?.getAce?.();
     if (!editor || !css) return;
+    // 1. Wait for the @font-face stylesheet to finish parsing so
+    //    document.fonts knows about the font we're about to load.
+    if (font && font.url) {
+      try { await loadStylesheet(font.id, font.url); } catch {}
+    }
+    // 2. Wait for the actual font face (regular weight) to download.
     if (font && font.family && document.fonts && typeof document.fonts.load === 'function') {
       try { await document.fonts.load(`14px ${font.family}`); } catch {}
     }
+    // 3. Push to Ace + invalidate its character-metric cache so cursor
+    //    position and line widths re-measure with the new font.
     try {
       editor.setOption('fontFamily', css);
       if (editor.renderer && typeof editor.renderer.updateFontSize === 'function') {
