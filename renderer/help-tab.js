@@ -164,11 +164,41 @@
     }
   }
 
+  // GitHub-style heading slug. Mirrors what `marked` would produce with a
+  // gfm-heading-id plugin, so links like `[x](page.md#section-name)` work.
+  function slugifyHeading(text) {
+    return String(text || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, '')   // strip punctuation
+      .replace(/\s+/g, '-')        // spaces → dashes
+      .replace(/-+/g, '-')         // collapse dashes
+      .replace(/^-|-$/g, '');
+  }
+
   async function renderPage(slug) {
     if (state.cache.has(slug)) return state.cache.get(slug);
     const md = await loadPage(slug);
     await ensureMarked();
-    const html = window.marked ? window.marked.parse(md) : `<pre>${escapeHtml(md)}</pre>`;
+    let html;
+    if (window.marked) {
+      // Custom renderer: stamp `id="…"` on every heading so anchor jumps work.
+      const renderer = new window.marked.Renderer();
+      const usedIds = new Map();
+      renderer.heading = (text, level) => {
+        // marked v12 sometimes passes an object — handle both shapes.
+        const raw = typeof text === 'string' ? text : (text?.text || text?.raw || '');
+        const plain = raw.replace(/<[^>]+>/g, '');
+        let id = slugifyHeading(plain);
+        const seen = usedIds.get(id) || 0;
+        if (seen) id = `${id}-${seen}`;
+        usedIds.set(id, seen + 1);
+        return `<h${level} id="${escapeHtml(id)}">${raw}</h${level}>`;
+      };
+      html = window.marked.parse(md, { renderer });
+    } else {
+      html = `<pre>${escapeHtml(md)}</pre>`;
+    }
     state.cache.set(slug, html);
     return html;
   }
@@ -203,24 +233,58 @@
   let sideEl = null;
   let mainEl = null;
 
-  async function navigate(slug) {
+  function scrollToHash(hash) {
+    if (!hash || !mainEl) return;
+    const id = hash.replace(/^#/, '');
+    const target = mainEl.querySelector(`#${CSS.escape(id)}`);
+    if (target) target.scrollIntoView({ behavior: 'auto', block: 'start' });
+  }
+
+  async function navigate(slug, hash) {
     state.active = slug;
     if (sideEl) renderSidebar(sideEl);
-    if (mainEl) {
-      mainEl.innerHTML = '<div class="ht-empty">Loading…</div>';
-      const html = await renderPage(slug);
-      // Wrap in .ht-content so styles apply
-      mainEl.innerHTML = `<div class="ht-content">${html}</div>`;
-      // Intercept anchor clicks for in-doc links to other pages
-      mainEl.querySelectorAll('a').forEach((a) => {
-        const href = a.getAttribute('href') || '';
-        if (href.endsWith('.md')) {
-          const match = href.match(/([^/]+?)\.md$/);
-          if (match && PAGES.some(p => p.slug === match[1])) {
-            a.addEventListener('click', (e) => { e.preventDefault(); navigate(match[1]); });
+    if (!mainEl) return;
+    mainEl.innerHTML = '<div class="ht-empty">Loading…</div>';
+    const html = await renderPage(slug);
+    mainEl.innerHTML = `<div class="ht-content">${html}</div>`;
+    // Rewire every link: route .md jumps internally, scroll bare hashes,
+    // and shunt external URLs to the embedded browser (or shell.openExternal)
+    // so they don't navigate the renderer away from the IDE shell.
+    mainEl.querySelectorAll('a').forEach((a) => {
+      const href = a.getAttribute('href') || '';
+      if (!href) return;
+      // Bare anchor — same page jump
+      if (href.startsWith('#')) {
+        a.addEventListener('click', (e) => { e.preventDefault(); scrollToHash(href); });
+        return;
+      }
+      // Sibling .md page (with optional #anchor)
+      const mdMatch = href.match(/([^/]+?)\.md(#.+)?$/);
+      if (mdMatch && PAGES.some(p => p.slug === mdMatch[1])) {
+        const targetSlug = mdMatch[1];
+        const targetHash = mdMatch[2] || '';
+        a.addEventListener('click', (e) => { e.preventDefault(); navigate(targetSlug, targetHash); });
+        return;
+      }
+      // External URL — open in embedded browser tab (http/https) or
+      // hand off to the OS (mailto). Either way: don't let the renderer
+      // follow the link, which would replace the IDE shell.
+      if (/^(https?|mailto):/i.test(href)) {
+        a.addEventListener('click', (e) => {
+          e.preventDefault();
+          if (/^mailto:/i.test(href)) {
+            try { window.electronAPI?.openExternal?.(href); } catch {}
+            return;
           }
-        }
-      });
+          try { bus.emit('browser:open', { url: href }); }
+          catch { try { window.electronAPI?.openExternal?.(href); } catch {} }
+        });
+      }
+    });
+    if (hash) {
+      // Wait one frame so layout settles before scrolling.
+      requestAnimationFrame(() => scrollToHash(hash));
+    } else {
       mainEl.scrollTop = 0;
     }
   }
@@ -253,18 +317,28 @@
     for (const p of PAGES) loadPage(p.slug);
   }
 
-  function openHelpTab(slug) {
+  function openHelpTab(target) {
     const editor = window.PiPilot?.editor;
     if (!editor || typeof editor.openVirtualTab !== 'function') return;
+    // Accept "slug" or "slug#anchor" so callers can deep-link.
+    let slug = '';
+    let hash = '';
+    if (typeof target === 'string') {
+      const m = target.match(/^([^#]+)(#.+)?$/);
+      if (m) { slug = m[1]; hash = m[2] || ''; }
+    }
     if (slug && PAGES.some(p => p.slug === slug)) state.active = slug;
-    try {
-      if (editor.isVirtualTab && editor.isVirtualTab(TAB_ID) && typeof editor.closeFile === 'function') {
-        editor.closeFile(TAB_ID);
-      }
-    } catch {}
+    const wasOpen = (() => {
+      try { return editor.isVirtualTab && editor.isVirtualTab(TAB_ID); }
+      catch { return false; }
+    })();
     editor.openVirtualTab({
       id: TAB_ID, name: 'Help', icon: '📚', mount,
     });
+    // If the tab was already mounted, openVirtualTab just switches to it —
+    // the mount fn is *not* re-run, so we have to navigate manually.
+    if (wasOpen && slug) navigate(slug, hash);
+    else if (hash) requestAnimationFrame(() => scrollToHash(hash));
   }
 
   function escapeHtml(s) {
