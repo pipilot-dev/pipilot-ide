@@ -1,5 +1,9 @@
-name: Build & Release PiPilot IDE
+name: Build & Release
 
+# Triggered by:
+#   - pushing a `v*` tag (e.g. v0.2.0)         → builds + draft release
+#   - manual run from the Actions tab          → builds + uploads artifacts
+#                                                 (no release created)
 on:
   push:
     tags:
@@ -7,28 +11,49 @@ on:
   workflow_dispatch:
     inputs:
       draft:
-        description: 'Create as draft release'
+        description: 'Create a draft release after build (only when run on a tag commit)'
         required: false
-        default: true
-        type: boolean
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
 
 permissions:
-  contents: write
+  contents: write   # needed to attach artifacts to the GitHub Release
 
 jobs:
   build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'windows-latest'
-            args: '--win'
-          - platform: 'macos-latest'
-            args: '--mac'
-          - platform: 'ubuntu-24.04'
-            args: '--linux'
-
-    runs-on: ${{ matrix.platform }}
+          - os: windows-latest
+            label: windows-x64
+            forge_args: ''                         # default arch (x64)
+            artifact_glob: |
+              out/make/**/*.exe
+              out/make/**/*.nupkg
+              out/make/**/RELEASES
+          - os: macos-latest
+            label: macos-arm64
+            forge_args: '--arch=arm64'
+            artifact_glob: |
+              out/make/**/*.zip
+              out/make/**/*.dmg
+          - os: macos-13
+            label: macos-x64
+            forge_args: '--arch=x64'
+            artifact_glob: |
+              out/make/**/*.zip
+              out/make/**/*.dmg
+          - os: ubuntu-22.04
+            label: linux-x64
+            forge_args: ''
+            artifact_glob: |
+              out/make/**/*.deb
+              out/make/**/*.rpm
+              out/make/**/*.zip
 
     steps:
       - name: Checkout
@@ -37,31 +62,82 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '20'
+          cache: 'npm'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      # Linux: install system dependencies for Electron
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-24.04'
+      # Electron's chromium needs a handful of system libraries on linux
+      # builders. Pin to ubuntu-22.04 so libasound2 still works (it was
+      # renamed to libasound2t64 in 24.04).
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libnss3-dev libatk-bridge2.0-0 libdrm2 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64
+          sudo apt-get install -y \
+            rpm fakeroot dpkg \
+            libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 libxdamage1 \
+            libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2
 
+      # Install + rebuild native modules (node-pty) for Electron's ABI.
+      # postinstall runs scripts/copy-fonts.js + electron-rebuild.
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: npm install --no-audit --no-fund
 
-      - name: Build frontend
-        run: pnpm build
+      # Cache the electron binary download between runs to shave ~30s
+      - name: Cache Electron download
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+            ~/Library/Caches/electron
+          key: electron-${{ matrix.os }}-${{ hashFiles('package-lock.json') }}
 
-      - name: Build Electron main + preload
-        run: node scripts/build-electron.mjs
-
-      - name: Package app
-        run: pnpm exec electron-builder ${{ matrix.args }} --publish always
+      # Forge runs packager + the platform makers configured in
+      # forge.config.js (squirrel/zip/deb/rpm).
+      - name: Build with electron-forge
+        run: npm run make -- ${{ matrix.forge_args }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Skip code-signing if no certs are present (default for OSS builds).
+          # Add APPLE_ID / APPLE_ID_PASSWORD / APPLE_TEAM_ID secrets to enable
+          # macOS notarisation; CSC_LINK / CSC_KEY_PASSWORD for Windows signing.
+          DEBUG: 'electron-forge:*'
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipilot-${{ matrix.label }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    # Only create a release when the workflow was triggered by a tag push.
+    # Manual workflow_dispatch runs just upload artifacts (above) so you can
+    # smoke-test the matrix without polluting Releases.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifact tree
+        run: |
+          mkdir -p release
+          find dist -type f \( -name '*.exe' -o -name '*.nupkg' -o -name 'RELEASES' \
+                             -o -name '*.dmg' -o -name '*.zip' \
+                             -o -name '*.deb' -o -name '*.rpm' \) \
+            -exec cp -v {} release/ \;
+          ls -lah release
+
+      - name: Create / update draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}   # v0.2.0-rc.1 etc
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release/*
