@@ -65,6 +65,46 @@ Tokens are encrypted via Electron's `safeStorage` (OS keychain on macOS/Windows,
 
 Agent runs continue when you minimise the IDE — Electron's `powerSaveBlocker` is held while a stream is active so your laptop doesn't sleep mid-deploy. On suspend / lock, the agent pauses gracefully and resumes on wake.
 
+## Slash commands
+
+Type `/` at the start of the chat input to summon the command palette. Two flavours:
+
+**Prompt scaffolds** — drop a preset opener into the input so you can finish the sentence:
+
+| Command | What it inserts |
+|---------|----------------|
+| `/build`     | "Build me a complete, production-quality …" |
+| `/design`    | "Design a beautiful, modern UI for …" |
+| `/fix`       | "Find and fix the bug in …" |
+| `/refactor`  | "Refactor and improve …" |
+| `/explain`   | "Explain how …" |
+| `/search`    | "Search the project for …" |
+| `/deploy`    | "Deploy the current project." (ready to send) |
+| `/tree`      | "Show the complete project file tree." (ready to send) |
+
+**Actions** — fire immediately, never sent to the agent:
+
+| Command | What it does |
+|---------|----------------|
+| `/clear`              | Wipe the on-screen chat view (history is preserved in IndexedDB) |
+| `/new`                | Start a fresh chat session |
+| `/help`               | Open the in-IDE Help tab |
+| `/effort <level>`     | Set reasoning effort — `none`, `low`, `medium`, `high`, `xhigh` |
+| `/mode <mode>`        | Switch agent mode — `agent` or `plan` |
+| `/file <path>`        | Attach a file by relative or absolute path |
+
+`↑` / `↓` navigate the popup, `Enter` / `Tab` accepts, `Esc` dismisses.
+
+## Inline AI in the editor
+
+Three things happen inside the editor itself, no chat panel needed:
+
+- **Ghost-text completions** — Codestral FIM streams a greyed-out suggestion at the cursor. `Tab` accepts, `Esc` rejects, anything else clears it. Toggle in **Settings → AI** or via the editor context menu (Toggle Inline Completions).
+- **Inline Chat (`Ctrl+I`)** — opens a 520-px floating widget over the editor. Has preset chips ("Fix bugs", "Refactor", "Explain", "Add comments", "Add docs") plus a free-text prompt. Streams the rewrite, shows accept / reject — accept replaces the selection (or the whole file if no selection).
+- **Selection context menu** — right-click any selection for: *Add to Chat*, *Explain*, *Review*, *Fix*, *Refactor*, *Add Comments*, *Add Docs*. Each kicks off a streamed turn in the chat panel with the selection as context.
+
+All three use the same Codestral key as the main agent — set `CODESTRAL_API_KEY` in your `.env` to override the bundled one.
+
 ## Sessions + history
 
 Every conversation is a session, stored in IndexedDB (`chatdb.js`). Switch between sessions via the dropdown above the input ("New Chat ▾"). Sessions persist forever — clear individually or all at once.

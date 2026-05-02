@@ -4990,6 +4990,8 @@
   }
 
   // ---------- Feature #5: Slash Commands ----------
+  // Two flavors: prompt scaffolds (drop preset text into the input) and
+  // actions (intercepted in sendMessage, never reach the agent).
   const SLASH_COMMANDS = [
     { id: 'build', label: '/build', desc: 'Scaffold a new project', icon: '&#128640;', prompt: 'Build me a complete, production-quality ' },
     { id: 'design', label: '/design', desc: 'Create a stunning UI', icon: '&#127912;', prompt: 'Design a beautiful, modern UI for ' },
@@ -4999,6 +5001,12 @@
     { id: 'deploy', label: '/deploy', desc: 'Deploy the project', icon: '&#127760;', prompt: 'Deploy the current project.' },
     { id: 'search', label: '/search', desc: 'Search files and code', icon: '&#128269;', prompt: 'Search the project for ' },
     { id: 'tree', label: '/tree', desc: 'Show project structure', icon: '&#128193;', prompt: 'Show the complete project file tree.' },
+    { id: 'clear', label: '/clear', desc: 'Clear current chat view', icon: '&#129529;', action: true },
+    { id: 'new', label: '/new', desc: 'Start a fresh chat session', icon: '&#10010;', action: true },
+    { id: 'help', label: '/help', desc: 'Open the in-IDE docs', icon: '&#10067;', action: true },
+    { id: 'effort', label: '/effort', desc: 'Set reasoning effort: none|low|medium|high|xhigh', icon: '&#129504;', action: true, takesArgs: true },
+    { id: 'mode', label: '/mode', desc: 'Switch agent|plan mode', icon: '&#9881;&#65039;', action: true, takesArgs: true },
+    { id: 'file', label: '/file', desc: 'Attach a file by path', icon: '&#128206;', action: true, takesArgs: true },
   ];
 
   function showSlashPopup(query) {
@@ -5038,21 +5046,119 @@
   function selectSlashCommand(cmdId) {
     const cmd = SLASH_COMMANDS.find(c => c.id === cmdId);
     if (!cmd || !inputEl) return;
+    if (cmd.action) {
+      if (cmd.takesArgs) {
+        // Drop in `/effort ` so the user can finish the argument; don't fire.
+        inputEl.value = cmd.label + ' ';
+        inputEl.focus();
+        autoResize();
+        hideSlashPopup();
+        const pos = inputEl.value.length;
+        inputEl.setSelectionRange(pos, pos);
+      } else {
+        inputEl.value = '';
+        autoResize();
+        hideSlashPopup();
+        runSlashAction(cmd.id, '');
+      }
+      return;
+    }
     inputEl.value = cmd.prompt;
     inputEl.focus();
     autoResize();
     hideSlashPopup();
-    // Place cursor at end or before last word if prompt ends with space
     const pos = cmd.prompt.length;
     inputEl.setSelectionRange(pos, pos);
+  }
+
+  // Execute action-style slash commands. Returns true if the input was an action
+  // (so sendMessage can short-circuit instead of forwarding to the agent).
+  async function runSlashAction(id, args) {
+    const trimmed = String(args || '').trim();
+    if (id === 'clear') {
+      if (messagesEl) messagesEl.innerHTML = '';
+      messages = [];
+      currentAssistantEl = null;
+      currentAssistantBlocks = [];
+      currentAssistantMsgId = null;
+      sequentialThinkingCount = 0;
+      showWelcomeState();
+      bus.emit('toast:show', { type: 'ok', message: 'Chat view cleared (history kept)' });
+      return true;
+    }
+    if (id === 'new') {
+      try { await newSession(); }
+      catch (e) { bus.emit('toast:show', { type: 'error', message: 'Could not start session: ' + (e?.message || e) }); }
+      return true;
+    }
+    if (id === 'help') {
+      try {
+        const open = window.PiPilot?.help?.open;
+        if (typeof open === 'function') open(trimmed || undefined);
+        else bus.emit('help:open', trimmed || undefined);
+      } catch {}
+      return true;
+    }
+    if (id === 'effort') {
+      const want = trimmed.toLowerCase();
+      const ok = EFFORT_LEVELS.some(l => l.id === want);
+      if (!ok) {
+        bus.emit('toast:show', { type: 'warn', message: 'Usage: /effort none|low|medium|high|xhigh' });
+        return true;
+      }
+      setEffort(want);
+      bus.emit('toast:show', { type: 'ok', message: 'Reasoning effort: ' + want });
+      return true;
+    }
+    if (id === 'mode') {
+      const want = trimmed.toLowerCase();
+      if (want !== 'agent' && want !== 'plan') {
+        bus.emit('toast:show', { type: 'warn', message: 'Usage: /mode agent|plan' });
+        return true;
+      }
+      setMode(want);
+      bus.emit('toast:show', { type: 'ok', message: 'Mode: ' + want });
+      return true;
+    }
+    if (id === 'file') {
+      if (!trimmed) {
+        bus.emit('toast:show', { type: 'warn', message: 'Usage: /file <relative-or-absolute-path>' });
+        return true;
+      }
+      let full = trimmed;
+      if (state.projectPath && !/^([a-zA-Z]:[\\/]|\/)/.test(full)) {
+        full = state.projectPath.replace(/[\\/]+$/, '') + '/' + full;
+      }
+      const name = full.split(/[\\/]/).pop() || full;
+      if (!attachments.some(a => a.path === full)) {
+        attachments.push({ path: full, name });
+        renderAttachments();
+        bus.emit('toast:show', { type: 'ok', message: 'Attached: ' + name });
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // Detect "/<cmd> <args>" at the start of input. Returns { id, args } if it
+  // matches an action command, otherwise null.
+  function parseActionCommand(text) {
+    const m = String(text || '').match(/^\/([a-zA-Z]+)(?:\s+([\s\S]*))?$/);
+    if (!m) return null;
+    const cmd = SLASH_COMMANDS.find(c => c.id === m[1].toLowerCase() && c.action);
+    if (!cmd) return null;
+    return { id: cmd.id, args: m[2] || '' };
   }
 
   function handleSlashInput() {
     if (!inputEl) return;
     const val = inputEl.value;
-    if (val.startsWith('/') && !val.includes(' ')) {
-      const query = val.slice(1).toLowerCase();
-      showSlashPopup(query);
+    // Match either `/cmd` or `/cmd <args>` so action commands with arguments
+    // (like `/effort high`) keep the popup hidden once the user has typed past
+    // the command name — but `/cmd` on its own keeps it open for completion.
+    const m = val.match(/^\/([a-zA-Z]*)$/);
+    if (m) {
+      showSlashPopup(m[1].toLowerCase());
     } else {
       hideSlashPopup();
     }
@@ -5163,6 +5269,20 @@
   async function sendMessage() {
     const text = inputEl.value.trim();
     if (!text) return;
+
+    // Intercept action-style slash commands BEFORE the project-path guard so
+    // /help works even when no project is open. Action commands clear the input
+    // themselves.
+    const action = parseActionCommand(text);
+    if (action) {
+      hideSlashPopup();
+      inputEl.value = '';
+      autoResize();
+      clearDraft();
+      await runSlashAction(action.id, action.args);
+      return;
+    }
+
     if (!state.projectPath) {
       bus.emit('toast:show', { message: 'Open a project first', type: 'warn' });
       return;

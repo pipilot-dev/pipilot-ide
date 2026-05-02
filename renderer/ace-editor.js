@@ -171,8 +171,34 @@
     const activeFile = activePath && openDocs.get(activePath) && !openDocs.get(activePath).virtual
       ? activePath
       : (fileTabs[fileTabs.length - 1] || null);
+    // Snapshot viewState for the currently-active doc so it survives a reload —
+    // the doc.viewState field is only refreshed on switchTo, never for the live tab.
+    if (activeFile && aceEditor) {
+      const liveDoc = openDocs.get(activeFile);
+      if (liveDoc && !liveDoc.virtual) {
+        liveDoc.viewState = {
+          scrollTop: aceEditor.session.getScrollTop(),
+          scrollLeft: aceEditor.session.getScrollLeft(),
+          cursor: aceEditor.getCursorPosition(),
+          selection: aceEditor.getSelectionRange(),
+        };
+      }
+    }
+    const viewStates = {};
+    for (const p of fileTabs) {
+      const d = openDocs.get(p);
+      if (d && d.viewState) {
+        const sel = d.viewState.selection;
+        viewStates[p] = {
+          scrollTop: d.viewState.scrollTop,
+          scrollLeft: d.viewState.scrollLeft,
+          cursor: d.viewState.cursor,
+          selection: sel && sel.start && sel.end ? { start: sel.start, end: sel.end } : null,
+        };
+      }
+    }
     try {
-      localStorage.setItem(key, JSON.stringify({ tabs: fileTabs, active: activeFile, ts: Date.now() }));
+      localStorage.setItem(key, JSON.stringify({ tabs: fileTabs, active: activeFile, viewStates, ts: Date.now() }));
     } catch {}
   }
 
@@ -200,6 +226,31 @@
     } catch {}
     const tabs = Array.isArray(saved?.tabs) ? saved.tabs : [];
     if (!tabs.length) return;
+    const savedStates = (saved && typeof saved.viewStates === 'object' && saved.viewStates) ? saved.viewStates : {};
+
+    // Re-hydrate a saved viewState onto the in-memory doc so the next switchTo
+    // (and the active-tab path below) restore cursor + scroll without extra wiring.
+    const applyViewState = (path) => {
+      const vs = savedStates[path];
+      if (!vs) return;
+      const doc = openDocs.get(path);
+      if (!doc || doc.virtual) return;
+      doc.viewState = {
+        scrollTop: vs.scrollTop || 0,
+        scrollLeft: vs.scrollLeft || 0,
+        cursor: vs.cursor || { row: 0, column: 0 },
+        selection: vs.selection || null,
+      };
+      // If this doc is currently bound to the editor, push the cursor to the
+      // live session too — otherwise the next switchTo will snapshot the
+      // not-yet-applied (0, 0) cursor and overwrite our saved state.
+      if (aceEditor && aceEditor.session === doc.session) {
+        aceEditor.session.setScrollTop(doc.viewState.scrollTop);
+        aceEditor.session.setScrollLeft(doc.viewState.scrollLeft);
+        aceEditor.moveCursorToPosition(doc.viewState.cursor);
+        if (doc.viewState.selection) aceEditor.selection.setRange(doc.viewState.selection);
+      }
+    };
 
     // Open the active tab first so the user sees something useful immediately,
     // then restore the rest in the background, yielding to the event loop
@@ -212,6 +263,7 @@
     let opened = 0;
     try { await openFile(activePath); opened++; } catch {}
     if (saved?.active && openDocs.has(saved.active)) switchTo(saved.active);
+    applyViewState(activePath);
     if (openDocs.has('__welcome__')) closeFile('__welcome__');
     console.log(`[startup] restoreOpenTabsForProject active tab took ${(performance.now() - t0).toFixed(0)}ms`);
 
@@ -228,7 +280,13 @@
         return;
       }
       const p = rest[i++];
-      openFile(p).then(() => { opened++; }, () => {}).finally(() => yieldFn(next));
+      // openFile triggers switchTo(p), which (line ~940) snapshots the *current*
+      // doc's cursor as its viewState. Apply the saved viewState before that
+      // snapshot runs so the saved cursor isn't overwritten with (0, 0).
+      openFile(p).then(() => {
+        opened++;
+        applyViewState(p);
+      }, () => {}).finally(() => yieldFn(next));
     }
     if (rest.length) yieldFn(next);
     else persistOpenTabs();

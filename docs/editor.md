@@ -49,6 +49,20 @@ Out of the box you get:
 
 For real LSP / type-checking, add a language extension (TypeScript LSP integration is on the roadmap). The chat agent can do "type-check this" with `mcp__pipilot__get_diagnostics` against the project.
 
+## Inline AI
+
+You don't have to leave the editor to talk to the agent.
+
+- **Ghost-text completions** — as you type, Codestral FIM streams a greyed-out suggestion at the cursor. `Tab` accepts, `Esc` rejects. Toggle in **Settings → AI → Inline Completions** or via the editor right-click menu (Toggle Inline Completions).
+- **Inline Chat (`Ctrl+I`)** — opens a floating widget over the editor with preset chips (*Fix bugs*, *Refactor*, *Explain*, *Add comments*, *Add docs*) plus a free-text prompt. Streams a rewrite of the current selection (or whole file), shows a side-by-side preview, accept replaces the text.
+- **Selection actions** — right-click any selection for *Add to Chat*, *Explain*, *Review*, *Fix*, *Refactor*, *Add Comments*, *Add Docs*. Each opens the chat panel and starts a streamed turn with the selection as context.
+
+See [AI Agent → Inline AI](ai-agent.md#inline-ai-in-the-editor) for the full surface.
+
+## Tab + cursor restoration
+
+Open tabs and the **cursor / scroll position** of every tab persist per-project. Close the IDE in the middle of a function, reopen the project, your cursor is back exactly where it was — including selection range and horizontal scroll. State lives in `localStorage.pipilot:editor-tabs:<projectPath>` and is rewritten on every tab switch and on shutdown.
+
 ## Settings that affect the editor
 
 All live-applied — change them in **Settings → General / Editor** and you see the result immediately, no reload.
