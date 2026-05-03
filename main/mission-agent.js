@@ -51,11 +51,27 @@ function runMissionAgent(opts, onEvent) {
   const safeEmit = (evt) => { try { onEvent && onEvent(evt); } catch (err) { console.warn('[mission-agent] onEvent threw', err); } };
 
   const promise = (async () => {
+    // Hard auth gate — same as the chat agent. Missions run unattended so a
+    // missing JWT must surface as a clear, structured error event rather
+    // than as a confusing key-missing failure deep inside the SDK.
+    let authJwt = null;
+    let proxyUrl = null;
+    try {
+      const auth = require('./ipc-auth');
+      authJwt = auth.getJwtSync();
+      proxyUrl = auth.getProxyUrl();
+    } catch {}
+    if (!authJwt) {
+      safeEmit({ type: 'error', message: 'Sign in with GitHub to run missions.' });
+      safeEmit({ type: 'result', subtype: 'error', is_error: true, totalCostUsd: 0, durationMs: 0, usage: null });
+      return { ok: false, error: 'unauthenticated' };
+    }
+
     let sdk;
     try {
       sdk = await loadSdk();
     } catch (err) {
-      safeEmit({ type: 'error', message: `Failed to load Claude Agent SDK: ${err.message}` });
+      safeEmit({ type: 'error', message: `Failed to load Agent SDK: ${err.message}` });
       safeEmit({ type: 'result', subtype: 'error', is_error: true, totalCostUsd: 0, durationMs: 0, usage: null });
       return { ok: false, error: err.message };
     }
@@ -95,6 +111,17 @@ function runMissionAgent(opts, onEvent) {
           : ['Read', 'Edit', 'Write', 'MultiEdit', 'Glob', 'Grep', 'mcp__pipilot__*'],
         env: {
           ENABLE_TOOL_SEARCH: 'auto',
+          // Route through the auth-gated proxy with the user's JWT. Mirrors
+          // the wiring in ipc-agent.js loadRuntimeEnvVars so missions get
+          // the same authenticated transport as the chat agent.
+          ANTHROPIC_BASE_URL:  proxyUrl,
+          ANTHROPIC_AUTH_TOKEN: authJwt,
+          ANTHROPIC_API_KEY:    authJwt,
+          // Forward model-name overrides from the parent process if the
+          // operator set them in .env.
+          ...(process.env.ANTHROPIC_DEFAULT_SONNET_MODEL ? { ANTHROPIC_DEFAULT_SONNET_MODEL: process.env.ANTHROPIC_DEFAULT_SONNET_MODEL } : {}),
+          ...(process.env.ANTHROPIC_DEFAULT_OPUS_MODEL   ? { ANTHROPIC_DEFAULT_OPUS_MODEL:   process.env.ANTHROPIC_DEFAULT_OPUS_MODEL   } : {}),
+          ...(process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL  ? { ANTHROPIC_DEFAULT_HAIKU_MODEL:  process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL  } : {}),
           ...(extraEnv && typeof extraEnv === 'object' ? extraEnv : {}),
         },
         // Auto-allow tool uses — missions are unattended so we never
