@@ -3,6 +3,8 @@
 // Auto-completes `</` with the nearest unclosed tag.
 
 (function (PiPilot, bus, api, state, db) {
+  if (window.__pipilotBuiltinAutoCloseTag) return;
+  window.__pipilotBuiltinAutoCloseTag = true;
   var editor = PiPilot.editor && PiPilot.editor.getAce ? PiPilot.editor.getAce() : null;
   if (!editor) return;
 

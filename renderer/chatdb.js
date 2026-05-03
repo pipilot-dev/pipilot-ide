@@ -6,6 +6,7 @@
 
   function openDB() {
     if (db) return Promise.resolve(db);
+    const _t0 = performance.now();
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = (e) => {
@@ -21,7 +22,11 @@
           ms.createIndex('timestamp', 'timestamp', { unique: false });
         }
       };
-      req.onsuccess = (e) => { db = e.target.result; resolve(db); };
+      req.onsuccess = (e) => {
+        db = e.target.result;
+        console.log(`[startup] chatDB.openDB took ${(performance.now() - _t0).toFixed(0)}ms`);
+        resolve(db);
+      };
       req.onerror = (e) => reject(e.target.error);
     });
   }

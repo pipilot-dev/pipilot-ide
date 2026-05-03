@@ -134,6 +134,11 @@ function isBinary(buf) {
 }
 
 function shouldIndex(filePath) {
+  // Skip files inside directories we never want to index
+  const parts = filePath.replace(/\\/g, '/').split('/');
+  for (const p of parts) {
+    if (SKIP_DIRS.has(p)) return false;
+  }
   const ext = path.extname(filePath).toLowerCase();
   const base = path.basename(filePath);
   if (ext === '.json') return INDEXABLE_JSON.has(base);

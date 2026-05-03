@@ -1,10 +1,34 @@
 (() => {
   const { bus } = window.PiPilot;
 
+  let lastSummary = null;
+
   function setBranch(name) {
     const el = $('#status-branch');
     if (!el) return;
     el.textContent = `⎇ ${name || '—'}`;
+  }
+
+  function renderSummary(s) {
+    const el = $('#status-branch');
+    if (!el) return;
+    lastSummary = s;
+    if (!s || !s.hasRepo) {
+      el.textContent = `⎇ ${s?.branch || '—'}`;
+      el.title = 'No git repository';
+      return;
+    }
+    const dirty = s.dirty > 0 ? '*' : '';
+    const ahead = s.ahead > 0 ? ` ↑${s.ahead}` : '';
+    const behind = s.behind > 0 ? ` ↓${s.behind}` : '';
+    const branch = s.branch || '—';
+    el.textContent = `⎇ ${branch}${dirty}${behind}${ahead}`;
+    const parts = [`Branch: ${branch}`];
+    if (s.tracking) parts.push(`Tracking: ${s.tracking}`);
+    if (s.dirty) parts.push(`${s.dirty} changed`);
+    if (s.ahead) parts.push(`${s.ahead} ahead`);
+    if (s.behind) parts.push(`${s.behind} behind`);
+    el.title = parts.join(' · ');
   }
 
   function setProblems(count) {
@@ -45,6 +69,12 @@
     setLanguage('Plain Text');
 
     bus.on('git:branch-changed', (name) => setBranch(name));
+    bus.on('git:summary:updated', (s) => renderSummary(s));
+    // If decorations service is already loaded with a summary, paint it.
+    try {
+      const s = window.PiPilot?.gitDecorations?.summary?.();
+      if (s) renderSummary(s);
+    } catch {}
     bus.on('problems:count', (count) => setProblems(count));
     bus.on('editor:position', (pos) => setPosition(pos));
     bus.on('editor:language', (lang) => setLanguage(lang));
@@ -69,6 +99,18 @@
       tab?.click();
       bus.emit('terminal:focus');
     });
+
+    const blameBtn = $('#status-blame');
+    if (blameBtn) {
+      const paint = () => {
+        const on = window.PiPilot?.blame?.isEnabled?.() !== false;
+        blameBtn.style.opacity = on ? '1' : '0.45';
+        blameBtn.title = on ? 'Inline git blame: ON (click to disable)' : 'Inline git blame: OFF (click to enable)';
+      };
+      paint();
+      blameBtn.addEventListener('click', () => bus.emit('blame:toggle'));
+      bus.on('blame:state', paint);
+    }
 
     $('#status-branch')?.addEventListener('click', () => {
       const btns = $$('#activity-bar .activity-btn[data-panel]');

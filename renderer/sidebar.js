@@ -72,6 +72,19 @@
     return `<svg class="folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.5 4a1 1 0 0 1 1-1h3.5l1.5 1.5h6a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V4z" fill="${color}" fill-opacity="0.25" stroke="${color}" stroke-width="0.75"/></svg>`;
   }
 
+  function gitStatusTitle(letter) {
+    switch (letter) {
+      case 'M': return 'Modified';
+      case 'A': return 'Added';
+      case 'D': return 'Deleted';
+      case 'R': return 'Renamed';
+      case 'C': return 'Copied';
+      case 'U': return 'Conflict';
+      case '?': return 'Untracked';
+      default: return letter;
+    }
+  }
+
   function chevron() {
     return `<svg class="tree-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M3 2l4 3-4 3V2z" fill="currentColor"/></svg>`;
   }
@@ -90,6 +103,7 @@
       treeData = null;
       return;
     }
+    const t0 = performance.now();
     try {
       treeData = await api.files.tree(state.projectPath);
       isLinked = await checkLinked(state.projectPath);
@@ -97,6 +111,13 @@
       console.error('files.tree failed', e);
       treeData = null;
     }
+    const fileCount = (function count(node) {
+      if (!node) return 0;
+      let n = 1;
+      if (node.children) for (const c of node.children) n += count(c);
+      return n;
+    })(treeData);
+    console.log(`[startup] files:tree took ${(performance.now() - t0).toFixed(0)}ms (${fileCount} nodes)`);
   }
 
   function matchesFilter(name) {
@@ -156,6 +177,26 @@
       row.appendChild(badge);
     }
 
+    // Git decoration — letter for files, count for folders (VS Code style)
+    const gd = window.PiPilot.gitDecorations;
+    if (gd) {
+      if (isDir) {
+        const n = gd.folderCount(node.path);
+        if (n > 0) {
+          const badge = h('span', { class: 'tree-git tree-git-folder', title: `${n} changed` }, String(n));
+          row.appendChild(badge);
+        }
+      } else {
+        const letter = gd.fileLetter(node.path);
+        if (letter) {
+          const cls = 'tree-git tree-git-' + (letter === '?' ? 'untracked' : letter.toLowerCase());
+          row.classList.add('tree-node-git', 'tree-node-git-' + (letter === '?' ? 'untracked' : letter.toLowerCase()));
+          const badge = h('span', { class: cls, title: gitStatusTitle(letter) }, letter === '?' ? 'U' : letter);
+          row.appendChild(badge);
+        }
+      }
+    }
+
     row.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (isDir) {
@@ -185,6 +226,8 @@
             row.style.opacity = '';
           }
           expanded.add(node.path);
+          // First user-driven expansion → start the file watcher now.
+          ensureWatcher();
           renderExplorer();
         }
       } else if (e.ctrlKey || e.metaKey) {
@@ -429,6 +472,7 @@
   }
 
   function renderExplorer() {
+    const _t0 = performance.now();
     root.innerHTML = '';
     if (!state.projectPath) {
       root.appendChild(h('div', { class: 'panel-empty' }, 'No project open'));
@@ -519,6 +563,7 @@
         bus.emit('toast:show', { type: 'error', message: 'Move failed: ' + err.message });
       }
     });
+    console.log(`[startup] renderExplorer took ${(performance.now() - _t0).toFixed(0)}ms`);
   }
 
   function refocusFilter() {
@@ -803,19 +848,29 @@
     }
     expanded.clear();
     filterText = '';
+    // Tear down any prior watcher; the new project's watcher boots LAZILY
+    // (on first folder expansion) so project-open is responsive even on
+    // huge trees. See ensureWatcher() below.
+    if (watchDispose) { try { watchDispose(); } catch {} }
+    watchDispose = null;
     await loadTree();
-    if (state.projectPath) {
-      if (watchDispose) { try { watchDispose(); } catch {} }
-      watchDispose = api.files.watch(state.projectPath, (evt) => {
-        refresh();
-        // Notify editor about external file changes so open tabs stay in sync
-        if (evt && evt.type && evt.path) {
-          bus.emit('file:external-change', evt);
-        }
-      });
-    }
     if (activePanel === 'explorer') renderExplorer();
   });
+
+  // Lazy chokidar watcher: don't watch the whole project root on
+  // project:opened (chokidar enumeration on huge trees stalls the main
+  // process and the renderer feels frozen). Boot the watcher the FIRST
+  // time the user expands a folder in the explorer — at that point they
+  // care about live updates and the cost is masked by the expand action.
+  function ensureWatcher() {
+    if (watchDispose || !state.projectPath || !api.files?.watch) return;
+    watchDispose = api.files.watch(state.projectPath, (evt) => {
+      refresh();
+      if (evt && evt.type && evt.path) {
+        bus.emit('file:external-change', evt);
+      }
+    });
+  }
 
   bus.on('project:closed', () => {
     treeData = null;
@@ -830,6 +885,10 @@
   bus.on('files:refresh', async () => {
     await loadTree();
     renderPanel();
+  });
+
+  bus.on('git:decorations:updated', () => {
+    if (activePanel === 'explorer' && treeData) renderExplorer();
   });
 
   bus.on('editor:active-changed', () => {

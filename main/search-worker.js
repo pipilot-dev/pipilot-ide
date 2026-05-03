@@ -109,6 +109,10 @@ function chunkFile(content) {
 }
 
 function shouldIndex(filePath) {
+  const parts = filePath.replace(/\\/g, '/').split('/');
+  for (const p of parts) {
+    if (SKIP_DIRS.has(p)) return false;
+  }
   const ext = path.extname(filePath).toLowerCase();
   const base = path.basename(filePath);
   if (ext === '.json') return INDEXABLE_JSON.has(base);

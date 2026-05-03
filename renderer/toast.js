@@ -209,12 +209,51 @@
     warn: (msg, opts = {}) => show(msg, { ...opts, type: 'warn' }),
   };
 
+  // Decide whether a toast should be ESCALATED to a persistent notification
+  // card (errors and actionable prompts) or shown as the classic ephemeral
+  // toast. Either way we record it in the notification center's history so
+  // the bell icon reflects the full activity log.
+  function dispatch(message, opts = {}) {
+    const type = opts.type || 'info';
+    const notif = window.PiPilot?.notifications;
+    const hasAction = opts.action && opts.action.label;
+    const escalate = type === 'error' || hasAction;
+
+    if (escalate && notif) {
+      const sevMap = { ok: 'info', success: 'info', info: 'info', warn: 'warn', error: 'error' };
+      notif.show({
+        severity: sevMap[type] || 'info',
+        message: String(message ?? ''),
+        source: opts.source,
+        sticky: true,
+        actions: hasAction ? [{
+          label: opts.action.label,
+          primary: true,
+          onClick: opts.action.onClick,
+        }] : undefined,
+      });
+      return;
+    }
+
+    show(message, opts);
+
+    // History-only mirror so the bell shows even transient confirmations.
+    if (notif && notif.recordHistory) {
+      const sevMap = { ok: 'info', success: 'info', info: 'info', warn: 'warn', error: 'error' };
+      notif.recordHistory({
+        severity: sevMap[type] || 'info',
+        message: String(message ?? ''),
+        source: opts.source,
+      });
+    }
+  }
+
   if (bus) {
     bus.on('toast:show', (payload) => {
       if (!payload) return;
-      if (typeof payload === 'string') { show(payload); return; }
+      if (typeof payload === 'string') { dispatch(payload); return; }
       const { message, ...opts } = payload;
-      show(message, opts);
+      dispatch(message, opts);
     });
   }
 })();

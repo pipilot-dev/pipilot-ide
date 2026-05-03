@@ -2,6 +2,8 @@
 // Status bar item showing file size, line count, and character count.
 
 (function (PiPilot, bus, api, state, db) {
+  if (window.__pipilotBuiltinFileSize) return;
+  window.__pipilotBuiltinFileSize = true;
 
   var WARN_LINES = 500;
   var WARN_KB = 50;

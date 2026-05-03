@@ -196,12 +196,12 @@
             <div class="wt-about-metric-value">1.0.0</div>
           </div>
           <div class="wt-about-metric">
-            <div class="wt-about-metric-label">Runtime</div>
-            <div class="wt-about-metric-value">Node.js ${typeof process !== 'undefined' ? process.version : ''}</div>
+            <div class="wt-about-metric-label">Build</div>
+            <div class="wt-about-metric-value">Production</div>
           </div>
           <div class="wt-about-metric">
             <div class="wt-about-metric-label">Stack</div>
-            <div class="wt-about-metric-value">Electron + Ace + Agent SDK</div>
+            <div class="wt-about-metric-value">Native Desktop</div>
           </div>
         </div>
 
@@ -495,8 +495,37 @@
       return `${slug}-${ts}`;
     }
 
+    // Hydrate progress + "Updated" badge from localStorage so the
+    // standalone-welcome cards mirror the welcome-tab cards exactly.
+    const WK_VERSIONS = { 'getting-started': '1', 'ai-power': '2', 'docs': '1' };
+    const clampPct = (n) => {
+      const v = parseInt(n, 10);
+      if (!Number.isFinite(v)) return 0;
+      return Math.max(0, Math.min(100, v));
+    };
+    $$('.ws-card[data-wk-id]').forEach(card => {
+      const id = card.dataset.wkId;
+      const pct = clampPct(localStorage.getItem('pipilot.walkthrough.progress.' + id) || '0');
+      card.dataset.progress = pct;
+      const fill = card.querySelector('.ws-card-progress-fill');
+      if (fill) fill.style.width = pct + '%';
+      const badge = card.querySelector('.ws-card-badge[data-show="updated"]');
+      if (badge) {
+        const lastSeen = localStorage.getItem('pipilot.walkthrough.seen.' + id) || '';
+        const current = WK_VERSIONS[id] || '1';
+        badge.dataset.visible = lastSeen === current ? '0' : '1';
+      }
+    });
+
     $$('.ws-card[data-tutorial]').forEach(card => {
       card.addEventListener('click', () => {
+        // Mark the walkthrough as seen so the "Updated" pill clears next render
+        const wkId = card.dataset.wkId;
+        if (wkId) {
+          try { localStorage.setItem('pipilot.walkthrough.seen.' + wkId, WK_VERSIONS[wkId] || '1'); } catch {}
+          const badge = card.querySelector('.ws-card-badge[data-show="updated"]');
+          if (badge) badge.dataset.visible = '0';
+        }
         const t = card.dataset.tutorial;
         // Walkthroughs should work even when no project is open.
         // If a project is open, use the richer editor-tab experience.

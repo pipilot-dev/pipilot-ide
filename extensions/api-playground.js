@@ -3,6 +3,8 @@
 // Saves recent requests in db.
 
 (function (PiPilot, bus, api, state, db) {
+  if (window.__pipilotBuiltinApiPlayground) return;
+  window.__pipilotBuiltinApiPlayground = true;
 
   var MAX_RECENT = 20;
 
@@ -21,7 +23,8 @@
     btn.className = 'activity-btn';
     btn.dataset.panel = 'apiTest';
     btn.title = 'API Playground';
-    btn.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10A15.3 15.3 0 0 1 12 2z"/></svg>';
+    // Beaker / flask glyph — distinct from the browser's globe icon
+    btn.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6.5L4.5 19a2 2 0 0 0 1.7 3h11.6a2 2 0 0 0 1.7-3L14 9.5V3"/><path d="M7.5 14h9"/><circle cx="10" cy="17" r="0.6" fill="currentColor"/><circle cx="13.5" cy="18.5" r="0.6" fill="currentColor"/></svg>';
     btn.addEventListener('click', function () { bus.emit('panel:switch', 'apiTest'); });
     actBar.insertBefore(btn, actBar.lastElementChild);
   }

@@ -7,6 +7,7 @@ const fsp = require('fs').promises;
 const path = require('path');
 
 const { CodeSearchIndex } = require('./search-index');
+// diff package available but we use search/replace blocks instead
 
 // Shared state — set by the agent handler before each query
 let currentWorkDir = '';
@@ -88,6 +89,47 @@ async function getDiagnostics(params) {
   };
 }
 
+// ── get_working_directory ──
+// Authoritative source of truth for the project root. Returns the exact
+// absolute path (with native OS separators) plus a top-level file listing
+// so the agent never has to guess paths or run `pwd && ls -la` first.
+async function getWorkingDirectory() {
+  const dir = workDir();
+  const platform = process.platform;
+  const sep = path.sep;
+  const isWindows = platform === 'win32';
+  const result = {
+    path: dir,
+    platform,
+    isWindows,
+    pathSeparator: sep,
+    home: require('os').homedir(),
+    exists: false,
+    files: [],
+    summary: '',
+  };
+
+  try {
+    const stat = await fsp.stat(dir);
+    if (stat.isDirectory()) {
+      result.exists = true;
+      const entries = await fsp.readdir(dir, { withFileTypes: true });
+      result.files = entries
+        .filter(e => !e.name.startsWith('.') || ['.pipilot', '.claude', '.env'].includes(e.name))
+        .slice(0, 50)
+        .map(e => e.isDirectory() ? `${e.name}/` : e.name)
+        .sort();
+    }
+  } catch {}
+
+  // Friendly one-line summary the agent can quote back / reason against.
+  result.summary = result.exists
+    ? `Project root is "${dir}" on ${platform}. All file paths in tool calls MUST use this exact prefix (Windows uses backslashes; on Windows you can also use forward slashes — both work — but never invent /home/, /workspace/, /c/, /codepilot/, /tmp/, etc.). ${result.files.length} top-level entries.`
+    : `Working directory "${dir}" does not exist on disk — open a project first.`;
+
+  return result;
+}
+
 // ── project_context ──
 async function getProjectContext(params) {
   const dir = workDir();
@@ -153,25 +195,20 @@ async function getProjectContext(params) {
 async function frontendDesignGuide(params) {
   const p = (params?.input && typeof params.input === 'object') ? params.input : params;
   const dir = workDir();
-  const action = p?.action || 'read';
+  const action = p?.action || 'scan';
   const designPath = path.join(dir, '.pipilot', 'design.md');
 
-  if (action === 'read') {
-    try {
-      if (fs.existsSync(designPath)) return { content: fs.readFileSync(designPath, 'utf8') };
-      return { content: null, message: 'No design.md found. Use action "scan" to generate one from CSS/Tailwind.' };
-    } catch (e) { return { error: e.message }; }
-  }
-
-  if (action === 'write') {
-    try {
-      fs.mkdirSync(path.dirname(designPath), { recursive: true });
-      fs.writeFileSync(designPath, p.content || '', 'utf8');
-      return { success: true, path: designPath };
-    } catch (e) { return { error: e.message }; }
-  }
-
+  // ── scan: read existing design system from .pipilot/design.md + extract CSS tokens ──
   if (action === 'scan') {
+    const result = { existing: null, tokens: null, hasTailwind: false };
+
+    // Read existing design.md if present
+    try {
+      if (fs.existsSync(designPath)) {
+        result.existing = fs.readFileSync(designPath, 'utf8');
+      }
+    } catch {}
+
     // Extract design tokens from CSS files
     const tokens = { colors: [], fonts: [], spacing: [] };
     const cssFiles = [];
@@ -189,7 +226,6 @@ async function frontendDesignGuide(params) {
     for (const f of cssFiles.slice(0, 10)) {
       try {
         const css = fs.readFileSync(f, 'utf8');
-        // Extract CSS custom properties
         const varMatches = css.matchAll(/--([a-zA-Z0-9-]+)\s*:\s*([^;]+)/g);
         for (const m of varMatches) {
           if (/color|bg|text|border|accent/i.test(m[1])) tokens.colors.push(`--${m[1]}: ${m[2].trim()}`);
@@ -199,20 +235,75 @@ async function frontendDesignGuide(params) {
       } catch {}
     }
 
-    // Check for Tailwind
-    const hasTailwind = fs.existsSync(path.join(dir, 'tailwind.config.js')) || fs.existsSync(path.join(dir, 'tailwind.config.ts'));
+    result.hasTailwind = fs.existsSync(path.join(dir, 'tailwind.config.js')) || fs.existsSync(path.join(dir, 'tailwind.config.ts'));
+    result.tokens = tokens;
+    result.cssFilesFound = cssFiles.length;
 
-    const content = `# Design System\n\n## Framework\n${hasTailwind ? 'Tailwind CSS' : 'Custom CSS'}\n\n## Colors\n${tokens.colors.slice(0, 30).map(c => `- \`${c}\``).join('\n') || 'No custom properties found'}\n\n## Typography\n${tokens.fonts.slice(0, 10).map(f => `- \`${f}\``).join('\n') || 'Default'}\n\n## Spacing\n${tokens.spacing.slice(0, 10).map(s => `- \`${s}\``).join('\n') || 'Default'}\n`;
+    if (!result.existing && tokens.colors.length === 0 && tokens.fonts.length === 0) {
+      result.message = 'No design system found. Use action "load" to get the design skill guide, then "write" to create a design system for this project.';
+    }
 
-    try {
-      fs.mkdirSync(path.dirname(designPath), { recursive: true });
-      fs.writeFileSync(designPath, content, 'utf8');
-    } catch {}
-
-    return { content, tokens, hasTailwind };
+    return result;
   }
 
-  return { error: `Unknown action: ${action}` };
+  // ── load: return the frontend design skill guide for the AI to follow ──
+  if (action === 'load') {
+    return { content: `# Frontend Design Skill Guide
+
+## Design Thinking
+Before coding, understand the context and commit to a BOLD aesthetic direction:
+
+- **Purpose**: What problem does this interface solve? Who uses it?
+- **Tone**: Pick a strong direction: brutally minimal, maximalist, retro-futuristic, organic/natural, luxury/refined, playful, editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc.
+- **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
+
+CRITICAL: Choose a clear conceptual direction and execute it with precision. Bold maximalism and refined minimalism both work — the key is intentionality.
+
+## Aesthetics Guidelines
+
+**Typography**: Choose fonts that are beautiful, unique, and interesting. Avoid generic fonts like Arial, Inter, Roboto, system fonts. Pair a distinctive display font with a refined body font. NEVER converge on common choices (Space Grotesk, etc.) across designs.
+
+**Color & Theme**: Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colors with sharp accents outperform timid, evenly-distributed palettes.
+
+**Motion**: Use animations for effects and micro-interactions. CSS-only for HTML, Motion library for React. Focus on high-impact moments: one well-orchestrated page load with staggered reveals creates more delight than scattered micro-interactions.
+
+**Spatial Composition**: Unexpected layouts. Asymmetry. Overlap. Diagonal flow. Grid-breaking elements. Generous negative space OR controlled density.
+
+**Backgrounds & Visual Details**: Create atmosphere and depth — not solid colors. Gradient meshes, noise textures, geometric patterns, layered transparencies, dramatic shadows, decorative borders, grain overlays.
+
+## NEVER Use
+- Overused fonts (Inter, Roboto, Arial, system fonts)
+- Cliched purple gradients on white backgrounds
+- Predictable layouts and cookie-cutter patterns
+- Generic AI aesthetics — every design should feel unique
+
+## How to Create a Design System
+After reading this guide, create a design system for the project by calling this tool with action "write" and content containing:
+1. Chosen aesthetic direction and tone
+2. Color palette (CSS variables: --color-primary, --color-bg, --color-text, --color-accent, etc.)
+3. Typography (font families, sizes, weights)
+4. Spacing scale
+5. Component patterns (buttons, cards, inputs, etc.)
+6. Animation approach
+
+Match implementation complexity to the vision. Maximalist = elaborate code with extensive animations. Minimalist = restraint, precision, careful spacing and typography.
+
+## Assets
+Use the \`generate_image\` tool to create real images for heroes, backgrounds, avatars, illustrations, and product photos. NEVER use placeholder images or generic stock photos — generate contextual, high-quality visuals that match your design direction.
+
+Remember: PiPilot is capable of extraordinary creative work. Don't hold back — commit fully to a distinctive vision.` };
+  }
+
+  // ── write: save design system to .pipilot/design.md ──
+  if (action === 'write') {
+    try {
+      fs.mkdirSync(path.dirname(designPath), { recursive: true });
+      fs.writeFileSync(designPath, p.content || '', 'utf8');
+      return { success: true, path: designPath };
+    } catch (e) { return { error: e.message }; }
+  }
+
+  return { error: `Unknown action: ${action}. Use "scan", "load", or "write".` };
 }
 
 // ── update_project_context ──
@@ -229,6 +320,70 @@ async function updateProjectContext() {
   } catch {}
 
   return { ...ctx, saved: mdPath };
+}
+
+// ── project_memory — persistent key/value notes across sessions ──
+async function projectMemory(params) {
+  const p = (params?.input && typeof params.input === 'object') ? params.input : params;
+  const dir = workDir();
+  const memDir = path.join(dir, '.pipilot', 'memory');
+  const memFile = path.join(memDir, 'MEMORY.md');
+  const action = p?.action || 'read';
+
+  try { fs.mkdirSync(memDir, { recursive: true }); } catch {}
+
+  function loadMemories() {
+    try {
+      if (!fs.existsSync(memFile)) return [];
+      const raw = fs.readFileSync(memFile, 'utf8');
+      const entries = [];
+      const lines = raw.split('\n');
+      for (const line of lines) {
+        const m = line.match(/^- \*\*(.+?)\*\*: (.+)$/);
+        if (m) entries.push({ key: m[1], value: m[2] });
+      }
+      return entries;
+    } catch { return []; }
+  }
+
+  function saveMemories(entries) {
+    const header = '# Project Memory\n\nPersistent notes saved by PiPilot Agent across sessions.\n\n';
+    const body = entries.map(e => `- **${e.key}**: ${e.value}`).join('\n');
+    fs.writeFileSync(memFile, header + body + '\n', 'utf8');
+  }
+
+  if (action === 'read') {
+    const entries = loadMemories();
+    if (entries.length === 0) return { memories: [], message: 'No memories saved yet. Use action "save" to store project notes.' };
+    return { memories: entries, count: entries.length };
+  }
+
+  if (action === 'save') {
+    const key = p?.key;
+    const value = p?.value;
+    if (!key || !value) return { error: 'Both "key" and "value" are required for save.' };
+    const entries = loadMemories();
+    const existing = entries.findIndex(e => e.key.toLowerCase() === key.toLowerCase());
+    if (existing >= 0) {
+      entries[existing].value = value;
+    } else {
+      entries.push({ key, value });
+    }
+    saveMemories(entries);
+    return { success: true, action: existing >= 0 ? 'updated' : 'created', key, count: entries.length };
+  }
+
+  if (action === 'delete') {
+    const key = p?.key;
+    if (!key) return { error: '"key" is required for delete.' };
+    const entries = loadMemories();
+    const filtered = entries.filter(e => e.key.toLowerCase() !== key.toLowerCase());
+    if (filtered.length === entries.length) return { error: `Memory "${key}" not found.` };
+    saveMemories(filtered);
+    return { success: true, deleted: key, count: filtered.length };
+  }
+
+  return { error: `Unknown action: ${action}. Use "read", "save", or "delete".` };
 }
 
 // ── dev_server_start/stop/status/logs (delegates to ipc-devserver) ──
@@ -608,8 +763,239 @@ async function runCode(params) {
   }
 }
 
+// ── edit_file_patch — search/replace block editing (robust alternative to old_string/new_string) ──
+// Uses <<<<<<< SEARCH / ======= / >>>>>>> REPLACE markers
+// Supports multiple blocks in one call, regex mode, and replaceAll
+
+function parseSearchReplaceBlocks(blockText) {
+  const SEARCH_START = '<<<<<<< SEARCH';
+  const DIVIDER = '=======';
+  const REPLACE_END = '>>>>>>> REPLACE';
+  const lines = blockText.split('\n');
+  const blocks = [];
+  let searchLines = [];
+  let replaceLines = [];
+  let mode = 'none';
+
+  for (const line of lines) {
+    if (line.trim() === SEARCH_START) {
+      searchLines = [];
+      replaceLines = [];
+      mode = 'search';
+    } else if (line.trim() === DIVIDER && mode === 'search') {
+      mode = 'replace';
+    } else if (line.trim() === REPLACE_END && mode === 'replace') {
+      const hasContent = searchLines.some(l => l.trim() !== '') || replaceLines.some(l => l.trim() !== '');
+      if (hasContent) blocks.push({ search: searchLines.join('\n'), replace: replaceLines.join('\n') });
+      mode = 'none';
+    } else if (mode === 'search') {
+      searchLines.push(line);
+    } else if (mode === 'replace') {
+      replaceLines.push(line);
+    }
+  }
+  return blocks;
+}
+
+// Fuzzy find: when exact match fails, find the closest matching region in the file
+// Uses line-by-line similarity scoring to locate drifted code
+function fuzzyFindInContent(content, searchText) {
+  const searchLines = searchText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  if (searchLines.length === 0) return null;
+
+  const contentLines = content.split('\n');
+  let bestScore = 0;
+  let bestStart = -1;
+  let bestEnd = -1;
+
+  // Slide a window of searchLines.length over contentLines
+  for (let i = 0; i <= contentLines.length - searchLines.length; i++) {
+    let matchCount = 0;
+    for (let j = 0; j < searchLines.length; j++) {
+      const contentTrimmed = contentLines[i + j].trim();
+      const searchTrimmed = searchLines[j];
+      // Exact line match (ignoring leading/trailing whitespace)
+      if (contentTrimmed === searchTrimmed) {
+        matchCount++;
+      } else if (contentTrimmed.includes(searchTrimmed) || searchTrimmed.includes(contentTrimmed)) {
+        matchCount += 0.5; // partial match
+      }
+    }
+    const score = matchCount / searchLines.length;
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = i;
+      bestEnd = i + searchLines.length;
+    }
+  }
+
+  // Require at least 60% line match to consider it a fuzzy hit
+  if (bestScore >= 0.6 && bestStart >= 0) {
+    const matchedText = contentLines.slice(bestStart, bestEnd).join('\n');
+    return { matchedText, startLine: bestStart, endLine: bestEnd, score: bestScore };
+  }
+  return null;
+}
+
+async function editFilePatch(params) {
+  const p = (params?.input && typeof params.input === 'object') ? params.input : params;
+  const filepath = p?.filepath;
+  const searchReplaceBlock = p?.searchReplaceBlock;
+  const useRegex = !!p?.useRegex;
+  const replaceAll = !!p?.replaceAll;
+  if (!filepath || !searchReplaceBlock) return { success: false, message: 'Both "filepath" and "searchReplaceBlock" are required.' };
+
+  try {
+    const dir = workDir();
+    const absPath = path.isAbsolute(filepath) ? filepath : path.resolve(dir, filepath);
+
+    let content;
+    try {
+      content = await fsp.readFile(absPath, 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') return { success: false, message: `File not found: ${filepath}` };
+      return { success: false, message: `Read error: ${err.message}` };
+    }
+
+    const editBlocks = parseSearchReplaceBlocks(searchReplaceBlock);
+    if (editBlocks.length === 0) return { success: false, message: 'No valid search/replace blocks found. Use <<<<<<< SEARCH / ======= / >>>>>>> REPLACE markers.' };
+
+    let newContent = content;
+    const applied = [];
+    const failed = [];
+
+    for (const { search, replace } of editBlocks) {
+      if (useRegex) {
+        const flags = replaceAll ? 'g' : '';
+        try {
+          const regex = new RegExp(search, flags);
+          if (regex.test(newContent)) {
+            const count = replaceAll ? (newContent.match(regex) || []).length : 1;
+            newContent = newContent.replace(regex, replace);
+            applied.push({ search: search.slice(0, 60), occurrences: count });
+          } else {
+            failed.push({ search: search.slice(0, 60), reason: 'Regex pattern not found' });
+          }
+        } catch (e) {
+          failed.push({ search: search.slice(0, 60), reason: `Invalid regex: ${e.message}` });
+        }
+      } else {
+        // Try 1: Exact match
+        if (newContent.includes(search)) {
+          if (replaceAll) {
+            const count = newContent.split(search).length - 1;
+            newContent = newContent.split(search).join(replace);
+            applied.push({ search: search.slice(0, 60), occurrences: count });
+          } else {
+            newContent = newContent.replace(search, replace);
+            applied.push({ search: search.slice(0, 60), occurrences: 1 });
+          }
+        }
+        // Try 2: Case-insensitive match
+        else if (newContent.toLowerCase().includes(search.toLowerCase())) {
+          const idx = newContent.toLowerCase().indexOf(search.toLowerCase());
+          newContent = newContent.substring(0, idx) + replace + newContent.substring(idx + search.length);
+          applied.push({ search: search.slice(0, 60), occurrences: 1, method: 'case-insensitive' });
+        }
+        // Try 3: Whitespace-normalized match (collapse spaces/tabs, ignore leading/trailing)
+        else {
+          const normalizeWS = s => s.split('\n').map(l => l.trim().replace(/\s+/g, ' ')).join('\n');
+          const normSearch = normalizeWS(search);
+          const normContent = normalizeWS(newContent);
+          if (normContent.includes(normSearch)) {
+            // Found with normalized whitespace — use fuzzy find to locate exact region
+            const fuzzy = fuzzyFindInContent(newContent, search);
+            if (fuzzy) {
+              const lines = newContent.split('\n');
+              const before = lines.slice(0, fuzzy.startLine).join('\n');
+              const after = lines.slice(fuzzy.endLine).join('\n');
+              newContent = before + (before ? '\n' : '') + replace + (after ? '\n' : '') + after;
+              applied.push({ search: search.slice(0, 60), occurrences: 1, method: 'fuzzy', score: fuzzy.score });
+            } else {
+              failed.push({ search: search.slice(0, 60), reason: 'Fuzzy match failed' });
+            }
+          }
+          // Try 4: Pure fuzzy line matching (last resort)
+          else {
+            const fuzzy = fuzzyFindInContent(newContent, search);
+            if (fuzzy) {
+              const lines = newContent.split('\n');
+              const before = lines.slice(0, fuzzy.startLine).join('\n');
+              const after = lines.slice(fuzzy.endLine).join('\n');
+              newContent = before + (before ? '\n' : '') + replace + (after ? '\n' : '') + after;
+              applied.push({ search: search.slice(0, 60), occurrences: 1, method: 'fuzzy', score: fuzzy.score });
+            } else {
+              failed.push({ search: search.slice(0, 60), reason: 'Not found (tried exact, case-insensitive, whitespace-normalized, and fuzzy)' });
+            }
+          }
+        }
+      }
+    }
+
+    if (applied.length === 0) {
+      return { success: false, message: `All ${failed.length} edit(s) failed. Re-read the file to get current content.\n` + failed.map(f => `  - "${f.search}..." — ${f.reason}`).join('\n') };
+    }
+
+    // Write atomically
+    const tempPath = absPath + '.tmp-' + Date.now();
+    await fsp.writeFile(tempPath, newContent, 'utf8');
+    await fsp.rename(tempPath, absPath);
+
+    let msg = `Edited ${filepath}: ${applied.length} block(s) applied`;
+    if (failed.length > 0) msg += `, ${failed.length} failed`;
+    const methods = applied.filter(a => a.method).map(a => a.method);
+    if (methods.length > 0) msg += ` (used: ${[...new Set(methods)].join(', ')})`;
+    return { success: true, message: msg, applied: applied.length, failed: failed.length };
+  } catch (err) {
+    return { success: false, message: `Edit error: ${err.message}` };
+  }
+}
+
+// ── fetch_url — readable web content via Jina Reader API ──
+async function fetchUrl(params) {
+  const p = (params?.input && typeof params.input === 'object') ? params.input : params;
+  const url = p?.url;
+  if (!url) return { error: 'URL is required.' };
+
+  try {
+    const jinaUrl = `https://r.jina.ai/${url}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+
+    const resp = await fetch(jinaUrl, {
+      headers: {
+        'Accept': 'text/plain',
+        'X-Return-Format': 'text',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!resp.ok) {
+      return { error: `Jina Reader returned HTTP ${resp.status} for ${url}` };
+    }
+
+    let content = await resp.text();
+    // Truncate to avoid context bloat
+    const MAX_CHARS = 15000;
+    const truncated = content.length > MAX_CHARS;
+    if (truncated) content = content.slice(0, MAX_CHARS) + '\n\n... (truncated — ' + content.length + ' chars total)';
+
+    return { url, content, chars: content.length, truncated };
+  } catch (err) {
+    if (err.name === 'AbortError') return { error: `Fetch timed out (60s) for ${url}` };
+    return { error: `Fetch failed: ${err.message}` };
+  }
+}
+
 function getToolDefinitions() {
   return [
+    {
+      name: 'get_working_directory',
+      description: 'Return the absolute path of the current project root, the OS, the path separator, and a top-level file listing. ALWAYS call this FIRST on every task — never guess paths and never run `pwd && ls -la` for orientation. Cheaper, faster, and 100% authoritative.',
+      inputSchema: { type: 'object', properties: {} },
+      handler: getWorkingDirectory,
+    },
     {
       name: 'get_diagnostics',
       description: 'Run the IDE diagnostics engine on the current project and return all errors, warnings, and info messages. Use after making changes to verify correctness.',
@@ -640,16 +1026,30 @@ function getToolDefinitions() {
     },
     {
       name: 'frontend_design_guide',
-      description: 'Manage the design system file at .pipilot/design.md. Use "read" to get current design tokens, "scan" to extract from CSS/Tailwind and generate, "write" to save a custom design spec. ALWAYS read this before doing any UI/frontend work.',
+      description: 'Manage the project design system. Actions: "scan" — check existing .pipilot/design.md + extract CSS tokens; "load" — get the frontend design skill guide with aesthetics rules; "write" — save a design system to .pipilot/design.md. Workflow: scan first, if no design system exists call load to get the guide, then write your design system.',
       inputSchema: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['read', 'scan', 'write'], description: 'Action to perform' },
-          content: { type: 'string', description: 'Content to write (only for "write" action)' },
+          action: { type: 'string', enum: ['scan', 'load', 'write'], description: 'Action: scan (check existing), load (get design skill guide), write (save design system)' },
+          content: { type: 'string', description: 'Design system content to write (only for "write" action)' },
         },
         required: ['action'],
       },
       handler: frontendDesignGuide,
+    },
+    {
+      name: 'project_memory',
+      description: 'Persistent project memory — save, read, or delete key/value notes that persist across sessions. Use to remember project decisions, architecture choices, user preferences, tech stack details, or anything the agent should recall in future conversations.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['read', 'save', 'delete'], description: 'Action: "read" all memories, "save" a key/value pair, "delete" a key' },
+          key: { type: 'string', description: 'Memory key (required for save/delete). E.g. "auth_system", "db_choice", "user_preference"' },
+          value: { type: 'string', description: 'Memory value (required for save). E.g. "JWT with refresh tokens via Prisma"' },
+        },
+        required: ['action'],
+      },
+      handler: projectMemory,
     },
     {
       name: 'search_codebase',
@@ -710,6 +1110,33 @@ function getToolDefinitions() {
       },
       handler: runCode,
     },
+    {
+      name: 'edit_file_patch',
+      description: 'Edit a file using search/replace blocks. Supports multiple edits in one call. Use when the built-in Edit tool fails. Format: <<<<<<< SEARCH\\nold code\\n=======\\nnew code\\n>>>>>>> REPLACE',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          filepath: { type: 'string', description: 'Path to file (relative or absolute)' },
+          searchReplaceBlock: { type: 'string', description: 'One or more search/replace blocks using markers:\\n<<<<<<< SEARCH\\ncode to find\\n=======\\nreplacement code\\n>>>>>>> REPLACE' },
+          useRegex: { type: 'boolean', description: 'Treat search as regex pattern (default false)' },
+          replaceAll: { type: 'boolean', description: 'Replace all occurrences (default false)' },
+        },
+        required: ['filepath', 'searchReplaceBlock'],
+      },
+      handler: editFilePatch,
+    },
+    {
+      name: 'fetch_url',
+      description: 'Fetch any URL and return clean, readable text content (HTML stripped, markdown formatted). Uses Jina Reader API. Use as fallback when WebFetch fails, or to read documentation pages, blog posts, API docs, GitHub READMEs, Stack Overflow answers, etc.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Full URL to fetch (e.g. "https://docs.example.com/api")' },
+        },
+        required: ['url'],
+      },
+      handler: fetchUrl,
+    },
   ];
 }
 
@@ -736,4 +1163,4 @@ function handleFileChange(projectPath, evt) {
   }
 }
 
-module.exports = { setWorkDir, getToolDefinitions, getDiagnostics, getProjectContext, updateProjectContext, frontendDesignGuide, searchCodebase, screenshotPreview, generateImage, runCode, getSearchIndex, handleFileChange };
+module.exports = { setWorkDir, getToolDefinitions, getWorkingDirectory, getDiagnostics, getProjectContext, updateProjectContext, frontendDesignGuide, projectMemory, searchCodebase, screenshotPreview, generateImage, runCode, editFilePatch, fetchUrl, getSearchIndex, handleFileChange };

@@ -199,6 +199,16 @@
   scrollbar-width: none;
 }
 .breadcrumb::-webkit-scrollbar { display: none; }
+/* Collapse the breadcrumb row entirely when there are no segments to show
+ * (e.g. browser tabs, commit-detail tabs, the welcome tab). Using `:empty`
+ * + `height:0` instead of `display:none` keeps the parent grid happy. */
+.breadcrumb:empty {
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  border-bottom: none;
+  overflow: hidden;
+}
 
 /* "/ PATH" label */
 .breadcrumb-path-label {
@@ -517,6 +527,41 @@
   width: 14px;
   height: 14px;
 }
+
+/* ---------- Git decorations on tree rows ---------- */
+.tree-git {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+.tree-git-folder {
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.04);
+  font-weight: 600;
+  min-width: 14px;
+  text-align: center;
+}
+.tree-git-m { color: #e2c08d; }   /* modified */
+.tree-git-a { color: #73c991; }   /* added */
+.tree-git-d { color: #c74e39; }   /* deleted */
+.tree-git-r { color: #cca700; }   /* renamed */
+.tree-git-c { color: #cca700; }   /* copied */
+.tree-git-u { color: #c74e39; }   /* conflict */
+.tree-git-untracked { color: #73c991; }
+.tree-node-git .tree-label { color: inherit; }
+.tree-node-git-m   .tree-label { color: #e2c08d; }
+.tree-node-git-a   .tree-label,
+.tree-node-git-untracked .tree-label { color: #73c991; }
+.tree-node-git-d   .tree-label,
+.tree-node-git-u   .tree-label { color: #c74e39; }
+.tree-node-git-r   .tree-label,
+.tree-node-git-c   .tree-label { color: #cca700; }
 
 /* ---------- Search results ---------- */
 .search-results {

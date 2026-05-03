@@ -1101,11 +1101,26 @@
       const hasSel = selText.length > 0;
 
       ctxMenuEl.innerHTML = '';
-      const items = [
+      const filePath = getActivePath();
+      const ext = (filePath.split('.').pop() || '').toLowerCase();
+      const isRunnable = ['js', 'mjs', 'cjs'].includes(ext);
+
+      const items = [];
+      if (isRunnable) {
+        items.push({
+          label: '▶ Run',
+          hint: 'node',
+          run: () => runActiveFileInTerminal(),
+        });
+        items.push('sep');
+      }
+      items.push(
         { label: 'Inline Chat', hint: 'Ctrl+I', run: () => openInlineChat() },
         { label: 'Add to Chat', disabled: !hasSel, run: () => addToChat() },
         { label: 'Quick Fix', hint: 'Ctrl+.', run: () => editor.execCommand('quickFix') },
         'sep',
+      );
+      items.push(...[
         { label: 'Cut', hint: 'Ctrl+X', disabled: !hasSel, run: async () => {
           try { await navigator.clipboard.writeText(selText); editor.session.replace(editor.getSelectionRange(), ''); } catch (err) { /* ignore */ }
         }},
@@ -1119,7 +1134,7 @@
         { label: 'Find', hint: 'Ctrl+F', run: () => editor.execCommand('find') },
         { label: 'Go to Line', hint: 'Ctrl+G', run: () => editor.execCommand('gotoline') },
         { label: 'Next Problem', hint: 'Alt+F8', run: () => editor.execCommand('nextProblem') },
-      ];
+      ]);
 
       // Allow extensions to inject context menu items
       const extItems = [];
@@ -1176,6 +1191,51 @@
     document.getElementById('chat-panel')?.classList.remove('hidden');
     bus.emit('chat:focus-with-prompt', prompt);
     bus.emit('toast:show', { message: 'Added to chat', type: 'success' });
+  }
+
+  // ============================================================
+  //  RUN ACTIVE FILE IN TERMINAL  (right-click → Run on .js/.mjs/.cjs)
+  // ============================================================
+  // Opens (or reveals) the bottom terminal panel, spawns a fresh terminal
+  // tab rooted at the project, and writes "node <relativePath>" into its
+  // stdin. The terminal is a normal pty session so output streams live —
+  // user can Ctrl+C, scroll, run again, etc.
+  function runActiveFileInTerminal() {
+    const filePath = getActivePath();
+    if (!filePath) return;
+    const projectPath = state.projectPath;
+    if (!projectPath) {
+      bus.emit('toast:show', { message: 'Open a project first', type: 'warn' });
+      return;
+    }
+    // Compute path relative to project root, normalised to forward slashes.
+    const norm = (s) => String(s || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const root = norm(projectPath);
+    const fp = norm(filePath);
+    let relPath = fp;
+    if (fp.toLowerCase().startsWith(root.toLowerCase() + '/')) {
+      relPath = fp.slice(root.length + 1);
+    }
+    // Quote if path has spaces — node handles either, but quoting is safer.
+    const arg = /\s/.test(relPath) ? `"${relPath}"` : relPath;
+    const cmd = `node ${arg}`;
+
+    // The terminal-panel module listens for 'terminal:new' and creates a
+    // tab; once it's ready it broadcasts 'terminal:created' with the id.
+    // Subscribe ONCE, then write the command after a short delay so the
+    // shell has printed its prompt and won't eat the keystrokes.
+    const off = bus.on('terminal:created', ({ id }) => {
+      off();
+      setTimeout(() => {
+        try { api.terminal.write(id, cmd + '\r'); } catch (err) {
+          console.error('terminal write failed:', err);
+        }
+      }, 250);
+    });
+
+    bus.emit('bottom:show', 'terminal');
+    bus.emit('terminal:new', { cwd: projectPath });
+    bus.emit('toast:show', { message: 'Running: ' + cmd, type: 'info' });
   }
 
   // ============================================================

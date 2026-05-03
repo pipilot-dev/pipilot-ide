@@ -271,8 +271,11 @@ module.exports = function register(ipcMain, ctx) {
 
   ipcMain.handle('files:tree', async (_e, projectPath) => {
     const root = safeAbsolute(projectPath);
+    const _t0 = Date.now();
+    walkBatchCount = 0;
     const children = await walkTree(root, 0);
     const name = path.basename(root) || root;
+    console.log(`[startup] walkTree(${name}) took ${Date.now() - _t0}ms (${walkBatchCount} dirs scanned)`);
     return {
       name,
       path: root,
@@ -369,7 +372,9 @@ module.exports = function register(ipcMain, ctx) {
     const buf = await fsp.readFile(p);
     if (isLikelyBinary(buf)) {
       let dataUrl = null;
-      if (isImage && stat.size < 4 * 1024 * 1024) {
+      // Inline a data URL for any media type the renderer can preview, up to 25MB
+      const isMedia = isImage || /^(video|audio)\//.test(mime) || mime === 'application/pdf';
+      if (isMedia && stat.size < 25 * 1024 * 1024) {
         dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
       }
       return { binary: true, size: stat.size, mime, dataUrl };
@@ -440,6 +445,7 @@ module.exports = function register(ipcMain, ctx) {
     const root = safeAbsolute(projectPath);
     if (watchers.has(streamId)) return { ok: true };
 
+    const _t0 = Date.now();
     const watcher = chokidar.watch(root, {
       ignored: (p) => {
         // Check every segment — if any part is in WATCHER_IGNORED, skip it
@@ -451,6 +457,9 @@ module.exports = function register(ipcMain, ctx) {
       persistent: true,
       awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
       usePolling: false,
+    });
+    watcher.once('ready', () => {
+      console.log(`[startup] chokidar ready (root=${path.basename(root)}) in ${Date.now() - _t0}ms`);
     });
 
     const send = (type, p) => {

@@ -1,0 +1,221 @@
+/* ============================================================
+   ChainOfThought component styles
+   Import alongside chain-of-thought.js:
+     import './chain-of-thought.css';
+   Or via <link rel="stylesheet" href="./chain-of-thought.css" />
+   ============================================================ */
+
+/* Design tokens — override these in your app's :root or on a
+   scoping element (e.g. .cot-theme) to theme the component.    */
+:root {
+  --cot-background: #ffffff;
+  --cot-foreground: #09090b;
+  --cot-muted: #f4f4f5;
+  --cot-muted-foreground: #71717a;
+  --cot-border: #e4e4e7;
+  --cot-popover-foreground: #09090b;
+  --cot-secondary: #f4f4f5;
+  --cot-secondary-foreground: #18181b;
+  --cot-radius: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --cot-background: #09090b;
+    --cot-foreground: #fafafa;
+    --cot-muted: #27272a;
+    --cot-muted-foreground: #a1a1aa;
+    --cot-border: #27272a;
+    --cot-popover-foreground: #fafafa;
+    --cot-secondary: #27272a;
+    --cot-secondary-foreground: #fafafa;
+  }
+}
+
+/* Root ------------------------------------------------------- */
+.cot {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--cot-foreground);
+}
+
+/* Header (collapsible trigger) ------------------------------- */
+.cot-header {
+  all: unset;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--cot-muted-foreground);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.cot-header:hover { color: var(--cot-foreground); }
+.cot-header:focus-visible {
+  outline: 2px solid var(--cot-foreground);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.cot-header-label {
+  flex: 1;
+  text-align: left;
+}
+.cot-header .chevron {
+  transition: transform 0.2s ease;
+}
+.cot[data-open="true"] .cot-header .chevron {
+  transform: rotate(180deg);
+}
+.cot-icon {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  stroke-width: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Content (collapsible body) --------------------------------- */
+.cot-content {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow: hidden;
+  color: var(--cot-popover-foreground);
+}
+.cot[data-open="false"] .cot-content { display: none; }
+.cot[data-open="true"] .cot-content {
+  animation: cot-slide-in 0.2s ease-out;
+}
+
+@keyframes cot-slide-in {
+  from { opacity: 0; transform: translateY(-0.5rem); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Step ------------------------------------------------------- */
+.cot-step {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  animation: cot-step-in 0.3s ease-out;
+}
+
+@keyframes cot-step-in {
+  from { opacity: 0; transform: translateY(-0.5rem); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.cot-step[data-status="complete"] { color: var(--cot-muted-foreground); }
+.cot-step[data-status="active"]   { color: var(--cot-foreground); }
+.cot-step[data-status="pending"]  { color: var(--cot-muted-foreground); opacity: 0.5; }
+
+.cot-step[data-status="active"] .cot-step-icon-wrap::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.2;
+  animation: cot-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes cot-pulse {
+  0%, 100% { opacity: 0.1; transform: scale(1); }
+  50%      { opacity: 0.25; transform: scale(1.3); }
+}
+
+.cot-step-icon-wrap {
+  position: relative;
+  margin-top: 0.125rem;
+  flex-shrink: 0;
+}
+.cot-step-icon-wrap svg {
+  width: 1rem;
+  height: 1rem;
+  position: relative;
+  z-index: 1;
+}
+.cot-step-connector {
+  position: absolute;
+  top: 1.75rem;
+  bottom: -0.75rem;
+  left: 50%;
+  margin-left: -0.5px;
+  width: 1px;
+  background: var(--cot-border);
+}
+.cot-step:last-child .cot-step-connector { display: none; }
+
+.cot-step-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow: hidden;
+}
+.cot-step-label { font-weight: 500; }
+.cot-step-description {
+  color: var(--cot-muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* Search results row ----------------------------------------- */
+.cot-search-results {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.cot-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: var(--cot-secondary);
+  color: var(--cot-secondary-foreground);
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  border: 1px solid transparent;
+}
+.cot-badge svg { width: 0.75rem; height: 0.75rem; }
+
+/* Image block ------------------------------------------------ */
+.cot-image {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.cot-image-frame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--cot-muted);
+  border-radius: var(--cot-radius);
+  padding: 0.75rem;
+  overflow: hidden;
+  max-height: 20rem;
+}
+.cot-image-frame img {
+  max-width: 100%;
+  max-height: 18rem;
+  border-radius: calc(var(--cot-radius) - 2px);
+  display: block;
+}
+.cot-image-caption {
+  color: var(--cot-muted-foreground);
+  font-size: 0.75rem;
+  margin: 0;
+}

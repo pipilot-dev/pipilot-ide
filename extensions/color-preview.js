@@ -2,6 +2,8 @@
 // Detects color values in CSS/JS/HTML files and shows colored markers in the gutter.
 
 (function (PiPilot, bus, api, state, db) {
+  if (window.__pipilotBuiltinColorPreview) return;
+  window.__pipilotBuiltinColorPreview = true;
 
   var STYLE_ID = 'pipilot-color-preview-styles';
   var MARKER_CLASS_PREFIX = 'pipilot-color-marker-';

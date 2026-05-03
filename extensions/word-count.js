@@ -1,7 +1,11 @@
 // PiPilot IDE Extension: Word Count
 // Shows word count, character count, and reading time in the status bar.
+// NOTE: Also shipped as a built-in (Settings → Features → Word Count). The
+// flag below prevents double-loading if a user has the extension installed.
 
 (function (PiPilot, bus, api, state) {
+  if (window.__pipilotBuiltinWordCount) return;
+  window.__pipilotBuiltinWordCount = true;
   var statusBar = document.querySelector('.status-right');
   if (!statusBar) return;
 

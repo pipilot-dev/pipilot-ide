@@ -43,13 +43,18 @@ module.exports = function register(ipcMain, ctx) {
   }
 
   function detectUrl(line) {
-    const m = line.match(/(https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d+))?[^\s]*)/i);
+    // Strip ANSI escape codes first — Vite/Next/etc output colored URLs
+    const clean = line.replace(/\x1b\[[0-9;]*m/g, '').replace(/[\u001b\u009b]\[[0-9;]*[a-zA-Z]/g, '');
+    const m = clean.match(/(https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d+))?[^\s]*)/i);
     if (m) return { url: m[1], port: m[2] ? parseInt(m[2], 10) : null };
-    const m2 = line.match(/Local:\s+(https?:\/\/[^\s]+)/i);
+    const m2 = clean.match(/Local:\s+(https?:\/\/[^\s]+)/i);
     if (m2) {
       const portMatch = m2[1].match(/:(\d+)/);
       return { url: m2[1], port: portMatch ? parseInt(portMatch[1], 10) : null };
     }
+    // Also match "port NNNN" or ":NNNN" patterns common in dev server output
+    const m3 = clean.match(/(?:port|listening on|started at)\s*:?\s*(\d{4,5})/i);
+    if (m3) return { url: `http://localhost:${m3[1]}`, port: parseInt(m3[1], 10) };
     return null;
   }
 
@@ -74,6 +79,23 @@ module.exports = function register(ipcMain, ctx) {
     };
   }
 
+  // Kill any running server for a given project path
+  function killServersForProject(projectPath) {
+    for (const [id, srv] of servers) {
+      if (srv.projectPath === projectPath && srv.status === 'running' && srv.child) {
+        try {
+          if (process.platform === 'win32') {
+            spawn('taskkill', ['/pid', String(srv.child.pid), '/T', '/F']);
+          } else {
+            srv.child.kill('SIGTERM');
+          }
+        } catch {}
+        srv.status = 'stopped';
+        emitLog(id, '[pipilot] killed — new server starting for same project');
+      }
+    }
+  }
+
   ipcMain.handle('devserver:start', async (_e, payload) => {
     try {
       const { projectPath } = payload || {};
@@ -81,6 +103,9 @@ module.exports = function register(ipcMain, ctx) {
       if (!projectPath) throw new Error('projectPath required');
       if (!cmd) cmd = await detectCommand(projectPath);
       if (!cmd) throw new Error('No dev/start/serve script found in package.json. Pass cmd explicitly.');
+
+      // Kill any existing server for this project before starting a new one
+      killServersForProject(projectPath);
 
       const id = newId();
       const child = spawn(cmd, {
@@ -173,6 +198,24 @@ module.exports = function register(ipcMain, ctx) {
       const srv = servers.get(id);
       if (!srv) return ok({ server: null });
       return ok({ server: summarize(srv) });
+    } catch (err) { return fail(err); }
+  });
+
+  ipcMain.handle('devserver:stop-all', async () => {
+    try {
+      for (const [id, srv] of servers) {
+        if (srv.status === 'running' && srv.child) {
+          try {
+            if (process.platform === 'win32') {
+              spawn('taskkill', ['/pid', String(srv.child.pid), '/T', '/F']);
+            } else {
+              srv.child.kill('SIGTERM');
+            }
+          } catch {}
+          srv.status = 'stopped';
+        }
+      }
+      return ok({ stopped: servers.size });
     } catch (err) { return fail(err); }
   });
 

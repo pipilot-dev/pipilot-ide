@@ -388,10 +388,10 @@
   }
 
   async function stopServer() {
+    // Kill all dev servers (prevents stale servers from other projects)
+    try { await api.devServer.stopAll(); } catch {}
     if (isStaticServer && state.projectPath) {
       try { await api.devServer.stopStatic(state.projectPath); } catch {}
-    } else if (currentServerId) {
-      try { await api.devServer.stop(currentServerId); } catch {}
     }
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (logUnsub) try { logUnsub(); } catch {}

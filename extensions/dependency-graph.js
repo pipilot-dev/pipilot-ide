@@ -3,6 +3,8 @@
 // for import/require statements, builds a dependency map, renders interactive graph.
 
 (function (PiPilot, bus, api, state, db) {
+  if (window.__pipilotBuiltinDependencyGraph) return;
+  window.__pipilotBuiltinDependencyGraph = true;
 
   // ── Activity bar button ──
   var actBar = document.getElementById('activity-bar');
@@ -136,7 +138,26 @@
   }
 
   // ── Open virtual tab ──
-  function exportGraph(format, graphArea) {
+  // Read the legend chips currently rendered in the DOM. Returns
+  // [{ color, label }] in source order, with orphan count last.
+  function readLegendChips(legendEl) {
+    var chips = [];
+    if (!legendEl) return chips;
+    var children = legendEl.children;
+    for (var i = 0; i < children.length; i++) {
+      var span = children[i];
+      var swatch = span.querySelector('span');
+      var color = swatch ? (swatch.style.background || swatch.style.backgroundColor || '#888') : '';
+      var label = (span.textContent || '').trim();
+      chips.push({ color: color, label: label, isOrphan: !swatch });
+    }
+    return chips;
+  }
+
+  function exportGraph(format, container) {
+    if (!container) return;
+    var graphArea = container.querySelector('#depgraph-area');
+    var legendEl = container.querySelector('#depgraph-legend');
     if (!graphArea) return;
     var svg = graphArea.querySelector('svg');
     var nodes = graphArea.querySelectorAll('.depgraph-node');
@@ -145,77 +166,180 @@
       return;
     }
 
-    var w = parseInt(graphArea.style.width) || graphArea.scrollWidth || 800;
-    var h = parseInt(graphArea.style.height) || graphArea.scrollHeight || 600;
+    var graphW = parseInt(graphArea.style.width) || graphArea.scrollWidth || 800;
+    var graphH = parseInt(graphArea.style.height) || graphArea.scrollHeight || 600;
+
+    var chips = readLegendChips(legendEl);
+    var TITLE_H = 32;
+    var LEGEND_H = chips.length ? 28 : 0;
+    var HEADER_H = TITLE_H + LEGEND_H + 12; // padding under header
+    var totalW = graphW;
+    var totalH = HEADER_H + graphH + 16;
 
     if (format === 'svg') {
-      // Build a standalone SVG with embedded nodes
-      var svgClone = svg ? svg.cloneNode(true) : document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-      svgClone.setAttribute('width', w);
-      svgClone.setAttribute('height', h);
+      var NS = 'http://www.w3.org/2000/svg';
+      var XHTML = 'http://www.w3.org/1999/xhtml';
+      var out = document.createElementNS(NS, 'svg');
+      out.setAttribute('xmlns', NS);
+      out.setAttribute('width', totalW);
+      out.setAttribute('height', totalH);
+      out.setAttribute('viewBox', '0 0 ' + totalW + ' ' + totalH);
 
-      // Render nodes as SVG foreignObject
-      for (var i = 0; i < nodes.length; i++) {
-        var nd = nodes[i];
-        var fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
-        fo.setAttribute('x', parseInt(nd.style.left) || 0);
-        fo.setAttribute('y', parseInt(nd.style.top) || 0);
-        fo.setAttribute('width', parseInt(nd.style.width) || 150);
-        fo.setAttribute('height', 40);
-        var body = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
-        body.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
-        body.style.cssText = nd.style.cssText.replace(/position\s*:\s*absolute\s*;?/i, '');
-        body.textContent = nd.textContent;
-        fo.appendChild(body);
-        svgClone.appendChild(fo);
+      // Background
+      var bg = document.createElementNS(NS, 'rect');
+      bg.setAttribute('x', 0); bg.setAttribute('y', 0);
+      bg.setAttribute('width', totalW); bg.setAttribute('height', totalH);
+      bg.setAttribute('fill', '#16161a');
+      out.appendChild(bg);
+
+      // Header (title + legend) via foreignObject
+      var headFo = document.createElementNS(NS, 'foreignObject');
+      headFo.setAttribute('x', 0); headFo.setAttribute('y', 0);
+      headFo.setAttribute('width', totalW); headFo.setAttribute('height', HEADER_H);
+      var headDiv = document.createElementNS(XHTML, 'div');
+      headDiv.setAttribute('xmlns', XHTML);
+      headDiv.style.cssText = 'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#d9d9de;background:#1a1a22;padding:10px 20px;box-sizing:border-box;border-bottom:1px solid #333;';
+      var titleEl = document.createElementNS(XHTML, 'div');
+      titleEl.style.cssText = 'font-size:14px;font-weight:600;margin-bottom:6px;';
+      titleEl.textContent = 'Dependency Graph — exported ' + new Date().toLocaleString();
+      headDiv.appendChild(titleEl);
+      if (chips.length) {
+        var legendDiv = document.createElementNS(XHTML, 'div');
+        legendDiv.style.cssText = 'display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:#9aa0a6;';
+        for (var ci = 0; ci < chips.length; ci++) {
+          var chip = chips[ci];
+          var item = document.createElementNS(XHTML, 'span');
+          item.style.cssText = 'display:inline-flex;align-items:center;gap:5px;' + (chip.isOrphan ? 'color:#e5484d;' : '');
+          if (!chip.isOrphan) {
+            var sw = document.createElementNS(XHTML, 'span');
+            sw.style.cssText = 'display:inline-block;width:10px;height:10px;border-radius:2px;background:' + chip.color + ';';
+            item.appendChild(sw);
+          }
+          var lbl = document.createElementNS(XHTML, 'span');
+          lbl.textContent = chip.label;
+          item.appendChild(lbl);
+          legendDiv.appendChild(item);
+        }
+        headDiv.appendChild(legendDiv);
+      }
+      headFo.appendChild(headDiv);
+      out.appendChild(headFo);
+
+      // Graph area: clone existing edges with offset
+      if (svg) {
+        var gWrap = document.createElementNS(NS, 'g');
+        gWrap.setAttribute('transform', 'translate(0,' + HEADER_H + ')');
+        var srcLines = svg.querySelectorAll('line');
+        for (var li = 0; li < srcLines.length; li++) {
+          gWrap.appendChild(srcLines[li].cloneNode(true));
+        }
+        // Clone any defs / markers / paths
+        var srcPaths = svg.querySelectorAll('path');
+        for (var pi = 0; pi < srcPaths.length; pi++) {
+          gWrap.appendChild(srcPaths[pi].cloneNode(true));
+        }
+        out.appendChild(gWrap);
       }
 
-      var svgData = new XMLSerializer().serializeToString(svgClone);
+      // Nodes via foreignObject (offset by header)
+      for (var i = 0; i < nodes.length; i++) {
+        var nd = nodes[i];
+        var fo = document.createElementNS(NS, 'foreignObject');
+        fo.setAttribute('x', parseInt(nd.style.left) || 0);
+        fo.setAttribute('y', (parseInt(nd.style.top) || 0) + HEADER_H);
+        fo.setAttribute('width', parseInt(nd.style.width) || 150);
+        fo.setAttribute('height', 40);
+        var body = document.createElementNS(XHTML, 'div');
+        body.setAttribute('xmlns', XHTML);
+        body.style.cssText = nd.style.cssText.replace(/position\s*:\s*absolute\s*;?/i, '').replace(/left\s*:[^;]+;?/i, '').replace(/top\s*:[^;]+;?/i, '');
+        body.textContent = nd.textContent;
+        fo.appendChild(body);
+        out.appendChild(fo);
+      }
+
+      var svgData = new XMLSerializer().serializeToString(out);
       var blob = new Blob(['<?xml version="1.0" encoding="UTF-8"?>\n' + svgData], { type: 'image/svg+xml' });
       downloadBlob(blob, 'dependency-graph.svg');
-      bus.emit('toast:show', { message: 'SVG exported', type: 'ok' });
+      bus.emit('toast:show', { message: 'SVG exported (with legend)', type: 'ok' });
 
     } else if (format === 'png') {
-      // Render to canvas via html2canvas-like approach using SVG foreignObject
       var canvas = document.createElement('canvas');
-      var scale = 2; // retina
-      canvas.width = w * scale;
-      canvas.height = h * scale;
+      var scale = 2;
+      canvas.width = totalW * scale;
+      canvas.height = totalH * scale;
       var ctx = canvas.getContext('2d');
       ctx.scale(scale, scale);
       ctx.fillStyle = '#16161a';
-      ctx.fillRect(0, 0, w, h);
+      ctx.fillRect(0, 0, totalW, totalH);
 
-      // Draw edges from SVG
+      // ── Header band ──
+      ctx.fillStyle = '#1a1a22';
+      ctx.fillRect(0, 0, totalW, HEADER_H);
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, HEADER_H + 0.5); ctx.lineTo(totalW, HEADER_H + 0.5);
+      ctx.stroke();
+
+      // Title
+      ctx.fillStyle = '#d9d9de';
+      ctx.font = '600 14px -apple-system, Segoe UI, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Dependency Graph — exported ' + new Date().toLocaleString(), 20, 16);
+
+      // Legend chips
+      if (chips.length) {
+        var x = 20;
+        var y = TITLE_H + 4;
+        ctx.font = '11px -apple-system, Segoe UI, sans-serif';
+        ctx.textBaseline = 'middle';
+        for (var c = 0; c < chips.length; c++) {
+          var chip2 = chips[c];
+          var label = chip2.label;
+          var labelW = ctx.measureText(label).width;
+          var blockW = (chip2.isOrphan ? 0 : 16) + labelW + 14;
+          if (x + blockW > totalW - 12) { x = 20; y += 18; }
+          if (!chip2.isOrphan) {
+            ctx.fillStyle = chip2.color || '#888';
+            roundRect(ctx, x, y - 5, 10, 10, 2); ctx.fill();
+            x += 14;
+          }
+          ctx.fillStyle = chip2.isOrphan ? '#e5484d' : '#9aa0a6';
+          ctx.fillText(label, x, y);
+          x += labelW + 14;
+        }
+      }
+
+      // ── Graph (offset by HEADER_H) ──
+      ctx.save();
+      ctx.translate(0, HEADER_H);
+
+      // Edges
       var lines = svg ? svg.querySelectorAll('line') : [];
       for (var l = 0; l < lines.length; l++) {
         var ln = lines[l];
+        var x1 = parseFloat(ln.getAttribute('x1'));
+        var y1 = parseFloat(ln.getAttribute('y1'));
+        var x2 = parseFloat(ln.getAttribute('x2'));
+        var y2 = parseFloat(ln.getAttribute('y2'));
         ctx.beginPath();
-        ctx.moveTo(parseFloat(ln.getAttribute('x1')), parseFloat(ln.getAttribute('y1')));
-        ctx.lineTo(parseFloat(ln.getAttribute('x2')), parseFloat(ln.getAttribute('y2')));
+        ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
         ctx.strokeStyle = ln.getAttribute('stroke') || '#444';
         ctx.lineWidth = 1;
         ctx.globalAlpha = parseFloat(ln.getAttribute('opacity') || '0.6');
         ctx.stroke();
         ctx.globalAlpha = 1;
-
-        // Draw arrowhead
-        var ax = parseFloat(ln.getAttribute('x2'));
-        var ay = parseFloat(ln.getAttribute('y2'));
-        var fx = parseFloat(ln.getAttribute('x1'));
-        var fy = parseFloat(ln.getAttribute('y1'));
-        var angle = Math.atan2(ay - fy, ax - fx);
+        var angle = Math.atan2(y2 - y1, x2 - x1);
         ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        ctx.lineTo(ax - 8 * Math.cos(angle - 0.4), ay - 8 * Math.sin(angle - 0.4));
-        ctx.lineTo(ax - 8 * Math.cos(angle + 0.4), ay - 8 * Math.sin(angle + 0.4));
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - 8 * Math.cos(angle - 0.4), y2 - 8 * Math.sin(angle - 0.4));
+        ctx.lineTo(x2 - 8 * Math.cos(angle + 0.4), y2 - 8 * Math.sin(angle + 0.4));
         ctx.closePath();
         ctx.fillStyle = '#555';
         ctx.fill();
       }
 
-      // Draw nodes
+      // Nodes
       ctx.font = '11px JetBrains Mono, monospace';
       for (var n = 0; n < nodes.length; n++) {
         var node = nodes[n];
@@ -223,33 +347,44 @@
         var ny = parseInt(node.style.top) || 0;
         var nw = parseInt(node.style.width) || 150;
         var nh = 36;
-        var bg = node.style.borderColor || '#444';
+        var bgC = node.style.borderColor || '#444';
         var isOrphan = node.style.borderStyle === 'dashed';
-
-        // Node background
         ctx.fillStyle = '#232329';
-        ctx.strokeStyle = bg;
+        ctx.strokeStyle = bgC;
         ctx.lineWidth = isOrphan ? 1.5 : 1;
         if (isOrphan) ctx.setLineDash([4, 3]); else ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.roundRect(nx, ny, nw, nh, 6);
+        roundRect(ctx, nx, ny, nw, nh, 6);
         ctx.fill();
         ctx.stroke();
         ctx.setLineDash([]);
-
-        // Node text
         ctx.fillStyle = '#d9d9de';
         ctx.textBaseline = 'middle';
         ctx.fillText(node.textContent.trim().slice(0, 22), nx + 8, ny + nh / 2);
       }
 
+      ctx.restore();
+
       canvas.toBlob(function (blob) {
         if (blob) {
           downloadBlob(blob, 'dependency-graph.png');
-          bus.emit('toast:show', { message: 'PNG exported (' + canvas.width + 'x' + canvas.height + ')', type: 'ok' });
+          bus.emit('toast:show', { message: 'PNG exported with legend (' + canvas.width + 'x' + canvas.height + ')', type: 'ok' });
         }
       }, 'image/png');
     }
+  }
+
+  // Polyfill for canvas roundRect (older Electron versions don't have it)
+  function roundRect(ctx, x, y, w, h, r) {
+    if (typeof ctx.roundRect === 'function') {
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, r); return;
+    }
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y,     x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x,     y + h, r);
+    ctx.arcTo(x,     y + h, x,     y,     r);
+    ctx.arcTo(x,     y,     x + w, y,     r);
+    ctx.closePath();
   }
 
   function downloadBlob(blob, filename) {
@@ -306,7 +441,7 @@
           var format = exportSelect.value;
           if (!format) return;
           exportSelect.value = '';
-          exportGraph(format, graphArea);
+          exportGraph(format, container);
         });
 
         buildGraph(container);

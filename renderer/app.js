@@ -144,6 +144,14 @@
     });
 
     $('#open-settings')?.addEventListener('click', () => bus.emit('modal:settings'));
+    $('#titlebar-browser-btn')?.addEventListener('click', () => bus.emit('browser:open', {}));
+    // Ctrl+Shift+B opens a new browser tab
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        bus.emit('browser:open', {});
+      }
+    });
   }
 
   // ── Activity badge: Source Control change count ───────────────────────
@@ -193,7 +201,17 @@
   function revealChatPanel() {
     // Make sure the chat panel is visible (not hidden + not collapsed) and focus it.
     $('#chat-panel')?.classList.remove('hidden');
-    $('#ide-root')?.classList.remove('chat-collapsed');
+    const root = $('#ide-root');
+    if (root) {
+      root.classList.remove('chat-collapsed');
+      // Clear any stale inline grid template that toggleChat() set to "0 0"
+      // when collapsing — otherwise removing the class alone leaves the
+      // column with zero width.
+      const sideCollapsed = root.classList.contains('side-collapsed');
+      root.style.gridTemplateColumns = sideCollapsed
+        ? 'var(--activity-w) 0 0 1fr 4px var(--chat-panel-w)'
+        : 'var(--activity-w) var(--side-panel-w) 4px 1fr 4px var(--chat-panel-w)';
+    }
     saveLayout();
     window.PiPilot?.chat?.focus?.();
   }
@@ -572,6 +590,7 @@
 
     bus.on('menu:view:toggle-problems', () => bus.emit('bottom:show', 'problems'));
     bus.on('chat:reveal', revealChatPanel);
+    bus.on('chat:show', revealChatPanel);   // alias used by welcome-tab + others
     bus.on('panel:switch', (panel) => {
       // Special activity-bar buttons that don't just change the sidebar.
       if (panel === 'chat') revealChatPanel();
@@ -655,64 +674,8 @@
     bus.on('project:opened', () => startGitBadgePolling());
     bus.on('project:closed', () => stopGitBadgePolling());
 
-    // ── Search index: start on project open, show progress in status bar ──
-    let removeIndexProgress = null;
-    const indexStatusEl = document.getElementById('status-search-index');
-
-    bus.on('project:opened', () => {
-      if (!state.projectPath || !api.searchIndex) return;
-      // Delay search indexing so tree + UI + terminal loads first
-      setTimeout(() => {
-        if (state.projectPath) api.searchIndex.start(state.projectPath);
-      }, 5000);
-
-      if (removeIndexProgress) removeIndexProgress();
-      if (indexStatusEl) {
-        indexStatusEl.style.display = '';
-        indexStatusEl.classList.add('indexing');
-        const label = indexStatusEl.querySelector('.status-index-label');
-        const bar = indexStatusEl.querySelector('.status-index-bar');
-        if (label) label.textContent = 'Search: starting';
-        if (bar) bar.style.width = '0%';
-      }
-
-      removeIndexProgress = api.searchIndex.onProgress((p) => {
-        if (!indexStatusEl) return;
-        const label = indexStatusEl.querySelector('.status-index-label');
-        const bar = indexStatusEl.querySelector('.status-index-bar');
-
-        if (p.phase === 'indexing') {
-          indexStatusEl.style.display = '';
-          indexStatusEl.classList.add('indexing');
-          if (label) label.textContent = `Search: indexing ${p.pct}%`;
-          if (bar) bar.style.width = `${p.pct}%`;
-        } else if (p.phase === 'updating') {
-          indexStatusEl.style.display = '';
-          indexStatusEl.classList.add('indexing');
-          if (label) label.textContent = `Search: updating ${p.filesProcessed}/${p.filesTotal}`;
-          if (bar) bar.style.width = `${p.pct}%`;
-        } else if (p.phase === 'ready') {
-          indexStatusEl.classList.remove('indexing');
-          if (label) label.textContent = 'Search: ready';
-          if (bar) bar.style.width = '100%';
-          indexStatusEl.style.display = '';
-          bus.emit('toast:show', { type: 'ok', message: `Search index ready — ${p.filesTotal} files` });
-          // Keep visible showing "ready" state
-        }
-      });
-    });
-
-    bus.on('project:closed', () => {
-      if (removeIndexProgress) { removeIndexProgress(); removeIndexProgress = null; }
-      if (indexStatusEl) indexStatusEl.style.display = 'none';
-    });
-
-    // Forward file change events to search index for live updates
-    bus.on('file:external-change', (evt) => {
-      if (state.projectPath && api.searchIndex && evt?.path) {
-        api.searchIndex.fileChanged(state.projectPath, evt);
-      }
-    });
+    // ── Search index: disabled on project open — runs on-demand only when search_codebase tool is called ──
+    // The mcp-ide-tools.js searchCodebase() function triggers indexProject() if not ready.
 
     // Best-effort: refresh badge after git panel operations.
     bus.on('panel:switch', (panel) => {
@@ -746,28 +709,92 @@
   }
 
   // ── Extension loader: load all enabled extensions on startup ──
+  // Each extension is arbitrary user JS executed on the renderer's main
+  // thread — running them back-to-back in a tight loop is exactly the kind
+  // of work that locks up the UI. We yield to the event loop (idle slot if
+  // available, else macrotask) BETWEEN extensions so an expensive one in
+  // the chain doesn't drag the others into a single frozen burst.
   async function loadExtensions() {
     if (!api.extensions?.loadAll) return;
+    const _tAll = performance.now();
     try {
       const result = await api.extensions.loadAll();
       if (!result?.ok || !result.extensions?.length) return;
+      const yieldFn = (cb) => (typeof requestIdleCallback === 'function')
+        ? requestIdleCallback(cb, { timeout: 200 })
+        : setTimeout(cb, 0);
       for (const ext of result.extensions) {
+        const _t = performance.now();
         try {
           // Each extension gets its own scoped DB instance + all PiPilot APIs
           const db = window.PiPilot.extDB?.forExtension(ext.id) || null;
           const fn = new Function('PiPilot', 'bus', 'api', 'state', 'db', ext.code);
           fn(window.PiPilot, window.PiPilot.bus, window.electronAPI, window.PiPilot.state, db);
-          console.log(`[extensions] Loaded: ${ext.manifest?.name || ext.id}`);
+          const dur = (performance.now() - _t).toFixed(0);
+          const tag = dur >= 100 ? `⚠️` : '✓';
+          console.log(`[startup] extension ${tag} ${ext.manifest?.name || ext.id}: ${dur}ms`);
         } catch (err) {
           console.error(`[extensions] Failed to load ${ext.id}:`, err);
         }
+        // Yield so the next extension doesn't run in the same frame.
+        await new Promise(r => yieldFn(r));
       }
+      console.log(`[startup] all extensions loaded in ${(performance.now() - _tAll).toFixed(0)}ms`);
     } catch (err) {
       console.error('[extensions] loadAll failed:', err);
     }
   }
   // Load extensions after a short delay so core modules are ready
   setTimeout(loadExtensions, 1000);
+
+  // ── Built-in extensions: shipped with the IDE, gated by Settings ──
+  // We load them slightly BEFORE the user-installed extensions so the
+  // status-bar / sidebar / activity-bar items they register sit at the
+  // top of their respective groups. Each is gated by a settings flag —
+  // toggle in Settings → Built-in Features.
+  async function loadBuiltins() {
+    if (!api.extensions?.listBuiltins || !api.extensions?.loadBuiltins) return;
+    const _t0 = performance.now();
+    try {
+      const meta = await api.extensions.listBuiltins();
+      if (!meta?.ok || !meta.builtins?.length) return;
+      const settings = window.PiPilot?.state?.settings || {};
+      // Resolve which to enable from settings (default: true if undefined).
+      const enabledIds = meta.builtins
+        .filter(b => settings[b.settingsKey] !== false)
+        .map(b => b.id);
+      if (!enabledIds.length) {
+        console.log('[startup] all built-ins disabled');
+        return;
+      }
+      const result = await api.extensions.loadBuiltins(enabledIds);
+      if (!result?.ok || !result.extensions?.length) return;
+      const yieldFn = (cb) => (typeof requestIdleCallback === 'function')
+        ? requestIdleCallback(cb, { timeout: 200 })
+        : setTimeout(cb, 0);
+      for (const ext of result.extensions) {
+        const _t = performance.now();
+        try {
+          // Built-ins use the same scoped DB API as user extensions.
+          const db = window.PiPilot.extDB?.forExtension(ext.id) || null;
+          const fn = new Function('PiPilot', 'bus', 'api', 'state', 'db', ext.code);
+          fn(window.PiPilot, window.PiPilot.bus, window.electronAPI, window.PiPilot.state, db);
+          const dur = (performance.now() - _t).toFixed(0);
+          const tag = dur >= 100 ? '⚠️' : '✓';
+          console.log(`[startup] builtin ${tag} ${ext.manifest?.name || ext.id}: ${dur}ms`);
+        } catch (err) {
+          console.error(`[builtins] Failed to load ${ext.id}:`, err);
+        }
+        await new Promise(r => yieldFn(r));
+      }
+      console.log(`[startup] all built-ins loaded in ${(performance.now() - _t0).toFixed(0)}ms`);
+    } catch (err) {
+      console.error('[builtins] loadBuiltins failed:', err);
+    }
+  }
+  // Built-ins run a hair earlier than user extensions so their status-bar
+  // entries (Word Count, File Size) get the leftmost slot.
+  setTimeout(loadBuiltins, 600);
 
   // ── Global external link handler ──
   // All <a href="http(s)://..."> clicks open in default browser instead of Electron

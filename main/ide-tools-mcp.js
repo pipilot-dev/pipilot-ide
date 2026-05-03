@@ -14,6 +14,13 @@ const ideTools = require('./mcp-ide-tools');
 
 function buildIdeTools(sdk) {
   const { z } = require('zod');
+  const browserCtl = require('./browser-control'); // module.browserExec singleton
+
+  function browserToolText(label, payload) {
+    if (payload == null) return `${label}: ok`;
+    if (typeof payload === 'string') return `${label}: ${payload}`;
+    return `${label}:\n${JSON.stringify(payload, null, 2)}`;
+  }
 
   return [
     sdk.tool('reason',
@@ -22,7 +29,13 @@ function buildIdeTools(sdk) {
         thought: z.string().describe('The complete reasoning for this turn as a single markdown block. Use ## headings to delineate sections (Clarify / Options / Decision / Plan), bulleted lists, pipe tables, inline code, fenced code blocks, **bold** for the chosen approach. Treat this like a short engineering note an experienced reader could skim in 15 seconds.'),
       },
       async () => {
-        return { content: [{ type: 'text', text: 'Reasoning recorded. Continue with your reply.' }] };
+        return { content: [{ type: 'text', text:
+          'Reasoning recorded.\n\n' +
+          '⚠ DO NOT STOP HERE. The user has not seen anything yet — calling `reason` produces zero user-visible output (the IDE shows it in a collapsed side panel). Your turn is incomplete until you EITHER:\n' +
+          '  • write your user-facing reply as normal markdown text, OR\n' +
+          '  • call another tool to act on the reasoning above.\n\n' +
+          'Continue NOW with the next step from your plan. Do not return an empty/no-op turn.'
+        }] };
       }
     ),
     sdk.tool('get_working_directory',
@@ -176,6 +189,13 @@ function buildIdeTools(sdk) {
         } catch (e) { return { content: [{ type: 'text', text: `Search error: ${e.message}` }] }; }
       }
     ),
+    // ── screenshot_preview is RETIRED ────────────────────────────────
+    // The embedded browser tools (browser_open + browser_screenshot)
+    // supersede it: same disk-backed output, plus full interactivity
+    // (click/type/scroll/console/snapshot), no puppeteer-core dependency,
+    // and shares cookies with the user's logged-in browser session.
+    // Re-enable only if you remove the embedded browser.
+    /*
     sdk.tool('screenshot_preview',
       'Capture a screenshot of the running dev server or any URL using headless Chrome. Returns PNG image + DOM analysis.',
       { url: z.string().describe('URL to screenshot'), width: z.number().optional().default(1440).describe('Viewport width'), height: z.number().optional().default(900).describe('Viewport height') },
@@ -194,6 +214,7 @@ function buildIdeTools(sdk) {
         } catch (e) { return { content: [{ type: 'text', text: `Screenshot error: ${e.message}` }] }; }
       }
     ),
+    */
     sdk.tool('generate_image',
       'Generate an image from a text description using AI. Saves to assets/ folder. Use for hero images, backgrounds, avatars, illustrations.',
       { description: z.string().describe('Vivid description of the image to generate'), aspect: z.enum(['16:9', '1:1', '9:16']).default('16:9').describe('Aspect ratio'), fileName: z.string().optional().describe('Output file name without extension') },
@@ -203,6 +224,466 @@ function buildIdeTools(sdk) {
           if (result.error) return { content: [{ type: 'text', text: result.error }], isError: true };
           return { content: [{ type: 'text', text: `Image generated and saved:\n- Path: ${result.path}\n- Size: ${result.sizeKB}KB\n- Aspect: ${result.aspect}\n\nUsage: ${result.usage}` }] };
         } catch (e) { return { content: [{ type: 'text', text: `Image error: ${e.message}` }] }; }
+      }
+    ),
+
+    // ─── Embedded browser control ────────────────────────────────────
+    // The IDE ships a real Chromium <webview>-based browser. These tools
+    // let you drive it: open URLs, find elements by CSS selector, click,
+    // type, scroll, screenshot, extract text/HTML, run arbitrary JS.
+    // Tabs are addressed by the `tabId` returned from `browser_open` /
+    // `browser_list_tabs`. If you omit `tabId`, ops run on the active tab.
+    sdk.tool('browser_open',
+      'Open a new tab in the embedded web browser at the given URL and return its tabId. Use for any task that needs live web data: research, login flows, scraping a single page, testing a deployed site, watching a video. Subsequent ops (click/type/scroll/screenshot) take this tabId.\n\nRECOMMENDED FLOW for browser tasks:\n  1. Think first via mcp__pipilot__reason — list the goal, the steps, and what evidence you need.\n  2. browser_open → browser_observe (or browser_snapshot) to find refs.\n  3. browser_click_ref / browser_fill_ref using refs from the snapshot.\n  4. After EVERY click, check the returned `confidence` and `verified` fields. If confidence is "no-change", DO NOT assume success — try a different selector.',
+      { url: z.string().describe('Full URL to navigate to (https://...). Plain queries also accepted — they go through the configured search engine.'), incognito: z.boolean().default(false).describe('Open in a private session (no cookies, no history persistence)') },
+      async (args) => {
+        try {
+          const r = await browserCtl.browserExec('open', args, 15000);
+          const txt = browserToolText('Opened browser tab', r) +
+            '\n\nNext: call mcp__pipilot__browser_observe (or browser_snapshot) to see what is on the page and get refs. Use mcp__pipilot__reason to plan if the task is non-trivial.';
+          return { content: [{ type: 'text', text: txt }] };
+        } catch (e) { return { content: [{ type: 'text', text: `browser_open error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_list_tabs',
+      'List all open browser tabs with id, url, title, mode (std/inc), and which one is active. Use to discover existing tabs before navigating or operating on them.',
+      {},
+      async () => {
+        try {
+          const r = await browserCtl.browserExec('list_tabs', {}, 5000);
+          return { content: [{ type: 'text', text: browserToolText('Open browser tabs', r) }] };
+        } catch (e) { return { content: [{ type: 'text', text: `browser_list_tabs error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_close_tab',
+      'Close a browser tab by id.',
+      { tabId: z.string().describe('Tab id from browser_open / browser_list_tabs') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('close_tab', args, 5000); return { content: [{ type: 'text', text: browserToolText('Closed', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_close_tab error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_navigate',
+      'Navigate an existing browser tab to a new URL. Use this instead of opening a new tab when you want to keep cookies/session.',
+      { tabId: z.string().optional().describe('Tab id (defaults to active tab)'), url: z.string().describe('Destination URL') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('navigate', args, 30000); return { content: [{ type: 'text', text: browserToolText('Navigated', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_navigate error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_back',    'Browser back button.',    { tabId: z.string().optional() }, async (a) => { try { const r = await browserCtl.browserExec('back',    a, 5000); return { content: [{ type: 'text', text: browserToolText('Back', r)    }] }; } catch (e) { return { content: [{ type: 'text', text: 'browser_back error: ' + e.message }], isError: true }; } }),
+    sdk.tool('browser_forward', 'Browser forward button.', { tabId: z.string().optional() }, async (a) => { try { const r = await browserCtl.browserExec('forward', a, 5000); return { content: [{ type: 'text', text: browserToolText('Forward', r) }] }; } catch (e) { return { content: [{ type: 'text', text: 'browser_forward error: ' + e.message }], isError: true }; } }),
+    sdk.tool('browser_reload',  'Reload the current page.', { tabId: z.string().optional() }, async (a) => { try { const r = await browserCtl.browserExec('reload',  a, 5000); return { content: [{ type: 'text', text: browserToolText('Reloaded', r) }] }; } catch (e) { return { content: [{ type: 'text', text: 'browser_reload error: ' + e.message }], isError: true }; } }),
+    sdk.tool('browser_url',     'Current URL of a tab.',    { tabId: z.string().optional() }, async (a) => { try { const r = await browserCtl.browserExec('url',     a, 5000); return { content: [{ type: 'text', text: browserToolText('URL', r)     }] }; } catch (e) { return { content: [{ type: 'text', text: 'browser_url error: ' + e.message }], isError: true }; } }),
+    sdk.tool('browser_title',   'Current page title.',      { tabId: z.string().optional() }, async (a) => { try { const r = await browserCtl.browserExec('title',   a, 5000); return { content: [{ type: 'text', text: browserToolText('Title', r)   }] }; } catch (e) { return { content: [{ type: 'text', text: 'browser_title error: ' + e.message }], isError: true }; } }),
+    sdk.tool('browser_observe',
+      'Observe the active browser tab — captures a screenshot AND emits a Playwright-style accessibility snapshot + the page console log in one call. This is the PRIMARY tool for understanding what is on a page before acting on it; call it after any navigation or interaction. Writes three files to disk and returns their paths — use the Read tool on the image path to view the screenshot, the .snapshot.yaml to find clickable refs ([ref=eN]) for browser_click_ref / browser_fill_ref, and the .console.log to inspect browser console output. Default format is JPEG at quality 92 (visually lossless for UI text, ~5× smaller than PNG); pass format:"png" for lossless or transparency.',
+      {
+        tabId: z.string().optional(),
+        format: z.enum(['jpeg', 'png']).default('jpeg').describe('Image format. JPEG default for compactness; PNG for lossless / transparency.'),
+        quality: z.number().min(60).max(100).default(92).describe('JPEG quality 60-100 (ignored for PNG). 92 is visually lossless for typical UIs.'),
+        maxWidth: z.number().min(640).max(3840).default(1600).describe('Cap on output pixel width. Wider captures are downscaled (aspect preserved); narrower ones pass through.'),
+      },
+      async (args) => {
+        try {
+          const r = await browserCtl.browserExec('screenshot', args, 25000);
+          if (!r?.base64 || r.size < 1024) throw new Error('screenshot returned no data');
+          const b64Clean = String(r.base64).replace(/\s+/g, '');
+          if (b64Clean.length < 200) throw new Error('screenshot base64 was empty after cleanup');
+          const os = require('os');
+          const dir = path.join(os.tmpdir(), 'pipilot-screenshots');
+          try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+          const ts = Date.now();
+          const ext = r.ext || 'jpg';
+          const imgPath  = path.join(dir, `shot-${ts}.${ext}`);
+          const snapPath = path.join(dir, `shot-${ts}.snapshot.yaml`);
+          const logPath  = path.join(dir, `shot-${ts}.console.log`);
+
+          try { fs.writeFileSync(imgPath, Buffer.from(b64Clean, 'base64')); }
+          catch (err) { return { content: [{ type: 'text', text: `browser_observe error: could not write image — ${err.message}` }], isError: true }; }
+
+          const snapYaml = [
+            `# url: ${r.url || ''}`,
+            `# title: ${(r.title || '').replace(/\n/g, ' ')}`,
+            `# refCount: ${r.snapshot?.refCount || 0}`,
+            '',
+            r.snapshot?.tree || '(no snapshot)',
+          ].join('\n');
+          try { fs.writeFileSync(snapPath, snapYaml); } catch {}
+
+          const logText = (r.consoleLog || []).map(c => {
+            const t = new Date(c.ts || ts).toISOString().slice(11, 23);
+            const src = c.source ? ` ${c.source}:${c.line}` : '';
+            return `[${t}] ${c.level.toUpperCase()}${src}  ${c.text}`;
+          }).join('\n') || '(no console messages)';
+          try { fs.writeFileSync(logPath, logText); } catch {}
+
+          const errCount = (r.consoleLog || []).filter(c => c.level === 'error').length;
+          const warnCount = (r.consoleLog || []).filter(c => c.level === 'warn').length;
+          const fmtLabel = (r.mime || '').toUpperCase().split('/')[1] || ext.toUpperCase();
+          const summary = [
+            `Screenshot captured (${Math.round(r.size / 1024)}KB, ${fmtLabel}).`,
+            ``,
+            `Files saved:`,
+            `  - Image:    ${imgPath}`,
+            `  - Snapshot: ${snapPath}    (${r.snapshot?.refCount || 0} interactive refs)`,
+            `  - Console:  ${logPath}     (${(r.consoleLog || []).length} entries, ${errCount} errors, ${warnCount} warnings)`,
+            ``,
+            `Page: ${r.url || ''}`,
+            r.title ? `Title: ${r.title}` : '',
+            ``,
+            `IMPORTANT: Use the Read tool on "${imgPath}" to view the screenshot image.`,
+          ].filter(Boolean).join('\n');
+
+          // Text-only — same shape as the working screenshot_preview tool.
+          // MCP image-content validation has been unreliable for large
+          // base64 payloads in this host; the agent reads the PNG via Read.
+          return { content: [{ type: 'text', text: summary }] };
+        } catch (e) { return { content: [{ type: 'text', text: `browser_observe error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_snapshot',
+      'Emit ONLY the Playwright-style accessibility snapshot of the active browser tab (no PNG). Each interactive element gets a [ref=eN] you can pass to browser_click_ref / browser_fill_ref. Cheaper than browser_screenshot when you only need to find selectors.',
+      { tabId: z.string().optional() },
+      async (args) => {
+        try {
+          const r = await browserCtl.browserExec('snapshot', args, 15000);
+          const os = require('os');
+          const dir = path.join(os.tmpdir(), 'pipilot-screenshots');
+          try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+          const ts = Date.now();
+          const snapPath = path.join(dir, `snap-${ts}.snapshot.yaml`);
+          const logPath  = path.join(dir, `snap-${ts}.console.log`);
+          const yaml = [
+            `# url: ${r.url || ''}`,
+            `# title: ${(r.title || '').replace(/\n/g, ' ')}`,
+            `# refCount: ${r.refCount || 0}`,
+            '',
+            r.tree || '(no snapshot)',
+          ].join('\n');
+          try { fs.writeFileSync(snapPath, yaml); } catch {}
+          const logText = (r.consoleLog || []).map(c => {
+            const t = new Date(c.ts || ts).toISOString().slice(11, 23);
+            return `[${t}] ${c.level.toUpperCase()}${c.source ? ' ' + c.source + ':' + c.line : ''}  ${c.text}`;
+          }).join('\n') || '(no console messages)';
+          try { fs.writeFileSync(logPath, logText); } catch {}
+          // Inline the YAML if small, otherwise just point to disk
+          const inline = (r.tree || '').length < 12000 ? '\n\n' + (r.tree || '(empty)') : '\n\n[Tree truncated — read the file]';
+          return { content: [{ type: 'text', text: `Snapshot saved to ${snapPath} (${r.refCount || 0} refs). Console log at ${logPath} (${(r.consoleLog || []).length} entries).${inline}` }] };
+        } catch (e) { return { content: [{ type: 'text', text: `browser_snapshot error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_console_log',
+      'Get the captured browser console output (log/warn/error/info) since the last navigation. Pass clear=true to also reset the buffer.',
+      { tabId: z.string().optional(), clear: z.boolean().default(false).describe('Clear the buffer after reading') },
+      async (args) => {
+        try {
+          const r = await browserCtl.browserExec('console_log', args, 5000);
+          const entries = r?.entries || [];
+          if (!entries.length) return { content: [{ type: 'text', text: '(no console messages)' }] };
+          const lines = entries.map(c => {
+            const t = new Date(c.ts).toISOString().slice(11, 23);
+            return `[${t}] ${c.level.toUpperCase()}${c.source ? ' ' + c.source + ':' + c.line : ''}  ${c.text}`;
+          });
+          // Truncate if it would blow the context
+          const out = lines.length > 200 ? lines.slice(-200).join('\n') + `\n…\n[${lines.length - 200} earlier entries dropped]` : lines.join('\n');
+          return { content: [{ type: 'text', text: out }] };
+        } catch (e) { return { content: [{ type: 'text', text: `browser_console_log error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_click_ref',
+      'Click an element by its [ref=eN] from a recent snapshot. PREFERRED over CSS selectors when you have a snapshot — refs are stable until the next navigation. Returns the same verification block as browser_click (confidence, urlChanged, modalAppeared, targetGone, domMutationCount). Auto-waits for navigation if the URL changes.',
+      {
+        tabId: z.string().optional(),
+        ref: z.string().describe('Ref id like "e42" from the latest snapshot'),
+        settleMs: z.number().optional().describe('How long to wait for DOM to settle (default 350ms)'),
+      },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('click_ref', args, 15000); return { content: [{ type: 'text', text: browserToolText('Click', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_click_ref error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_fill_ref',
+      'Fill an input/textarea by its [ref=eN] from a recent snapshot. Set submit=true to press Enter after.',
+      { tabId: z.string().optional(), ref: z.string().describe('Ref id like "e42"'), text: z.string(), submit: z.boolean().default(false) },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('fill_ref', args, 10000); return { content: [{ type: 'text', text: browserToolText('Fill', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_fill_ref error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_click',
+      'Click an element. The selector accepts CSS, [ref=eN], text="...", text=/regex/i, role=button[name="..."], or sel:has-text("..."). The IDE picks the BEST match across all candidates (visible, interactive, in viewport, not covered by overlays).\n\nReturns a VERIFICATION block so you can detect "click did nothing" without an extra observe call:\n  - confidence: "high" | "medium" | "low" | "no-change"\n  - verified.urlChanged, verified.modalAppeared, verified.targetGone, verified.titleChanged, verified.scrollChanged, verified.focusChanged\n  - verified.domMutationCount (DOM mutations during the 350ms settle window)\n\nIf the URL changes, the call automatically waits up to 5s for the new page to finish loading before returning. If confidence is "no-change", the click likely did nothing — try a different selector or check if the element was disabled / covered.',
+      {
+        tabId: z.string().optional(),
+        selector: z.string().describe('Selector — CSS, [ref=eN], text="...", text=/regex/i, role=..., or sel:has-text("...")'),
+        settleMs: z.number().optional().describe('How long to wait for DOM to settle after the click (default 350ms, range 150-2000)'),
+      },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('click', args, 15000); return { content: [{ type: 'text', text: browserToolText('Click', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_click error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_type',
+      'Type text into an input/textarea/contentEditable element. Triggers proper input/change events so React/Vue/etc. detect it. Set submit=true to press Enter after.',
+      { tabId: z.string().optional(), selector: z.string().describe('CSS selector for the input'), text: z.string().describe('Text to type'), submit: z.boolean().default(false).describe('Press Enter after typing') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('type', args, 10000); return { content: [{ type: 'text', text: browserToolText('Type', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_type error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_press_key',
+      'Dispatch a keyboard event (keydown+keypress+keyup) on the focused element. Use for Enter, Escape, Tab, ArrowDown, etc.',
+      { tabId: z.string().optional(), key: z.string().describe('Key name — e.g. "Enter", "Escape", "ArrowDown"') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('press_key', args, 5000); return { content: [{ type: 'text', text: browserToolText('Key', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_press_key error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_scroll',
+      'Scroll the page. Pass `to` for an absolute scrollY position or `dy` for a relative delta.',
+      { tabId: z.string().optional(), to: z.number().optional().describe('Absolute scrollY in pixels'), dy: z.number().optional().describe('Pixels to scroll by (positive=down)') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('scroll', args, 5000); return { content: [{ type: 'text', text: browserToolText('Scrolled', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_scroll error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_get_text',
+      'Extract visible text from the page (or just the matched element if selector is given). Best for reading article body, search results, etc.',
+      { tabId: z.string().optional(), selector: z.string().optional().describe('Optional CSS selector — omit to get the whole document body text') },
+      async (args) => {
+        try {
+          const r = await browserCtl.browserExec('get_text', args, 10000);
+          const text = r?.text || '';
+          // Cap response to avoid blowing the context — first 8000 chars
+          const capped = text.length > 8000 ? text.slice(0, 8000) + `\n…\n[truncated, ${text.length} total chars]` : text;
+          return { content: [{ type: 'text', text: capped || '(no text)' }] };
+        } catch (e) { return { content: [{ type: 'text', text: `browser_get_text error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_get_html',
+      'Get outerHTML of the document or a matched element. Useful for parsing structured pages — prefer browser_get_text for readability.',
+      { tabId: z.string().optional(), selector: z.string().optional() },
+      async (args) => {
+        try {
+          const r = await browserCtl.browserExec('get_html', args, 10000);
+          const html = r?.html || '';
+          const capped = html.length > 12000 ? html.slice(0, 12000) + `\n…\n[truncated, ${html.length} total chars]` : html;
+          return { content: [{ type: 'text', text: capped || '(no html)' }] };
+        } catch (e) { return { content: [{ type: 'text', text: `browser_get_html error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_wait_for',
+      'Wait until a CSS selector matches an element, up to timeoutMs. Use after navigation or click before reading content from dynamic pages.',
+      { tabId: z.string().optional(), selector: z.string().describe('CSS selector to wait for'), timeoutMs: z.number().default(10000).describe('Max wait in milliseconds') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('wait_for', args, (args.timeoutMs || 10000) + 2000); return { content: [{ type: 'text', text: browserToolText('Wait', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_wait_for error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_eval',
+      'Run JavaScript in the page context. Two forms accepted:\n\n  1. Single expression: "document.title" — value is auto-returned.\n  2. Multi-statement block with explicit return: "const c = document.querySelector(\'canvas\'); return c?.getBoundingClientRect();" — wrap any non-trivial logic this way.\n\nThe code runs as an async function so you can `await` Promises. The return value is JSON-serialized; non-serializable types come back as { __error: ... }.',
+      { tabId: z.string().optional(), expression: z.string().describe('Either a single expression OR a multi-statement function body that uses `return` to surface the result.') },
+      async (args) => {
+        try {
+          const r = await browserCtl.browserExec('eval', args, 30000);
+          return { content: [{ type: 'text', text: browserToolText('Eval', r) }] };
+        } catch (e) { return { content: [{ type: 'text', text: `browser_eval error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_summary',
+      'Get a structured summary of the active page: URL, title, viewport, scroll position, and lists of links / buttons / inputs. Use this BEFORE clicking or typing so you know which selectors are valid.',
+      { tabId: z.string().optional() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('summary', args, 10000); return { content: [{ type: 'text', text: browserToolText('Page summary', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_summary error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    /* ────────────────────────────────────────────────────────────────
+     * RETIRED — coordinate-input + game-bot tool batch
+     * To re-enable: remove the surrounding /* and matching closing one
+     * (search "end RETIRED batch"). Matching renderer-side OPS + page
+     * helpers in renderer/browser-tab.js are commented in lockstep —
+     * search "RETIRED — coordinate-input" there. Disabled because the
+     * agent's tool discovery layer was unreliable with 50+ browser tools.
+     * ──────────────────────────────────────────────────────────────── */
+    /*
+    sdk.tool('browser_click_at',
+      'Click at pixel coordinates (x, y) in the viewport — for canvas games, drawing apps, custom UIs where CSS selectors do not exist. Coordinates are in CSS pixels relative to the viewport top-left. Uses elementFromPoint to find the actual top element under that point and dispatches the full pointer/mouse sequence. Pair with browser_observe to know where to click — you can read pixel positions from the screenshot.',
+      { tabId: z.string().optional(), x: z.number().describe('X pixel from viewport left'), y: z.number().describe('Y pixel from viewport top') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('click_at', args, 8000); return { content: [{ type: 'text', text: browserToolText('Click at', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_click_at error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_mouse_move',
+      'Move the mouse pointer to (x, y) without clicking. Many canvas games (drawing tools, aim trainers, RTS) read mouse position on every animation frame — use this to steer the cursor.',
+      { tabId: z.string().optional(), x: z.number(), y: z.number() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('mouse_move_at', args, 5000); return { content: [{ type: 'text', text: browserToolText('Move', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_mouse_move error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_drag_at',
+      'Drag from (x1, y1) to (x2, y2) with smooth interpolated mouse movement. Coordinate-based equivalent of browser_drag — works on canvas games, drawing surfaces, sliders, etc. `steps` controls the number of intermediate move events (default 12, more = smoother).',
+      { tabId: z.string().optional(), x1: z.number(), y1: z.number(), x2: z.number(), y2: z.number(), steps: z.number().optional() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('drag_at', args, 10000); return { content: [{ type: 'text', text: browserToolText('Drag', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_drag_at error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_poll_until',
+      'Evaluate a JS expression IN THE PAGE every `intervalMs` until it returns truthy, or `timeoutMs` elapses. Critical for time-sensitive games (Aviator multiplier reaching X.XX, a button enabling, a counter changing). Polling runs entirely in the page context — no per-sample IPC roundtrip — so you can poll at ~10Hz reliably. Returns { ok, ms, value } on success; { ok:false, timeout:true } if it never matched.\n\nExample for Aviator: `parseFloat(document.querySelector(".multiplier").textContent) >= 2.5`',
+      {
+        tabId: z.string().optional(),
+        expression: z.string().describe('JS expression evaluated each tick. Returns truthy when condition met.'),
+        intervalMs: z.number().default(100).describe('Poll interval (20-1000ms). Default 100ms = 10Hz.'),
+        timeoutMs: z.number().default(10000).describe('Max wait (up to 60000).'),
+      },
+      async (args) => {
+        try {
+          const r = await browserCtl.browserExec('poll_until', args, (args.timeoutMs || 10000) + 2000);
+          return { content: [{ type: 'text', text: browserToolText('Poll', r) }] };
+        } catch (e) { return { content: [{ type: 'text', text: `browser_poll_until error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_run_script',
+      'Install a long-lived JS bot into the page. The script\'s body is executed every `intervalMs` (or every animation frame if `useRaf:true`) and persists across many ticks. This is the ESCAPE HATCH for real-time game playing: instead of the agent driving each frame from chat (too slow), the agent writes a small game-bot once and lets it run.\n\nThe script body runs as a function with one argument `ctx` providing:\n  ctx.state          — persistent object (carry data between ticks)\n  ctx.log(msg)       — append to a ring-buffer log\n  ctx.find(sel)      — selector resolver (CSS, text=, ref=, role=)\n  ctx.click(sel) / ctx.clickAt(x,y)\n  ctx.type(sel,txt) / ctx.press(key) / ctx.hover(sel)\n  ctx.mouseMoveAt(x,y) / ctx.dragAt(x1,y1,x2,y2)\n  ctx.scroll({to|dy}) / ctx.scrollTo(sel,block)\n  ctx.text(sel) / ctx.html(sel) / ctx.exists(sel)\n  ctx.eval(code) — arbitrary JS\n  ctx.runtime() / ctx.now()\n  ctx.stop(reason)   — terminates the script\n\nReturn `"stop"` or `false` from the body to terminate. Errors are caught and counted (>20 → auto-stop). Multiple named scripts can run concurrently in one tab. Poll progress with browser_script_status, terminate with browser_stop_script.\n\nExample (Chrome dino auto-jumper):\n  source: `\n    const obstacle = document.querySelector(".obstacle");\n    if (obstacle && obstacle.getBoundingClientRect().left < 220) {\n      ctx.press("Space");\n      ctx.state.jumps = (ctx.state.jumps||0) + 1;\n      ctx.log("jump " + ctx.state.jumps);\n    }\n  `\n  intervalMs: 30',
+      {
+        tabId: z.string().optional(),
+        name: z.string().describe('Unique script name (used to stop / poll status)'),
+        source: z.string().describe('Function-body JS that uses `ctx.*` helpers. Runs every tick.'),
+        intervalMs: z.number().default(100).describe('Tick interval in ms (0-2000). Lower = more responsive, higher CPU.'),
+        useRaf: z.boolean().default(false).describe('Use requestAnimationFrame instead of setTimeout — ~60Hz, syncs with browser paint. Best for games.'),
+      },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('run_script', args, 10000); return { content: [{ type: 'text', text: browserToolText('Script started', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_run_script error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_update_script_state',
+      'Push new values into a running bot\'s `ctx.state` object — the bot reads them on its next tick. Use this to steer a long-running bot from your strategic loop: screenshot → analyse → update targets → bot reacts at 60Hz against the new targets, no restart needed.\n\nExample (tell an aim-bot to track a new pixel coordinate):\n  { name: "aim-bot", patch: { targetX: 412, targetY: 280, fire: true } }\n\nThe patch is shallow-merged into ctx.state, so existing keys you do not mention are preserved.',
+      {
+        tabId: z.string().optional(),
+        name: z.string().describe('Script name'),
+        patch: z.record(z.any()).describe('Object to shallow-merge into the bot\'s ctx.state'),
+      },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('update_script_state', args, 5000); return { content: [{ type: 'text', text: browserToolText('State updated', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_update_script_state error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_stop_script',
+      'Stop a running script by name. Returns final stats (ticks, errors, runtime, last 30 log lines, final state). Always call this when done so you can inspect what happened.',
+      { tabId: z.string().optional(), name: z.string() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('stop_script', args, 5000); return { content: [{ type: 'text', text: browserToolText('Script stopped', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_stop_script error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_script_status',
+      'Inspect a running script (or list all running scripts if `name` is omitted). Returns ticks, errors, runtime, current state object, and last 50 log lines.',
+      { tabId: z.string().optional(), name: z.string().optional().describe('Script name; omit to list all') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('script_status', args, 5000); return { content: [{ type: 'text', text: browserToolText('Script status', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_script_status error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_sample',
+      'Sample a JS expression at high frequency for `durationMs`, returning the full timeline. Use to record a fast-changing value (multiplier curve, score graph, position over time) for analysis. The sampling loop runs in-page so it captures values that change faster than IPC can poll.',
+      {
+        tabId: z.string().optional(),
+        expression: z.string().describe('JS expression evaluated each tick.'),
+        intervalMs: z.number().default(100).describe('Sample interval ms (20-500). Default 100ms.'),
+        durationMs: z.number().default(3000).describe('Total sampling window ms (up to 30000).'),
+      },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('sample', args, (args.durationMs || 3000) + 4000); return { content: [{ type: 'text', text: browserToolText('Samples', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_sample error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    */
+    /* ──────────────────── end RETIRED batch ──────────────────── */
+    sdk.tool('browser_hover',
+      'Hover the mouse over an element. Triggers mouseover/mouseenter/mousemove events — useful for revealing hover menus, tooltips, etc. Selector accepts CSS, [ref=eN], text="...", text=/regex/i, or sel:has-text("...").',
+      { tabId: z.string().optional(), selector: z.string() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('hover', args, 10000); return { content: [{ type: 'text', text: browserToolText('Hover', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_hover error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_drag',
+      'Drag an element from one selector onto another. Synthesizes mousedown / dragstart / dragenter / dragover / drop / dragend / mouseup events.',
+      { tabId: z.string().optional(), from: z.string().describe('Source element selector'), to: z.string().describe('Drop-target selector') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('drag', args, 15000); return { content: [{ type: 'text', text: browserToolText('Drag', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_drag error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_scroll_to',
+      'Scroll an element into view by selector. More precise than browser_scroll for SPA pages.',
+      { tabId: z.string().optional(), selector: z.string(), block: z.enum(['start','center','end','nearest']).default('center').describe('Vertical alignment in viewport') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('scroll_to', args, 10000); return { content: [{ type: 'text', text: browserToolText('Scrolled to', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_scroll_to error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_upload',
+      'Upload one or more files to a file input. Reads each file from disk in the IDE process, ships the bytes to the page, and constructs a real File object so the input fires input/change events normally.',
+      {
+        tabId: z.string().optional(),
+        selector: z.string().describe('Selector for the <input type="file"> element'),
+        files: z.array(z.object({
+          path: z.string().describe('Absolute path on disk'),
+          name: z.string().optional().describe('Override filename presented to the page (defaults to basename)'),
+        })).describe('Files to upload'),
+      },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('upload', args, 30000); return { content: [{ type: 'text', text: browserToolText('Upload', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_upload error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_wait_load',
+      'Wait for the page network to be idle (no in-flight loading) for `idleMs` consecutive ms, up to `timeoutMs`. Use after navigation or click on SPA links to make sure the new content has rendered before observing it.',
+      { tabId: z.string().optional(), idleMs: z.number().default(500).describe('Consecutive idle ms required to consider the page settled'), timeoutMs: z.number().default(15000).describe('Hard timeout') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('wait_load', args, (args.timeoutMs || 15000) + 2000); return { content: [{ type: 'text', text: browserToolText('Load', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_wait_load error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_set_viewport',
+      'Resize the browser tab to emulate a specific viewport (mobile, tablet, custom). The page sees the new innerWidth/innerHeight and triggers responsive layout. Call browser_reset_viewport to restore.',
+      { tabId: z.string().optional(), width: z.number().min(320).max(3840), height: z.number().min(240).max(2160) },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('set_viewport', args, 5000); return { content: [{ type: 'text', text: browserToolText('Viewport', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_set_viewport error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_reset_viewport',
+      'Restore the browser tab to its natural responsive size after browser_set_viewport.',
+      { tabId: z.string().optional() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('reset_viewport', args, 5000); return { content: [{ type: 'text', text: browserToolText('Viewport reset', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_reset_viewport error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_cookies_get',
+      'Read the current page cookies (document.cookie string). For more advanced cookie manipulation (HTTP-only cookies, cross-origin), use browser_eval with the chrome.cookies API.',
+      { tabId: z.string().optional() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('cookies_get', args, 5000); return { content: [{ type: 'text', text: browserToolText('Cookies', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_cookies_get error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_pdf',
+      'Print the current page to PDF and save it to disk. Returns the saved path so you can Read it.',
+      { tabId: z.string().optional(), name: z.string().optional().describe('Output base name (no extension)') },
+      async (args) => {
+        try {
+          const r = await browserCtl.browserExec('pdf', args, 30000);
+          if (r?.cancelled) return { content: [{ type: 'text', text: 'PDF save cancelled by user.' }] };
+          if (r?.savePath) return { content: [{ type: 'text', text: `PDF saved to ${r.savePath}` }] };
+          throw new Error(r?.error || 'unknown');
+        } catch (e) { return { content: [{ type: 'text', text: `browser_pdf error: ${e.message}` }], isError: true }; }
       }
     ),
   ];

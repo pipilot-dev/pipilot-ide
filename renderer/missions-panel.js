@@ -307,8 +307,9 @@
 .pp-me-btn:disabled { opacity:0.5; cursor:not-allowed; }
 .pp-me-error { color:var(--error); font-size:11.5px; margin-right:auto; align-self:center; }
 
-/* Titlebar pill */
-.titlebar-missions-btn {
+/* Titlebar pills (Missions, Browser) — shared anatomy */
+.titlebar-missions-btn,
+.titlebar-browser-btn {
   display:flex; align-items:center; gap:6px;
   background:transparent; border:1px solid rgba(255,255,255,0.08);
   color:var(--text-mid); padding:4px 10px; border-radius:14px;
@@ -316,10 +317,15 @@
   transition:background 0.15s, border-color 0.15s, color 0.15s;
   -webkit-app-region:no-drag;
 }
-.titlebar-missions-btn:hover { background:rgba(255,107,53,0.1); border-color:rgba(255,107,53,0.32); color:var(--accent-light,#ffb38a); }
-.titlebar-missions-label { letter-spacing:0.04em; }
+.titlebar-missions-btn:hover,
+.titlebar-browser-btn:hover { background:rgba(255,107,53,0.1); border-color:rgba(255,107,53,0.32); color:var(--accent-light,#ffb38a); }
+.titlebar-missions-label,
+.titlebar-browser-label { letter-spacing:0.04em; }
 .titlebar-missions-dot { width:7px; height:7px; border-radius:50%; background:var(--info,#6cb6ff); animation:pp-mission-pulse 1.4s ease-in-out infinite; }
-@media (max-width: 900px) { .titlebar-missions-label { display:none; } }
+@media (max-width: 900px) {
+  .titlebar-missions-label,
+  .titlebar-browser-label { display:none; }
+}
 `;
     document.head.appendChild(s);
   }

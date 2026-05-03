@@ -1,7 +1,16 @@
 // PiPilot IDE Extension: Minimap
-// Shows a zoomed-out canvas view of the file on the right side of the editor.
+// DEPRECATED — superseded by the built-in minimap shipped at
+// renderer/minimap.js (loaded as a core module from index.html). The core
+// version handles lazy editor creation, tab switches, and the settings
+// toggle correctly. This extension stays here only so existing user
+// installations don't error out; it short-circuits when the built-in
+// flag is set.
 
 (function (PiPilot, bus, api, state, db) {
+  if (typeof window !== 'undefined' && window.__pipilotMinimapBuiltIn) {
+    console.log('[ext:minimap] Skipped — built-in minimap is active');
+    return;
+  }
   var editor = PiPilot.editor && PiPilot.editor.getAce ? PiPilot.editor.getAce() : null;
   if (!editor) return;
 
