@@ -1,8 +1,16 @@
 {
   "name": "pipilot-ide",
   "version": "0.1.0",
-  "description": "PiPilot IDE — Native AI-powered desktop development environment",
+  "description": "PiPilot IDE — Free AI-powered desktop development environment. Sign in with GitHub. No paid tiers, no usage limits, no card.",
   "main": "main.js",
+  "homepage": "https://github.com/pipilot-dev/pipilot-ide#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pipilot-dev/pipilot-ide.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pipilot-dev/pipilot-ide/issues"
+  },
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",

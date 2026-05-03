@@ -1,11 +1,35 @@
 node_modules/
+
+# Local environment + secrets — never commit.
 .env
+.env.local
+.env.*.local
+
+# Build outputs (electron-forge / electron-builder).
 out/
 dist/
+release/
+*.dmg
+*.exe.blockmap
+
+# OS / editor cruft.
 .DS_Store
 *.log
 .vscode/
 .idea/
-.pipilot/checkpoints/
-.pipilot/search-index.json
+
+# IDE-state directories — per-project state, per-machine, contains diaries
+# and snapshots. Never share.
+.pipilot/
+.pipilot-data/
+
+# Claude Code per-machine config + memory. Allow-lists in here have
+# previously contained literal API tokens — keep it out of source control.
+.claude/
+
+# Auth artefact — encrypted JWT bundle stored under userData; should
+# never escape the dev machine even if a copy ends up in the repo dir.
+auth-token.bin
+
+# Defunct artefact from old Vite migration.
 fiddle-pipilot-ide/
