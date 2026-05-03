@@ -54,7 +54,7 @@ Grab the latest from [Releases](https://github.com/pipilot-dev/pipilot-ide/relea
 | OS      | Download |
 | ------- | -------- |
 | Windows | `PiPilot-Setup-x.y.z.exe` (Squirrel installer) |
-| macOS   | `PiPilot-x.y.z-arm64.zip` (Apple Silicon) or `-x64.zip` (Intel) |
+| macOS   | `PiPilot-x.y.z-arm64.zip` (Apple Silicon — runs on Intel via Rosetta 2 too) |
 | Linux   | `pipilot-ide_x.y.z_amd64.deb`, `pipilot-ide-x.y.z.x86_64.rpm`, or the portable `.zip` |
 
 > ⚠️ **v0.1 binaries are unsigned.** Windows SmartScreen will warn ("More info → Run anyway"). macOS Gatekeeper will refuse the first launch — right-click → Open. Code signing is on the v0.2 roadmap.
