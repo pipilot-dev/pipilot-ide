@@ -14,7 +14,7 @@
 // just resubscribes after reload and replays from the buffer.
 
 const path = require('path');
-const { loadSdk } = require('./sdk-loader');
+const { loadSdk, resolveAgentRuntime } = require('./sdk-loader');
 const ideTools = require('./mcp-ide-tools');
 const { buildIdeTools } = require('./ide-tools-mcp');
 
@@ -95,6 +95,10 @@ function runMissionAgent(opts, onEvent) {
       Object.assign(mcpServers, extraMcpServers);
     }
 
+    // Same Electron-as-Node + asar-unpacked cli.js wiring the chat agent
+    // uses — without this the spawn() inside the SDK fails in production.
+    const agentRuntime = resolveAgentRuntime();
+
     const queryOpts = {
       prompt: String(prompt || ''),
       options: {
@@ -104,6 +108,9 @@ function runMissionAgent(opts, onEvent) {
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
+        executable: agentRuntime.executable,
+        executableArgs: agentRuntime.executableArgs,
+        pathToClaudeCodeExecutable: agentRuntime.pathToClaudeCodeExecutable,
         abortController,
         mcpServers,
         allowedTools: Array.isArray(allowedTools) && allowedTools.length
@@ -111,6 +118,8 @@ function runMissionAgent(opts, onEvent) {
           : ['Read', 'Edit', 'Write', 'MultiEdit', 'Glob', 'Grep', 'mcp__pipilot__*'],
         env: {
           ENABLE_TOOL_SEARCH: 'auto',
+          // Required so the spawned child Electron behaves as Node.
+          ...agentRuntime.extraEnv,
           // Route through the auth-gated proxy with the user's JWT. Mirrors
           // the wiring in ipc-agent.js loadRuntimeEnvVars so missions get
           // the same authenticated transport as the chat agent.

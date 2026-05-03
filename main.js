@@ -43,6 +43,29 @@ app.on('second-instance', () => {
   }
 });
 
+// Force a no-space userData path. Electron's default uses app.getName()
+// which in our packaged build is "PiPilot IDE" (with space) → produces
+// a path like %AppData%\PiPilot IDE\. Spaces in storage paths trigger
+// "UnknownError: Internal error." from Chromium's IndexedDB / LevelDB
+// on Windows in some configurations. Pin to a deterministic, no-space
+// directory matching our install folder name.
+//
+// Best-effort migration: if the legacy "PiPilot IDE" userData exists
+// from a prior install, copy its contents to the new location once so
+// users don't lose their auth token, settings, sessions, etc.
+const desiredUserData = path.join(app.getPath('appData'), 'PiPilot');
+const legacyUserData  = path.join(app.getPath('appData'), 'PiPilot IDE');
+try {
+  if (!fs.existsSync(desiredUserData) && fs.existsSync(legacyUserData)) {
+    fs.cpSync(legacyUserData, desiredUserData, { recursive: true, errorOnExist: false });
+    console.log('[startup] migrated userData from "PiPilot IDE" → "PiPilot"');
+  }
+} catch (err) {
+  console.warn('[startup] userData migration skipped:', err.message);
+}
+try { fs.mkdirSync(desiredUserData, { recursive: true }); } catch {}
+app.setPath('userData', desiredUserData);
+
 // IPC handler modules (one per feature domain — each owns its own channels)
 const registerFileHandlers = require('./main/ipc-files');
 const registerTerminalHandlers = require('./main/ipc-terminal');

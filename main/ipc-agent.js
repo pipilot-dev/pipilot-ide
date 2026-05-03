@@ -16,19 +16,10 @@ module.exports = function register(ipcMain, ctx) {
 
   const ideTools = require('./mcp-ide-tools');
 
-  let sdkModule = null;
-  let sdkLoadError = null;
-  async function loadSdk() {
-    if (sdkModule) return sdkModule;
-    if (sdkLoadError) throw sdkLoadError;
-    try {
-      sdkModule = await import('@anthropic-ai/claude-agent-sdk');
-      return sdkModule;
-    } catch (err) {
-      sdkLoadError = err;
-      throw err;
-    }
-  }
+  // Use the shared loader so both ipc-agent and mission-agent get the
+  // same module instance + same agent-runtime resolution (Electron-as-Node
+  // executable + asar-unpacked cli.js path).
+  const { loadSdk, resolveAgentRuntime } = require('./sdk-loader');
 
   // Build IDE-specific MCP tools — shared with mission agents.
   const { buildIdeTools } = require('./ide-tools-mcp');
@@ -518,6 +509,11 @@ module.exports = function register(ipcMain, ctx) {
       const ideToolsList = buildIdeTools(sdk);
       const ideMcp = sdk.createSdkMcpServer({ name: 'pipilot', version: '1.0.0', tools: ideToolsList });
 
+      // Resolve Electron-as-Node + the unpacked cli.js path so the SDK's
+      // child process spawns work in a packaged install (where 'node'
+      // isn't on PATH and cli.js sits inside app.asar).
+      const agentRuntime = resolveAgentRuntime();
+
       const result = sdk.query({
         prompt: promptText,
         options: {
@@ -528,6 +524,9 @@ module.exports = function register(ipcMain, ctx) {
           allowDangerouslySkipPermissions: mode !== 'plan',
           includePartialMessages: true,
           abortController: abortCtrl,
+          executable: agentRuntime.executable,
+          executableArgs: agentRuntime.executableArgs,
+          pathToClaudeCodeExecutable: agentRuntime.pathToClaudeCodeExecutable,
           // MCP servers (matching Vite setup)
           mcpServers: {
             // PiPilot IDE tools — diagnostics, project context, design guide, search, screenshot, run_code
@@ -575,6 +574,8 @@ module.exports = function register(ipcMain, ctx) {
             //   'auto:N'       → custom %; lower = activates sooner
             //   'false'        → always off, all defs in every turn
             ENABLE_TOOL_SEARCH: 'auto',
+            // Required so the spawned child Electron behaves as Node.
+            ...agentRuntime.extraEnv,
             ...loadConnectorEnvVars(workDir),
             ...loadRuntimeEnvVars(),
             ...(extraEnv && typeof extraEnv === 'object' ? extraEnv : {}),

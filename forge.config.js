@@ -64,7 +64,15 @@ module.exports = {
     name: 'PiPilot IDE',
     executableName: 'pipilot-ide',
     appBundleId: 'dev.pipilot.ide',
-    asar: true,
+    asar: {
+      // The Claude Agent SDK spawns its bundled cli.js as a child process.
+      // Files inside app.asar can't be exec'd by spawn() — they're not
+      // real on-disk files from the OS's POV. Unpack the SDK so cli.js
+      // is a real file at <install>/resources/app.asar.unpacked/...
+      // node-pty's prebuilt .node binaries have the same constraint
+      // (native loaders can't dlopen across the asar boundary).
+      unpack: '{**/node_modules/@anthropic-ai/claude-agent-sdk/**,**/node_modules/node-pty/**}',
+    },
     // Platform-specific icon extension auto-resolved (.ico/.icns/.png).
     // public/icon.ico is generated from icon.png at install time by
     // scripts/build-icons.js. macOS .icns isn't generated yet — Mac
