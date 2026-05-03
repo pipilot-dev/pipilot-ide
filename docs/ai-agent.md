@@ -1,6 +1,6 @@
 # AI Agent
 
-The chat panel on the right is a full agent loop powered by the Anthropic Claude SDK. It can read files, write code, run commands, browse the web, automate the embedded browser, debug, and deploy — anything the IDE itself can do.
+The chat panel on the right is a full agent loop powered by a frontier-class language model. It can read files, write code, run commands, browse the web, automate the embedded browser, debug, and deploy — anything the IDE itself can do.
 
 ## Two modes
 
@@ -50,7 +50,7 @@ The agent has ~50 PiPilot-namespaced tools that drive the IDE itself. Categories
 - **Reasoning** — `reason` for structured private thinking phases.
 - **Embedded browser** — `browser_open`, `browser_navigate`, `browser_observe` (screenshot + DOM snapshot), `browser_click_ref`, `browser_type`, `browser_press_key`, `browser_eval`, `browser_get_text`, `browser_get_html`, etc. Full list in [Embedded Browser](embedded-browser.md).
 
-Tools are loaded on-demand via Anthropic's ToolSearch mechanism (`ENABLE_TOOL_SEARCH: 'auto'`) so the context window doesn't bloat with definitions you're not using.
+Tools are loaded on-demand so the context window doesn't bloat with definitions you're not using on the current turn.
 
 ## Custom MCP servers
 
@@ -99,11 +99,11 @@ Type `/` at the start of the chat input to summon the command palette. Two flavo
 
 Three things happen inside the editor itself, no chat panel needed:
 
-- **Ghost-text completions** — Codestral FIM streams a greyed-out suggestion at the cursor. `Tab` accepts, `Esc` rejects, anything else clears it. Toggle in **Settings → AI** or via the editor context menu (Toggle Inline Completions).
+- **Ghost-text completions** — a fast fill-in-the-middle model streams a greyed-out suggestion at the cursor. `Tab` accepts, `Esc` rejects, anything else clears it. Toggle in **Settings → AI** or via the editor context menu (Toggle Inline Completions).
 - **Inline Chat (`Ctrl+I`)** — opens a 520-px floating widget over the editor. Has preset chips ("Fix bugs", "Refactor", "Explain", "Add comments", "Add docs") plus a free-text prompt. Streams the rewrite, shows accept / reject — accept replaces the selection (or the whole file if no selection).
 - **Selection context menu** — right-click any selection for: *Add to Chat*, *Explain*, *Review*, *Fix*, *Refactor*, *Add Comments*, *Add Docs*. Each kicks off a streamed turn in the chat panel with the selection as context.
 
-All three use the same Codestral key as the main agent — set `CODESTRAL_API_KEY` in your `.env` to override the bundled one.
+All three respect the same authentication as the main chat agent — see **Sign in** below.
 
 ## Sessions + history
 
@@ -121,9 +121,20 @@ Co-Authored-By: PiPilot <agent@pipilot.dev>
 
 Never on chat replies, code, or docs — only on text destined for github.com. This is enforced by the system prompt's branding rule.
 
-## API keys
+## Sign in
 
-By default the IDE ships with bundled Anthropic credentials so it works out of the box. To use your own key, set `ANTHROPIC_API_KEY` in the project's `.env` file (or globally). The agent reads from `process.env` — same pattern as anthropic-sdk-py.
+The IDE has no API keys to manage. Open the chat panel (or **Settings → Account**) and click **Sign in**. PiPilot uses **GitHub OAuth Device Flow** — takes about 10 seconds:
+
+1. Click **Sign in**
+2. The browser opens to `github.com/login/device` with a one-time code
+3. You confirm; PiPilot polls until GitHub authorises
+4. The chat panel and inline AI features unlock
+
+What we get from GitHub: your username, primary verified email, and avatar — nothing else, no `repo` scope, no code access. The session token is encrypted with your OS keychain and stored under `<userData>/auth-token.bin`. Sign out from **Settings → Account** to wipe it.
+
+Editing, terminals, source control, and the deploy hub all work without signing in. Only AI features (chat, inline completions, missions, the wiki updater) wait for auth.
+
+Each chat turn flows through `pipilot-proxy` — a managed edge service that routes to the model provider with our key, meters per-user usage, and lets us cut off abuse without affecting other users. The free tier today is genuinely unlimited.
 
 ## Stopping a runaway agent
 

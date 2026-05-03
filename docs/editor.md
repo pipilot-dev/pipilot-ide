@@ -53,7 +53,7 @@ For real LSP / type-checking, add a language extension (TypeScript LSP integrati
 
 You don't have to leave the editor to talk to the agent.
 
-- **Ghost-text completions** — as you type, Codestral FIM streams a greyed-out suggestion at the cursor. `Tab` accepts, `Esc` rejects. Toggle in **Settings → AI → Inline Completions** or via the editor right-click menu (Toggle Inline Completions).
+- **Ghost-text completions** — as you type, a fast fill-in-the-middle model streams a greyed-out suggestion at the cursor. `Tab` accepts, `Esc` rejects. Toggle in **Settings → AI → Inline Completions** or via the editor right-click menu (Toggle Inline Completions). Requires sign-in.
 - **Inline Chat (`Ctrl+I`)** — opens a floating widget over the editor with preset chips (*Fix bugs*, *Refactor*, *Explain*, *Add comments*, *Add docs*) plus a free-text prompt. Streams a rewrite of the current selection (or whole file), shows a side-by-side preview, accept replaces the text.
 - **Selection actions** — right-click any selection for *Add to Chat*, *Explain*, *Review*, *Fix*, *Refactor*, *Add Comments*, *Add Docs*. Each opens the chat panel and starts a streamed turn with the selection as context.
 

@@ -27,6 +27,8 @@
     { slug: 'deploy-hub',            title: 'Deploy Hub',         group: 'Workflow' },
     { slug: 'embedded-browser',      title: 'Embedded Browser',   group: 'Workflow' },
     { slug: 'terminal',              title: 'Terminal',           group: 'Workflow' },
+    { slug: 'missions',              title: 'Missions',           group: 'Workflow' },
+    { slug: 'background-tasks',      title: 'Background Mode',    group: 'Workflow' },
     { slug: 'wiki',                  title: 'Wiki',               group: 'Workflow' },
 
     { slug: 'extensions',            title: 'Extensions',         group: 'Extending' },
