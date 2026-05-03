@@ -9,12 +9,13 @@
   const SETTINGS_TAB_ID = 'pipilot-settings://main';
 
   const SECTIONS = [
-    { id: 'general',  label: 'General',  num: '01' },
-    { id: 'editor',   label: 'Editor',   num: '02' },
-    { id: 'terminal', label: 'Terminal', num: '03' },
-    { id: 'ai',       label: 'AI',       num: '04' },
-    { id: 'features', label: 'Features', num: '05' },
-    { id: 'about',    label: 'About',    num: '06' },
+    { id: 'account',  label: 'Account',  num: '01' },
+    { id: 'general',  label: 'General',  num: '02' },
+    { id: 'editor',   label: 'Editor',   num: '03' },
+    { id: 'terminal', label: 'Terminal', num: '04' },
+    { id: 'ai',       label: 'AI',       num: '05' },
+    { id: 'features', label: 'Features', num: '06' },
+    { id: 'about',    label: 'About',    num: '07' },
   ];
 
   function injectStyles() {
@@ -75,6 +76,68 @@
                   opacity:0; transform:translateY(8px); transition:opacity 180ms, transform 180ms;
                   pointer-events:none; z-index:10; }
       .st-saved.show { opacity:1; transform:none; }
+
+      /* Account section */
+      .st-account-card {
+        display: flex; align-items: center; gap: 16px;
+        padding: 20px; background: var(--surface);
+        border: 1px solid var(--border); border-radius: 8px;
+      }
+      .st-account-avatar {
+        width: 56px; height: 56px; border-radius: 50%; flex-shrink: 0;
+        background: var(--bg); border: 1px solid var(--border);
+        object-fit: cover;
+      }
+      .st-account-avatar.placeholder {
+        display: grid; place-items: center;
+        font-family: var(--font-mono);
+        font-weight: 600; font-size: 22px; color: var(--text-strong);
+      }
+      .st-account-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+      .st-account-info .login {
+        font-size: 15px; font-weight: 600; color: var(--text-strong); letter-spacing: -0.005em;
+      }
+      .st-account-info .email { font-size: 12px; color: var(--text-mid); }
+      .st-account-meta {
+        display: flex; gap: 14px; align-items: center; margin-top: 6px;
+        font-size: 11px; color: var(--text-dim);
+      }
+      .st-account-plan {
+        text-transform: uppercase; letter-spacing: 0.05em;
+        padding: 2px 8px; border-radius: 999px;
+        background: color-mix(in srgb, var(--accent) 18%, transparent);
+        color: var(--accent); font-weight: 600;
+      }
+      .st-account-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; align-items: flex-end; }
+      .st-account-actions button {
+        padding: 6px 12px; border-radius: 5px; font: inherit; font-size: 12px; cursor: pointer;
+        border: 1px solid var(--border); background: var(--surface-alt); color: var(--text);
+        transition: background 100ms, color 100ms, border-color 100ms;
+      }
+      .st-account-actions button:hover { background: var(--bg); color: var(--text-strong); }
+      .st-account-actions .danger { color: var(--err, #ff7b85); border-color: color-mix(in srgb, var(--err, #ff7b85) 35%, var(--border)); }
+      .st-account-actions .danger:hover {
+        background: color-mix(in srgb, var(--err, #ff7b85) 14%, var(--surface-alt));
+        color: var(--err, #ff7b85);
+      }
+
+      .st-signin-card {
+        padding: 32px; text-align: center;
+        background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      }
+      .st-signin-card .blurb { font-size: 13px; color: var(--text-mid); margin: 6px 0 18px; line-height: 1.55; max-width: 440px; margin-left: auto; margin-right: auto; }
+      .st-signin-btn {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 10px 16px; border-radius: 6px;
+        background: var(--text-strong); color: var(--bg);
+        border: 0; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+        transition: background 100ms;
+      }
+      .st-signin-btn:hover { background: white; }
+
+      .st-account-loading {
+        padding: 32px; text-align: center; color: var(--text-dim); font-size: 12.5px;
+      }
     `;
     document.head.appendChild(st);
   }
@@ -149,6 +212,19 @@
   }
 
   function buildSection(id, settings, profiles, builtins, appVersion) {
+    if (id === 'account') {
+      // Async-populated by hydrateAccountSection() once the section is in
+      // the DOM. We render a loading shell first because buildSection is
+      // sync and we don't want to block other sections waiting for the
+      // /auth/me round-trip.
+      return `
+        <h2>Account</h2>
+        <p class="lead">Sign in with GitHub to use the AI agent and inline AI features.</p>
+        <div data-account-host>
+          <div class="st-account-loading">Loading account…</div>
+        </div>
+      `;
+    }
     if (id === 'general') {
       const themes = window.PiPilot?.theme?.list?.() || [{ id: 'midnight', label: 'Midnight Studio' }];
       const currentTheme = window.PiPilot?.theme?.current?.() || 'midnight';
@@ -368,7 +444,111 @@
       container.querySelectorAll('.st-nav button').forEach((b) => {
         b.classList.toggle('active', b.dataset.sec === id);
       });
+      if (id === 'account') hydrateAccountSection(main);
     }
+
+    // Renders the account card with live data from the proxy. Re-runs
+    // whenever auth state changes (sign-in / sign-out from elsewhere).
+    async function hydrateAccountSection(scope) {
+      const host = scope.querySelector('[data-account-host]');
+      if (!host) return;
+
+      const status = await api.auth?.getStatus?.();
+      const proxyUrl = await api.auth?.proxyUrl?.();
+
+      if (!status?.authenticated) {
+        host.innerHTML = `
+          <div class="st-signin-card">
+            <div style="font-size:32px;margin-bottom:8px;">🔐</div>
+            <div style="font-size:14px;color:var(--text-strong);font-weight:600;">Not signed in</div>
+            <p class="blurb">
+              Editing works without an account. Sign in with GitHub to unlock chat, the AI agent, inline completions, and inline chat.
+            </p>
+            <button class="st-signin-btn" data-action="signin">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.57.1.78-.25.78-.55v-2.13c-3.2.7-3.88-1.36-3.88-1.36-.52-1.34-1.27-1.69-1.27-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.76 2.69 1.25 3.35.96.1-.74.4-1.25.73-1.54-2.55-.29-5.23-1.27-5.23-5.66 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.46.11-3.04 0 0 .96-.31 3.15 1.17a10.93 10.93 0 0 1 5.74 0c2.19-1.48 3.15-1.17 3.15-1.17.62 1.58.23 2.75.11 3.04.73.8 1.18 1.82 1.18 3.07 0 4.4-2.69 5.36-5.25 5.65.41.36.78 1.06.78 2.13v3.16c0 .31.21.66.79.55C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/></svg>
+              Sign in with GitHub
+            </button>
+            <div style="margin-top:18px;font-size:11px;color:var(--text-dim);">
+              Auth handled by <code style="font-family:var(--font-mono);">${proxyUrl || 'pipilot-proxy'}</code>
+            </div>
+          </div>
+        `;
+        host.querySelector('[data-action="signin"]')?.addEventListener('click', () => {
+          window.PiPilot?.auth?.show?.();
+        });
+        return;
+      }
+
+      // Authenticated — fetch the live profile.
+      const me = await api.auth?.me?.();
+      if (!me?.ok) {
+        // Token rejected by proxy → drop and re-prompt.
+        host.innerHTML = `
+          <div class="st-signin-card">
+            <div style="font-size:14px;color:var(--err,#ff7b85);font-weight:600;">Session expired</div>
+            <p class="blurb">Your sign-in is no longer valid. Please sign in again.</p>
+            <button class="st-signin-btn" data-action="signin">Sign in again</button>
+          </div>
+        `;
+        host.querySelector('[data-action="signin"]')?.addEventListener('click', () => {
+          window.PiPilot?.auth?.show?.();
+        });
+        return;
+      }
+
+      const u = me.user || {};
+      const initial = (u.login || '?').slice(0, 1).toUpperCase();
+      const avatar = u.avatar_url
+        ? `<img class="st-account-avatar" src="${escapeHtml(u.avatar_url)}" alt="${escapeHtml(u.login || '')}" />`
+        : `<div class="st-account-avatar placeholder">${escapeHtml(initial)}</div>`;
+
+      host.innerHTML = `
+        <div class="st-account-card">
+          ${avatar}
+          <div class="st-account-info">
+            <div class="login">${escapeHtml(u.login || 'unknown')}</div>
+            ${u.email ? `<div class="email">${escapeHtml(u.email)}</div>` : ''}
+            <div class="st-account-meta">
+              <span class="st-account-plan">${escapeHtml((u.plan || 'free').toUpperCase())}</span>
+              <span>via GitHub</span>
+            </div>
+          </div>
+          <div class="st-account-actions">
+            <button data-action="open-github">View on GitHub</button>
+            <button class="danger" data-action="signout">Sign out</button>
+          </div>
+        </div>
+        <div class="st-card" style="margin-top:14px;">
+          <div class="st-row">
+            <div class="lbl">
+              <div class="t">Proxy endpoint</div>
+              <div class="d">All AI requests authenticated by this URL.</div>
+            </div>
+            <div class="ctl">
+              <code style="font-family:var(--font-mono);font-size:11.5px;color:var(--text-mid);">${escapeHtml(proxyUrl || '')}</code>
+            </div>
+          </div>
+        </div>
+      `;
+
+      host.querySelector('[data-action="open-github"]')?.addEventListener('click', () => {
+        api.shell?.openExternal?.(`https://github.com/${u.login}`);
+      });
+      host.querySelector('[data-action="signout"]')?.addEventListener('click', async () => {
+        if (!confirm('Sign out of PiPilot? You\'ll need to sign in again to use AI features.')) return;
+        await api.auth.signOut();
+        try { window.dispatchEvent(new CustomEvent('pipilot:auth-changed', { detail: { authenticated: false } })); } catch {}
+        hydrateAccountSection(scope);
+      });
+    }
+
+    // Refresh account section when auth state changes elsewhere (e.g. user
+    // signs in via the chat banner while Settings is open in another tab).
+    const authChangedFn = () => {
+      const active = container.querySelector('.st-nav button.active')?.dataset?.sec;
+      if (active === 'account') hydrateAccountSection(main);
+    };
+    window.addEventListener('pipilot:auth-changed', authChangedFn);
 
     container.querySelectorAll('.st-nav button').forEach((b) => {
       b.addEventListener('click', () => showSection(b.dataset.sec));
@@ -384,7 +564,11 @@
     };
     const off1 = bus.on('themes:registry-updated', refreshGeneral);
     const off2 = bus.on('fonts:registry-updated', refreshGeneral);
-    const off = () => { try { off1(); } catch {} try { off2(); } catch {} };
+    const off = () => {
+      try { off1(); } catch {}
+      try { off2(); } catch {}
+      try { window.removeEventListener('pipilot:auth-changed', authChangedFn); } catch {}
+    };
     // Best-effort cleanup: when the virtual tab closes its container is
     // detached. Use a MutationObserver on body to catch it.
     new MutationObserver((muts, obs) => {
