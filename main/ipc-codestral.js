@@ -44,6 +44,13 @@ module.exports = function register(ipcMain, ctx) {
   const inflight = new Map(); // requestId -> AbortController
 
   function apiKey() {
+    // Gate every Codestral call on auth — same model as the agent. The
+    // bundled key still travels in the SDK request (this provider isn't
+    // proxied yet), but unauthenticated users can't trigger it.
+    try {
+      const auth = require('./ipc-auth');
+      if (!auth.getJwtSync()) return '';
+    } catch {}
     return process.env.CODESTRAL_API_KEY || '';
   }
   function host() {

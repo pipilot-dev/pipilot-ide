@@ -1,0 +1,175 @@
+/* PiPilot IDE — Login screen.
+   Full-bleed overlay; locks the rest of the UI until the user signs in. */
+
+.auth-overlay {
+  position: fixed; inset: 0;
+  z-index: 100000;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg, #16161a);
+  background-image:
+    radial-gradient(circle at 20% 10%, color-mix(in srgb, var(--accent, #6e9fff) 14%, transparent), transparent 55%),
+    radial-gradient(circle at 80% 90%, color-mix(in srgb, var(--accent-2, #c46eff) 12%, transparent), transparent 60%);
+  -webkit-app-region: drag;
+  animation: auth-in 0.18s ease-out both;
+}
+.auth-overlay.auth-overlay-leaving { animation: auth-out 0.18s ease-in both; }
+@keyframes auth-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes auth-out { from { opacity: 1; } to { opacity: 0; } }
+
+.auth-card {
+  -webkit-app-region: no-drag;
+  width: min(440px, calc(100vw - 48px));
+  background: var(--surface, #1c1c22);
+  border: 1px solid var(--border, #2a2a33);
+  border-radius: 12px;
+  box-shadow:
+    0 1px 0 color-mix(in srgb, white 6%, transparent) inset,
+    0 30px 60px -20px rgba(0, 0, 0, 0.5),
+    0 12px 24px -12px rgba(0, 0, 0, 0.35);
+  padding: 28px;
+  display: flex; flex-direction: column; gap: 22px;
+  font-family: var(--font-sans, -apple-system, system-ui, sans-serif);
+  color: var(--text, #d8d8e0);
+}
+
+.auth-brand { display: flex; gap: 14px; align-items: flex-start; }
+.auth-logo {
+  flex: 0 0 auto;
+  width: 40px; height: 40px;
+  border-radius: 9px;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--accent, #6e9fff), var(--accent-2, #c46eff));
+  color: white;
+  font-weight: 700; font-size: 20px;
+  font-family: var(--font-mono, monospace);
+  letter-spacing: -0.02em;
+  box-shadow: 0 4px 12px -2px color-mix(in srgb, var(--accent, #6e9fff) 50%, transparent);
+}
+.auth-title-block { display: flex; flex-direction: column; gap: 2px; }
+.auth-title-block h1 {
+  margin: 0; font-size: 17px; font-weight: 600;
+  color: var(--text-strong, #fafaff); letter-spacing: -0.01em;
+}
+.auth-sub {
+  margin: 0; font-size: 12.5px; color: var(--text-mid, #a0a0b0); line-height: 1.45;
+}
+
+.auth-body { display: flex; flex-direction: column; gap: 12px; }
+
+.auth-step { display: flex; flex-direction: column; gap: 14px; }
+
+.auth-blurb {
+  margin: 0; font-size: 13px; line-height: 1.6;
+  color: var(--text-mid, #a0a0b0);
+}
+
+.auth-instructions {
+  margin: 0; font-size: 13px; color: var(--text-mid, #a0a0b0);
+}
+.auth-instructions strong { color: var(--text-strong, #fafaff); font-weight: 500; }
+
+.auth-code-row {
+  display: flex; align-items: stretch; gap: 8px;
+  margin: 4px 0 8px;
+}
+.auth-code {
+  flex: 1;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 28px; font-weight: 600; letter-spacing: 0.18em;
+  text-align: center;
+  padding: 16px 12px;
+  background: var(--bg, #16161a);
+  border: 1px solid var(--border, #2a2a33);
+  border-radius: 8px;
+  color: var(--text-strong, #fafaff);
+  user-select: all;
+}
+.auth-icon-btn {
+  flex: 0 0 auto;
+  width: 44px;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  background: var(--bg, #16161a);
+  border: 1px solid var(--border, #2a2a33);
+  color: var(--text-mid, #a0a0b0);
+  cursor: pointer;
+  transition: background 100ms, color 100ms, border-color 100ms;
+}
+.auth-icon-btn:hover { background: var(--surface-alt, #22222a); color: var(--text-strong, #fafaff); }
+.auth-icon-btn.auth-copied { color: var(--ok, #6ee7a7); border-color: color-mix(in srgb, var(--ok, #6ee7a7) 50%, var(--border, #2a2a33)); }
+
+.auth-status {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface-alt, #22222a);
+  border: 1px solid var(--border, #2a2a33);
+  border-radius: 8px;
+  font-size: 12.5px; color: var(--text-mid, #a0a0b0);
+}
+.auth-status[data-kind="warn"] { color: var(--warn, #f5b254); }
+.auth-status[data-kind="ok"]   { color: var(--ok, #6ee7a7); }
+
+.auth-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid color-mix(in srgb, var(--text-mid, #a0a0b0) 35%, transparent);
+  border-top-color: var(--accent, #6e9fff);
+  border-radius: 50%;
+  animation: auth-spin 0.9s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes auth-spin { to { transform: rotate(360deg); } }
+.auth-status[data-kind="ok"] .auth-spinner { display: none; }
+
+.auth-actions {
+  display: flex; gap: 8px; align-items: center;
+  margin-top: 4px;
+}
+
+.auth-error {
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--err, #ff7b85) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--err, #ff7b85) 35%, transparent);
+  border-radius: 8px;
+  color: var(--err, #ff7b85);
+  font-size: 12.5px; line-height: 1.5;
+}
+
+.auth-primary, .auth-secondary, .auth-tertiary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms, transform 60ms;
+  border: 1px solid transparent;
+}
+.auth-primary:active, .auth-secondary:active, .auth-tertiary:active { transform: translateY(1px); }
+
+.auth-primary {
+  background: var(--text-strong, #fafaff);
+  color: var(--bg, #16161a);
+  width: 100%;
+}
+.auth-primary:hover { background: white; }
+
+.auth-secondary {
+  background: var(--surface-alt, #22222a);
+  color: var(--text, #d8d8e0);
+  border-color: var(--border, #2a2a33);
+}
+.auth-secondary:hover { background: var(--surface, #1c1c22); color: var(--text-strong, #fafaff); }
+
+.auth-tertiary {
+  background: transparent;
+  color: var(--text-mid, #a0a0b0);
+  padding: 10px 12px;
+}
+.auth-tertiary:hover { color: var(--text-strong, #fafaff); }
+
+.auth-footer {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-dim, #6a6a78);
+  letter-spacing: 0.02em;
+}

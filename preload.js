@@ -52,6 +52,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     remove: (p) => ipcRenderer.invoke('app:recent-projects:remove', p),
   },
 
+  // ---------- Auth (GitHub Device Flow via pipilot-proxy) ----------
+  // The renderer NEVER receives the JWT — it just kicks off the flow,
+  // polls until done, and asks the main process whether we're logged in.
+  auth: {
+    proxyUrl:  () => ipcRenderer.invoke('auth:proxy-url'),
+    start:     () => ipcRenderer.invoke('auth:start'),
+    poll:      () => ipcRenderer.invoke('auth:poll'),
+    cancel:    () => ipcRenderer.invoke('auth:cancel'),
+    getStatus: () => ipcRenderer.invoke('auth:get-status'),
+    me:        () => ipcRenderer.invoke('auth:me'),
+    signOut:   () => ipcRenderer.invoke('auth:sign-out'),
+  },
+
   onMenu: (event, handler) => {
     const ch = `menu:${event}`;
     const fn = (_e, ...args) => handler(...args);

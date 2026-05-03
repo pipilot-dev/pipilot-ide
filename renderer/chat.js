@@ -40,6 +40,35 @@
   function injectStyles() {
     if (document.getElementById('chat-inline-styles')) return;
     const css = `
+.chat-auth-banner {
+  display: flex; align-items: center; gap: 12px;
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text);
+  font-size: 12px;
+}
+.chat-auth-banner-icon {
+  width: 30px; height: 30px; flex-shrink: 0;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  display: grid; place-items: center; color: var(--text-strong);
+}
+.chat-auth-banner-text {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
+}
+.chat-auth-banner-text strong { font-size: 12px; color: var(--text-strong); font-weight: 600; }
+.chat-auth-banner-text span { font-size: 11px; color: var(--text-mid); line-height: 1.4; }
+.chat-auth-banner-btn {
+  padding: 6px 12px; border-radius: 5px;
+  background: var(--text-strong); color: var(--bg);
+  border: 0; font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer;
+  white-space: nowrap;
+  transition: background 100ms;
+}
+.chat-auth-banner-btn:hover { background: white; }
+
 .msg { margin: 0 14px 20px; display: flex; gap: 8px; animation: fadeInMsg 0.3s ease-out; }
 @keyframes fadeInMsg { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .msg-user { flex-direction: row; align-items: flex-start; }
@@ -6640,6 +6669,46 @@ Voice: first person plural ("we tried…"), warm but precise. No fluff, no greet
   loadMarked().then(() => injectStyles());
   injectStyles();
   showWelcomeState(); // Feature #16
+  ensureAuthBanner();
+  // Re-evaluate the banner whenever auth state changes (sign-in, sign-out).
+  window.addEventListener('pipilot:auth-changed', () => ensureAuthBanner());
+
+  // Auth banner — appears at the top of the chat panel when the user is
+  // not signed in. Replaces the input area's "send" affordance with a
+  // "Sign in with GitHub" CTA. The editor + everything else stays usable;
+  // only AI-driven features wait for auth.
+  async function ensureAuthBanner() {
+    const status = await window.electronAPI?.auth?.getStatus?.();
+    const authed = !!status?.authenticated;
+    const panel = document.getElementById('chat-panel') || document.querySelector('.chat-panel');
+    if (!panel) return;
+
+    let banner = panel.querySelector('.chat-auth-banner');
+    if (authed) {
+      if (banner) banner.remove();
+      if (inputEl) inputEl.disabled = false;
+      return;
+    }
+    if (banner) return;   // already shown
+
+    banner = document.createElement('div');
+    banner.className = 'chat-auth-banner';
+    banner.innerHTML = `
+      <div class="chat-auth-banner-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.57.1.78-.25.78-.55v-2.13c-3.2.7-3.88-1.36-3.88-1.36-.52-1.34-1.27-1.69-1.27-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.76 2.69 1.25 3.35.96.1-.74.4-1.25.73-1.54-2.55-.29-5.23-1.27-5.23-5.66 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.46.11-3.04 0 0 .96-.31 3.15 1.17a10.93 10.93 0 0 1 5.74 0c2.19-1.48 3.15-1.17 3.15-1.17.62 1.58.23 2.75.11 3.04.73.8 1.18 1.82 1.18 3.07 0 4.4-2.69 5.36-5.25 5.65.41.36.78 1.06.78 2.13v3.16c0 .31.21.66.79.55C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/></svg>
+      </div>
+      <div class="chat-auth-banner-text">
+        <strong>Sign in to use the AI agent</strong>
+        <span>Editing works without an account — chat, inline AI, and agents need a free GitHub login.</span>
+      </div>
+      <button class="chat-auth-banner-btn" data-action="signin">Sign in</button>
+    `;
+    banner.querySelector('[data-action="signin"]').addEventListener('click', () => {
+      window.PiPilot?.auth?.show?.();
+    });
+    panel.insertBefore(banner, panel.firstChild);
+    if (inputEl) inputEl.disabled = true;
+  }
 
   window.PiPilot.chat = {
     focus() { inputEl?.focus(); },

@@ -10,6 +10,7 @@ const fs = require('fs');
 // IPC handler modules (one per feature domain — each owns its own channels)
 const registerFileHandlers = require('./main/ipc-files');
 const registerTerminalHandlers = require('./main/ipc-terminal');
+const registerAuthHandlers = require('./main/ipc-auth');
 const registerAgentHandlers = require('./main/ipc-agent');
 const registerGitHandlers = require('./main/ipc-git');
 const registerCloudHandlers = require('./main/ipc-cloud');
@@ -238,6 +239,9 @@ app.whenReady().then(() => {
 
   registerFileHandlers(ipcMain, ctx);
   registerTerminalHandlers(ipcMain, ctx);
+  // Auth must register before the agent so the JWT cache is warm before
+  // the first chat turn lands.
+  registerAuthHandlers(ipcMain, ctx);
   registerAgentHandlers(ipcMain, ctx);
   registerGitHandlers(ipcMain, ctx);
   registerCloudHandlers(ipcMain, ctx);
