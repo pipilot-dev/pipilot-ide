@@ -119,6 +119,11 @@ jobs:
     # smoke-test the matrix without polluting Releases.
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      # We need the repo checked out so the release job can read the
+      # hand-written RELEASE_NOTES_<tag>.md file from the tagged commit.
+      - name: Checkout (for release notes)
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -133,6 +138,29 @@ jobs:
             -exec cp -v {} release/ \;
           ls -lah release
 
+      # Pick the right notes file. Prefer a hand-written
+      # RELEASE_NOTES_<tag>.md (e.g. RELEASE_NOTES_v0.1.0.md). If none
+      # exists, fall back to CHANGELOG.md, then to GitHub's auto-generator.
+      - name: Resolve release notes body
+        id: notes
+        shell: bash
+        run: |
+          TAG='${{ github.ref_name }}'
+          NOTES="RELEASE_NOTES_${TAG}.md"
+          if [ -f "$NOTES" ]; then
+            echo "body_path=$NOTES" >> "$GITHUB_OUTPUT"
+            echo "use_auto=false" >> "$GITHUB_OUTPUT"
+            echo "[release] using $NOTES as the release body."
+          elif [ -f CHANGELOG.md ]; then
+            echo "body_path=CHANGELOG.md" >> "$GITHUB_OUTPUT"
+            echo "use_auto=false" >> "$GITHUB_OUTPUT"
+            echo "[release] no $NOTES found; using CHANGELOG.md."
+          else
+            echo "body_path=" >> "$GITHUB_OUTPUT"
+            echo "use_auto=true" >> "$GITHUB_OUTPUT"
+            echo "[release] no notes file found; falling back to auto-generated."
+          fi
+
       # Note: GitHub auto-attaches "Source code (zip)" and "Source code
       # (tar.gz)" to every Release based on the tag — no work needed here.
       - name: Create / update draft release
@@ -141,5 +169,9 @@ jobs:
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}   # v0.2.0-rc.1 etc
           name: ${{ github.ref_name }}
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.body_path }}
+          # Append the auto-generated commit log only when we don't have
+          # a hand-written notes file. Otherwise the file is the source
+          # of truth and we don't want GitHub appending duplicate noise.
+          generate_release_notes: ${{ steps.notes.outputs.use_auto == 'true' }}
           files: release/*
