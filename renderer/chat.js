@@ -4305,11 +4305,19 @@
     const id = `session-${generateId()}`;
     try {
       if (chatDB) {
-        await chatDB.createSession({
-          id,
-          title: `Chat ${new Date().toLocaleTimeString()}`,
-          projectPath: state.projectPath,
-        });
+        try {
+          await chatDB.createSession({
+            id,
+            title: `Chat ${new Date().toLocaleTimeString()}`,
+            projectPath: state.projectPath,
+          });
+        } catch (dbErr) {
+          // IndexedDB had a hiccup (corrupted db, quota issue, etc.).
+          // Don't let that take down the chat panel — fall back to
+          // in-memory only and warn the user.
+          console.warn('[chat] chatDB unavailable, running in memory:', dbErr);
+          bus.emit('toast:show', { type: 'warn', message: 'Chat history unavailable this session — IndexedDB error.' });
+        }
       }
       currentSessionId = id;
       messages = [];

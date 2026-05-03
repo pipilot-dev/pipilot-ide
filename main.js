@@ -3,9 +3,45 @@
 
 require('dotenv').config();
 
+// Squirrel.Windows install/update event handler. MUST run before anything
+// else that reads process.argv or opens a window.
+//
+// During install / update / uninstall, Squirrel re-launches the app's
+// pipilot-ide.exe with flags like --squirrel-install / --squirrel-firstrun
+// / --squirrel-uninstall. Without this guard, every one of those launches
+// would build a BrowserWindow and try to open the same IndexedDB,
+// producing the classic "UnknownError: Internal error" that breaks
+// chat session creation on first run after install.
+//
+// electron-squirrel-startup detects the flag, performs the requested
+// install-time bookkeeping (shortcuts, file associations), and returns
+// true to tell us "this process should quit immediately".
+if (require('electron-squirrel-startup')) {
+  // app.quit fires before any other Electron API; safe to call here.
+  process.exit(0);
+}
+
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+// Single-instance lock — even after Squirrel handling, two normal launches
+// of the app would race for the same IndexedDB / userData files. The
+// second-instance handler focuses the existing window instead.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+  process.exit(0);
+}
+app.on('second-instance', () => {
+  const wins = BrowserWindow.getAllWindows();
+  if (wins.length) {
+    const w = wins[0];
+    if (w.isMinimized()) w.restore();
+    if (!w.isVisible()) w.show();
+    w.focus();
+  }
+});
 
 // IPC handler modules (one per feature domain — each owns its own channels)
 const registerFileHandlers = require('./main/ipc-files');
