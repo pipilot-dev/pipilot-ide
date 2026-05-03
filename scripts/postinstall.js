@@ -34,16 +34,30 @@ if (!fontsOk) {
   process.exit(1);
 }
 
-// 2. Rebuild node-pty against Electron's ABI. Best-effort: a pure dev
-//    shell may not have Electron headers cached, or the user might just
-//    be running tests against vanilla Node. CI builds for distribution
-//    *do* need it, but `electron-forge make` will retry during packaging
-//    so a failure here isn't fatal — we just log and continue.
+// 2. Rebuild node-pty against Electron's ABI — but only when needed.
 //
-//    Calling the package's lib/cli.js directly bypasses the .cmd / .sh
-//    shim entirely, which would otherwise need a shell wrap.
-const rebuildCli = path.join(__dirname, '..', 'node_modules', '@electron', 'rebuild', 'lib', 'cli.js');
-const rebuildOk = runNode('electron-rebuild', rebuildCli, ['-w', 'node-pty']);
-if (!rebuildOk) {
-  console.warn('[postinstall] electron-rebuild skipped or failed — fine in dev, will retry during `make`.');
+//    node-pty 1.1.0 ships N-API prebuilds for darwin-{arm64,x64} and
+//    win32-{arm64,x64}. N-API binaries are ABI-stable across Node and
+//    Electron versions, so the prebuild loads fine in Electron with no
+//    rebuild. lib/utils.js prefers `build/Release` if it exists, else
+//    falls back to `prebuilds/<platform>-<arch>` — leaving build/Release
+//    empty is exactly what we want.
+//
+//    Linux ships NO prebuild, so we still need node-gyp to compile from
+//    source there.
+const fs = require('node:fs');
+const platform = process.platform;
+const arch = process.arch;
+const prebuildPath = path.join(__dirname, '..', 'node_modules', 'node-pty', 'prebuilds', `${platform}-${arch}`);
+const hasPrebuild = fs.existsSync(prebuildPath);
+
+if (hasPrebuild) {
+  console.log(`[postinstall] node-pty has an N-API prebuild for ${platform}-${arch} — skipping electron-rebuild.`);
+} else {
+  console.log(`[postinstall] no node-pty prebuild for ${platform}-${arch} — running electron-rebuild.`);
+  const rebuildCli = path.join(__dirname, '..', 'node_modules', '@electron', 'rebuild', 'lib', 'cli.js');
+  const rebuildOk = runNode('electron-rebuild', rebuildCli, ['-w', 'node-pty']);
+  if (!rebuildOk) {
+    console.warn('[postinstall] electron-rebuild failed — fine in dev, `electron-forge make` will retry during packaging.');
+  }
 }

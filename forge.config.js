@@ -19,10 +19,13 @@ function ripgrepKeepFor(platform) {
 }
 
 // node-pty ships prebuilds for darwin-arm64, darwin-x64, win32-arm64,
-// win32-x64 (no linux — built from source there). Drop the wrong ones.
-function nodePtyKeepFor(platform) {
-  if (platform === 'win32') return new Set(['win32-x64', 'win32-arm64']);
-  if (platform === 'darwin') return new Set(['darwin-x64', 'darwin-arm64']);
+// win32-x64 (no linux — built from source there). Drop the wrong ones —
+// arch-aware, so a win32-x64 build doesn't carry the win32-arm64 binary
+// (~28 MB saving on Windows alone).
+function nodePtyKeepFor(platform, arch) {
+  const a = arch || process.arch;
+  if (platform === 'win32')  return new Set([`win32-${a}`]);
+  if (platform === 'darwin') return new Set([`darwin-${a}`]);
   return new Set();   // linux builds from source via electron-rebuild
 }
 
@@ -66,6 +69,7 @@ module.exports = {
     // Per-platform ignore. `platform` is auto-injected by electron-packager.
     ignore: function (filePath) {
       const targetPlatform = this.platform || process.platform;
+      const targetArch     = this.arch     || process.arch;
       // Normalise the path forge passes in so our regexes work cross-OS.
       const norm = filePath.replace(/\\/g, '/');
 
@@ -81,10 +85,11 @@ module.exports = {
         if (!keep.has(rgMatch[1]) && rgMatch[1] !== 'COPYING') return true;
       }
 
-      // 3. node-pty prebuilds — drop wrong-platform native binaries.
+      // 3. node-pty prebuilds — drop wrong-platform AND wrong-arch native
+      //    binaries. A win32-x64 build doesn't need the win32-arm64 .node.
       const ptyMatch = norm.match(/[/\\]node_modules[/\\]node-pty[/\\]prebuilds[/\\]([^/\\]+)/);
       if (ptyMatch) {
-        const keep = nodePtyKeepFor(targetPlatform);
+        const keep = nodePtyKeepFor(targetPlatform, targetArch);
         if (!keep.has(ptyMatch[1])) return true;
       }
 
