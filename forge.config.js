@@ -66,10 +66,10 @@ module.exports = {
     appBundleId: 'dev.pipilot.ide',
     asar: true,
     // Platform-specific icon extension auto-resolved (.ico/.icns/.png).
-    // Currently only public/icon.png exists — Windows + macOS will fall
-    // back to the default Electron icon. Drop a public/icon.ico and
-    // public/icon.icns to brand both, then uncomment.
-    // icon: path.join(__dirname, 'public', 'icon'),
+    // public/icon.ico is generated from icon.png at install time by
+    // scripts/build-icons.js. macOS .icns isn't generated yet — Mac
+    // builds fall back to the .png. (TODO v0.2: add iconutil step.)
+    icon: path.join(__dirname, 'public', 'icon'),
     // Per-platform ignore. `platform` is auto-injected by electron-packager.
     ignore: function (filePath) {
       const targetPlatform = this.platform || process.platform;
@@ -117,10 +117,9 @@ module.exports = {
         title: 'PiPilot IDE',
         // Installer filename — what users actually click to install.
         setupExe: 'PiPilot-Setup.exe',
-        // setupIcon: path.join(__dirname, 'public', 'icon.ico'),
-        // ↑ Add a .ico to public/ and uncomment to brand the installer
-        //   wizard + Add/Remove Programs entry. PNG isn't accepted here —
-        //   needs .ico (multi-resolution Windows icon format).
+        // Brands the installer wizard + the Add/Remove Programs entry.
+        // public/icon.ico is generated at install time by build-icons.js.
+        setupIcon: path.join(__dirname, 'public', 'icon.ico'),
       },
     },
     { name: '@electron-forge/maker-zip', platforms: ['darwin', 'linux'] },

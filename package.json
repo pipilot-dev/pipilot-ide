@@ -61,6 +61,7 @@
     "@fontsource/space-mono": "^5.2.9",
     "@fontsource/ubuntu-mono": "^5.2.8",
     "electron": "^32.0.0",
-    "esbuild": "^0.28.0"
+    "esbuild": "^0.28.0",
+    "png-to-ico": "^3.0.1"
   }
 }

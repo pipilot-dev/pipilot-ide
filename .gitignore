@@ -31,5 +31,11 @@ release/
 # never escape the dev machine even if a copy ends up in the repo dir.
 auth-token.bin
 
+# Generated platform icons (built from public/icon.png by scripts/build-icons.js).
+public/icon.ico
+public/icon.icns
+
 # Defunct artefact from old Vite migration.
 fiddle-pipilot-ide/
+.pipilot/checkpoints/
+.pipilot/search-index.json

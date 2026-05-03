@@ -34,6 +34,12 @@ if (!fontsOk) {
   process.exit(1);
 }
 
+// 1b. Generate public/icon.ico from public/icon.png so the Windows
+//     installer + Add/Remove Programs entry get a proper branded icon.
+//     Best-effort — falls back to Electron's default if the conversion
+//     library isn't installed (e.g. minimal CI runs).
+runNode('build-icons', path.join(__dirname, 'build-icons.js'));
+
 // 2. Rebuild node-pty against Electron's ABI — but only when needed.
 //
 //    node-pty 1.1.0 ships N-API prebuilds for darwin-{arm64,x64} and
