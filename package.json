@@ -14,7 +14,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "postinstall": "node scripts/copy-fonts.js && (electron-rebuild -w node-pty || echo '[pipilot] electron-rebuild skipped (dev env)')",
+    "postinstall": "node scripts/postinstall.js",
     "fonts": "node scripts/copy-fonts.js",
     "rebuild": "electron-rebuild -f -w node-pty",
     "package": "electron-forge package",

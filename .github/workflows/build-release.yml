@@ -62,7 +62,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 22.12+ required by @electron/rebuild@4 + node-abi@4. Node 20
+          # works (warnings only) but produces noisy CI logs.
+          node-version: '22'
           cache: 'npm'
 
       # Electron's chromium needs a handful of system libraries on linux
