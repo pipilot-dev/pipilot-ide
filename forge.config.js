@@ -65,7 +65,11 @@ module.exports = {
     executableName: 'pipilot-ide',
     appBundleId: 'dev.pipilot.ide',
     asar: true,
-    icon: path.join(__dirname, 'public', 'icon'),   // platform-specific extension auto-resolved
+    // Platform-specific icon extension auto-resolved (.ico/.icns/.png).
+    // Currently only public/icon.png exists — Windows + macOS will fall
+    // back to the default Electron icon. Drop a public/icon.ico and
+    // public/icon.icns to brand both, then uncomment.
+    // icon: path.join(__dirname, 'public', 'icon'),
     // Per-platform ignore. `platform` is auto-injected by electron-packager.
     ignore: function (filePath) {
       const targetPlatform = this.platform || process.platform;
@@ -98,7 +102,27 @@ module.exports = {
   },
   rebuildConfig: {},
   makers: [
-    { name: '@electron-forge/maker-squirrel', config: { name: 'pipilot_ide' } },
+    {
+      name: '@electron-forge/maker-squirrel',
+      config: {
+        // Install folder name + NuGet package id. Must be a valid Windows
+        // filename and a valid NuGet id (alphanumeric + . _ -, no spaces).
+        // Determines:
+        //   %LocalAppData%\PiPilot\               install root
+        //   %LocalAppData%\PiPilot\app-x.y.z\     per-version dir
+        //   PiPilot-x.y.z-full.nupkg              update package name
+        name: 'PiPilot',
+        // Friendly display name used in the install wizard, Add/Remove
+        // Programs entry, and shortcut labels. Spaces are fine here.
+        title: 'PiPilot IDE',
+        // Installer filename — what users actually click to install.
+        setupExe: 'PiPilot-Setup.exe',
+        // setupIcon: path.join(__dirname, 'public', 'icon.ico'),
+        // ↑ Add a .ico to public/ and uncomment to brand the installer
+        //   wizard + Add/Remove Programs entry. PNG isn't accepted here —
+        //   needs .ico (multi-resolution Windows icon format).
+      },
+    },
     { name: '@electron-forge/maker-zip', platforms: ['darwin', 'linux'] },
     { name: '@electron-forge/maker-deb', config: {} },
     { name: '@electron-forge/maker-rpm', config: {} },
