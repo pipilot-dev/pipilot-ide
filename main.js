@@ -13,12 +13,14 @@ require('dotenv').config();
 // producing the classic "UnknownError: Internal error" that breaks
 // chat session creation on first run after install.
 //
-// electron-squirrel-startup detects the flag, performs the requested
-// install-time bookkeeping (shortcuts, file associations), and returns
-// true to tell us "this process should quit immediately".
-if (require('electron-squirrel-startup')) {
-  // app.quit fires before any other Electron API; safe to call here.
-  process.exit(0);
+// We use our OWN handler instead of electron-squirrel-startup so we can
+// create shortcuts in BOTH StartMenu AND Desktop (the upstream package
+// only ever creates StartMenu shortcuts — that's why users couldn't find
+// the app icon on their desktop after install).
+if (require('./main/squirrel-events').handleSquirrelEvent()) {
+  // handleSquirrelEvent already scheduled process.exit; just return so
+  // we don't accidentally start setting up the rest of the main process.
+  return;
 }
 
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell, session } = require('electron');
