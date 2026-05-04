@@ -57,7 +57,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // polls until done, and asks the main process whether we're logged in.
   auth: {
     proxyUrl:  () => ipcRenderer.invoke('auth:proxy-url'),
-    start:     () => ipcRenderer.invoke('auth:start'),
+    // start({ referralCode? }) — referralCode optional; if present, the
+    // proxy credits the inviter when this user qualifies their first turn.
+    start:     (opts) => ipcRenderer.invoke('auth:start', opts || {}),
     poll:      () => ipcRenderer.invoke('auth:poll'),
     cancel:    () => ipcRenderer.invoke('auth:cancel'),
     getStatus: () => ipcRenderer.invoke('auth:get-status'),

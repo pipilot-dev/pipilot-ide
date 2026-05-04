@@ -113,13 +113,19 @@ module.exports = function register(ipcMain, ctx) {
   // Per-flow state lives in main; the renderer only sees the user-facing
   // pieces. We keep just enough to let poll() not require the renderer to
   // re-send the device_code on every tick.
-  let activeFlow = null;   // { device_code, user_code, verification_uri, started_at, interval, expires_in }
+  // referralCode is captured at start() and forwarded on every poll() so
+  // the proxy can credit the inviter on the user's first sign-in.
+  let activeFlow = null;   // { device_code, user_code, verification_uri, started_at, interval, expires_in, referralCode }
 
   ipcMain.handle('auth:proxy-url', async () => getProxyUrl());
 
-  ipcMain.handle('auth:start', async () => {
+  ipcMain.handle('auth:start', async (_e, opts = {}) => {
     try {
-      const res = await fetch(getProxyUrl() + '/auth/device/start', { method: 'POST' });
+      const referralCode = String(opts?.referralCode || '').trim() || null;
+      const startUrl = referralCode
+        ? `${getProxyUrl()}/auth/device/start?r=${encodeURIComponent(referralCode)}`
+        : `${getProxyUrl()}/auth/device/start`;
+      const res = await fetch(startUrl, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
         return { ok: false, error: data?.error || `start_failed_${res.status}` };
@@ -132,6 +138,7 @@ module.exports = function register(ipcMain, ctx) {
         started_at: Date.now(),
         interval:   data.interval   || 5,
         expires_in: data.expires_in || 900,
+        referralCode,
       };
       return {
         ok: true,
@@ -156,7 +163,13 @@ module.exports = function register(ipcMain, ctx) {
       const res = await fetch(getProxyUrl() + '/auth/device/poll', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ device_code: activeFlow.device_code }),
+        body: JSON.stringify({
+          device_code: activeFlow.device_code,
+          // Forward the referral code on every poll — the proxy reads it
+          // on the qualifying call (the one where GitHub finally returns
+          // an access token) and records the inviter on the new user row.
+          ...(activeFlow.referralCode ? { r: activeFlow.referralCode } : {}),
+        }),
       });
       const data = await res.json();
       // Worker returns { status: 'pending' | 'authorized' | 'expired' | 'denied' }

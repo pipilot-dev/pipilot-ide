@@ -167,6 +167,35 @@
 }
 .auth-tertiary:hover { color: var(--text-strong, #fafaff); }
 
+/* Referral code disclosure on the sign-in step. */
+.auth-referral { font-size: 12px; color: var(--text-mid, #a0a0b0); }
+.auth-referral summary {
+  cursor: pointer; padding: 6px 0; user-select: none;
+  display: inline-block;
+  color: var(--text-mid, #a0a0b0);
+  transition: color 100ms;
+}
+.auth-referral summary:hover { color: var(--text-strong, #fafaff); }
+.auth-referral summary::marker { color: var(--text-dim, #6a6a78); }
+.auth-referral-input {
+  display: block; width: 100%; box-sizing: border-box;
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: var(--bg, #16161a);
+  border: 1px solid var(--border, #2a2a33);
+  border-radius: 5px;
+  color: var(--text-strong, #fafaff);
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 13px; letter-spacing: 0.04em;
+  outline: none;
+  transition: border-color 100ms;
+}
+.auth-referral-input:focus { border-color: var(--accent, #6e9fff); }
+.auth-referral-hint {
+  display: block; font-size: 11px; color: var(--text-dim, #6a6a78);
+  line-height: 1.45;
+}
+
 .auth-footer {
   text-align: center;
   font-size: 11px;
