@@ -327,18 +327,21 @@ module.exports = function register(ipcMain, ctx) {
         } else {
           buffer += chunk;
         }
-        // Scan for sentinel on each chunk. Match the form `<exitCode> <tag>`
-        // appearing on a line by itself in the captured stream.
-        const idx = buffer.indexOf(tag);
-        if (idx >= 0) {
-          // Find the start of the sentinel line — last \n before idx.
-          const lineStart = buffer.lastIndexOf('\n', idx) + 1;
-          const sentinelLine = buffer.slice(lineStart, buffer.indexOf('\n', idx) === -1 ? undefined : buffer.indexOf('\n', idx));
-          const exitMatch = sentinelLine.match(/(-?\d+)\s+__pp_done_/);
-          const exitCode = exitMatch ? parseInt(exitMatch[1], 10) : null;
+        // Resolve ONLY when we find the sentinel preceded by an integer
+        // exit code — that pattern only appears in the *output* of the
+        // `echo $? <tag>` command, never in the typed echo of the
+        // command itself. Without the integer guard we'd false-positive
+        // on the moment the shell echoed back our typed command.
+        //
+        // The regex tolerates ANSI control sequences between bytes
+        // (some shells wrap output in cursor-visibility escapes).
+        const m = buffer.match(/(?:^|[\r\n])\s*\x1b?\[?[?\d;]*[a-zA-Z]?\s*(-?\d+)[ \t]+__pp_done_[a-z0-9]{8}__/);
+        if (m && buffer.indexOf(tag) >= 0) {
+          const exitCode = parseInt(m[1], 10);
           finish({
             ok: true, terminalId: id, output: trimSentinel(buffer, tag),
-            exitCode, truncated, timedOut: false,
+            exitCode: Number.isFinite(exitCode) ? exitCode : null,
+            truncated, timedOut: false,
             durationMs: Date.now() - startTs,
           });
         }
@@ -354,10 +357,12 @@ module.exports = function register(ipcMain, ctx) {
         });
       });
 
-      // Give the shell a tick to print its prompt before we inject the
-      // command, so the visible terminal shows the prompt + command, not
-      // just bare output.
-      setTimeout(() => proc.write(wrapped), 80);
+      // Give the shell time to print its prompt before we inject the
+      // command. cmd.exe is *slow* to initialise on Windows — 80 ms
+      // wasn't enough; the shell sometimes hadn't read its first input
+      // by then and our wrapped command landed in a half-built input
+      // queue. 300 ms is comfortable for cmd, pwsh, bash, zsh.
+      setTimeout(() => proc.write(wrapped), 300);
     });
   }
 
@@ -369,12 +374,25 @@ module.exports = function register(ipcMain, ctx) {
   // it directly from the main process without going through IPC.
   if (ctx) ctx.runInTerminal = runAndCapture;
 
-  // Strip the sentinel line from the captured output so the AI doesn't
-  // see our marker noise.
+  // Strip the sentinel line + ANSI escape codes from the captured
+  // output so the AI doesn't see our marker noise OR the cursor/colour
+  // control bytes the user's xterm renders. The visible terminal tab
+  // still shows the raw output; we only sanitize what we hand to the AI.
   function trimSentinel(buffer, tag) {
     const idx = buffer.indexOf(tag);
-    if (idx < 0) return buffer;
-    const lineStart = buffer.lastIndexOf('\n', idx) + 1;
-    return buffer.slice(0, lineStart).trimEnd() + '\n';
+    let body = buffer;
+    if (idx >= 0) {
+      const lineStart = buffer.lastIndexOf('\n', idx) + 1;
+      body = buffer.slice(0, lineStart);
+    }
+    // Drop CSI sequences (ESC [ ... letter), OSC sequences (ESC ] ... BEL),
+    // and bare bell / DEC private mode toggles. Conservative — keeps
+    // newlines, tabs, and printable characters intact.
+    return body
+      .replace(/\x1b\[[?0-9;]*[a-zA-Z]/g, '')   // CSI: cursor moves, colours, mode toggles
+      .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')   // OSC: window title, hyperlinks
+      .replace(/\x1b[=>]/g, '')                  // keypad mode
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')   // bare control chars (keep \t \n \r)
+      .trimEnd() + '\n';
   }
 };
