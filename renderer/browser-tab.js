@@ -444,18 +444,15 @@
         border-radius: 16px;
         background: #16161a;
         display: flex; align-items: center; justify-content: center;
-        font-family: 'Georgia', 'Playfair Display', serif;
-        font-size: 36px; font-weight: 700;
-        color: #fff;
         background-clip: padding-box;
+        overflow: hidden;
       }
-      .br-newtab-logo-inner span {
-        background: linear-gradient(180deg, #fff 0%, #c8c8d0 100%);
-        -webkit-background-clip: text;
-        background-clip: text;
-        -webkit-text-fill-color: transparent;
-        color: transparent;
-        text-shadow: 0 0 30px rgba(255,107,53,0.4);
+      .br-newtab-logo-inner img {
+        width: 78%; height: 78%;
+        object-fit: contain;
+        /* Subtle drop-shadow keeps the icon readable against the dark
+           inner frame without needing the rotating-hue treatment. */
+        filter: drop-shadow(0 2px 6px rgba(0,0,0,0.45));
       }
       @keyframes br-logo-spin {
         from { filter: hue-rotate(0deg); }
@@ -2537,7 +2534,7 @@
       <div class="br-newtab">
         <div class="br-newtab-hero">
           <div class="br-newtab-logo-wrap">
-            <div class="br-newtab-logo"><div class="br-newtab-logo-inner"><span>P</span></div></div>
+            <div class="br-newtab-logo"><div class="br-newtab-logo-inner"><img src="public/icon.png" alt="PiPilot" /></div></div>
             <div class="br-newtab-globe" data-count="${tabCount}" title="${tabCount} tab${tabCount === 1 ? '' : 's'} open">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
             </div>
