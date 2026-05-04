@@ -506,7 +506,7 @@ module.exports = function register(ipcMain, ctx) {
       ideTools.setWorkDir(workDir);
 
       // Build IDE MCP server with custom tools (matches Vite: name="pipilot")
-      const ideToolsList = buildIdeTools(sdk);
+      const ideToolsList = buildIdeTools(sdk, ctx);
       const ideMcp = sdk.createSdkMcpServer({ name: 'pipilot', version: '1.0.0', tools: ideToolsList });
 
       // Resolve Electron-as-Node + the unpacked cli.js path so the SDK's

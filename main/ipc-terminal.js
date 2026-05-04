@@ -201,4 +201,180 @@ module.exports = function register(ipcMain, ctx) {
     ptys.delete(id);
     return true;
   });
+
+  // ── Agent-driven runs ──────────────────────────────────────────────
+  //
+  // `terminal:run-and-capture` lets the AI agent execute a command in a
+  // real, visible terminal tab. We:
+  //   1. Pick the user's default shell profile (so `npm` etc. resolve as
+  //      they would interactively).
+  //   2. Spawn a fresh PTY and broadcast a 'terminal:agent-spawn' event
+  //      to the renderer so it mounts a tab around it (real xterm view,
+  //      same UX as a manually-opened terminal).
+  //   3. Write the command + a sentinel marker. Buffer all PTY output;
+  //      resolve when the marker line is seen, with the captured output
+  //      and the exit code parsed out of the marker line.
+  //   4. Never auto-destroy the PTY — leaves it open so the user can
+  //      keep typing in the tab after the AI finishes.
+  //
+  // background: true → write the command but don't wait. Used for
+  // long-running servers like `npm run dev`.
+
+  const MAX_CAPTURE_BYTES = 100 * 1024;                       // 100 KB cap
+  const DEFAULT_TIMEOUT_MS = 60_000;
+  const MAX_TIMEOUT_MS     = 10 * 60_000;
+
+  function buildSentinel(profile, command) {
+    // POSIX shells: `; echo $? __pp_done_<rand>__\n`
+    // Windows cmd:  `& echo %ERRORLEVEL% __pp_done_<rand>__\n`
+    // PowerShell:   `; Write-Host "$LASTEXITCODE __pp_done_<rand>__"\n`
+    // Sentinel is unique per run so we can't false-match prior output.
+    const tag = `__pp_done_${Math.random().toString(36).slice(2, 10)}__`;
+    const id = profile.id;
+    let wrapped;
+    if (id === 'cmd') {
+      wrapped = `${command} & echo %ERRORLEVEL% ${tag}\r\n`;
+    } else if (id === 'powershell' || id === 'pwsh') {
+      wrapped = `${command} ; Write-Host "$LASTEXITCODE ${tag}"\r\n`;
+    } else {
+      // bash, zsh, sh, fish, git-bash
+      wrapped = `${command} ; echo $? ${tag}\n`;
+    }
+    return { tag, wrapped };
+  }
+
+  function getMainWindow() {
+    try { return ctx.getWindow ? ctx.getWindow() : null; } catch { return null; }
+  }
+
+  // Extracted as a plain function so the agent's `run_in_terminal` tool
+  // (running in the main process) can call it directly without bouncing
+  // through the renderer→main IPC layer.
+  async function runAndCapture(opts = {}) {
+    const command = String(opts.command || '').trim();
+    if (!command) return { ok: false, error: 'command required' };
+
+    const profiles = detectProfiles();
+    const profile = pickProfile(profiles, opts.profileId);
+    if (!profile) return { ok: false, error: 'no shell profile' };
+
+    const cwd = opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir();
+    const id  = `term-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const proc = createPtyProcess(profile, { cwd, cols: 120, rows: 30 });
+    ptys.set(id, { proc, profileId: profile.id, cwd, pid: proc.pid });
+
+    // Tell the renderer to mount a visible tab around this PTY. The
+    // renderer already knows how to attach xterm to a 'terminal:data:<id>'
+    // event stream (see renderer/terminal.js).
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) {
+      try { win.webContents.send('terminal:agent-spawn', { id, label: command.slice(0, 40), cwd, profileId: profile.id }); } catch {}
+    }
+
+    // Pipe live PTY data out to the renderer so the user watches it scroll.
+    proc.onData((data) => {
+      try {
+        if (win && !win.isDestroyed()) win.webContents.send(`terminal:data:${id}`, data);
+      } catch {}
+    });
+    proc.onExit((code) => {
+      try {
+        if (win && !win.isDestroyed()) win.webContents.send(`terminal:exit:${id}`, code);
+      } catch {}
+      ptys.delete(id);
+    });
+
+    // Background mode: kick off, return immediately. Caller can poll or
+    // just leave the server running until the user kills it.
+    if (opts.background) {
+      proc.write(command + (profile.id === 'cmd' || profile.id === 'powershell' || profile.id === 'pwsh' ? '\r\n' : '\n'));
+      return { ok: true, terminalId: id, background: true };
+    }
+
+    // Foreground mode: write command + sentinel, watch output for the
+    // sentinel marker, resolve.
+    const { tag, wrapped } = buildSentinel(profile, command);
+    const startTs = Date.now();
+    const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1_000, opts.timeoutMs || DEFAULT_TIMEOUT_MS));
+
+    return new Promise((resolve) => {
+      let buffer = '';
+      let truncated = false;
+      let done = false;
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { dataDisposable && dataDisposable.dispose && dataDisposable.dispose(); } catch {}
+        try { exitDisposable && exitDisposable.dispose && exitDisposable.dispose(); } catch {}
+        resolve(result);
+      };
+      const timer = setTimeout(() => {
+        // Don't kill the PTY — leave the tab open for the user to inspect.
+        // Just hand back what we have so far.
+        finish({
+          ok: true, terminalId: id, output: trimSentinel(buffer, tag),
+          exitCode: null, truncated, timedOut: true,
+          durationMs: Date.now() - startTs,
+        });
+      }, timeoutMs);
+
+      const dataDisposable = proc.onData((chunk) => {
+        if (done) return;
+        if (buffer.length + chunk.length > MAX_CAPTURE_BYTES) {
+          buffer += chunk.slice(0, Math.max(0, MAX_CAPTURE_BYTES - buffer.length));
+          truncated = true;
+        } else {
+          buffer += chunk;
+        }
+        // Scan for sentinel on each chunk. Match the form `<exitCode> <tag>`
+        // appearing on a line by itself in the captured stream.
+        const idx = buffer.indexOf(tag);
+        if (idx >= 0) {
+          // Find the start of the sentinel line — last \n before idx.
+          const lineStart = buffer.lastIndexOf('\n', idx) + 1;
+          const sentinelLine = buffer.slice(lineStart, buffer.indexOf('\n', idx) === -1 ? undefined : buffer.indexOf('\n', idx));
+          const exitMatch = sentinelLine.match(/(-?\d+)\s+__pp_done_/);
+          const exitCode = exitMatch ? parseInt(exitMatch[1], 10) : null;
+          finish({
+            ok: true, terminalId: id, output: trimSentinel(buffer, tag),
+            exitCode, truncated, timedOut: false,
+            durationMs: Date.now() - startTs,
+          });
+        }
+      });
+
+      const exitDisposable = proc.onExit((code) => {
+        if (done) return;
+        finish({
+          ok: true, terminalId: id, output: trimSentinel(buffer, tag),
+          exitCode: typeof code === 'number' ? code : null,
+          truncated, timedOut: false,
+          durationMs: Date.now() - startTs,
+        });
+      });
+
+      // Give the shell a tick to print its prompt before we inject the
+      // command, so the visible terminal shows the prompt + command, not
+      // just bare output.
+      setTimeout(() => proc.write(wrapped), 80);
+    });
+  }
+
+  // Renderer-facing wrapper. Same shape as the rest of this file's
+  // ipcMain.handle calls.
+  ipcMain.handle('terminal:run-and-capture', (_e, opts) => runAndCapture(opts));
+
+  // Expose to ctx so the agent SDK tool (`run_in_terminal`) can call
+  // it directly from the main process without going through IPC.
+  if (ctx) ctx.runInTerminal = runAndCapture;
+
+  // Strip the sentinel line from the captured output so the AI doesn't
+  // see our marker noise.
+  function trimSentinel(buffer, tag) {
+    const idx = buffer.indexOf(tag);
+    if (idx < 0) return buffer;
+    const lineStart = buffer.lastIndexOf('\n', idx) + 1;
+    return buffer.slice(0, lineStart).trimEnd() + '\n';
+  }
 };

@@ -85,7 +85,10 @@ function runMissionAgent(opts, onEvent) {
     const mcpServers = {};
     if (pipilotMcp) {
       try {
-        const tools = buildIdeTools(sdk);
+        // Missions run unattended — no visible terminal tab to attach to,
+        // so we don't expose `run_in_terminal` (it would spawn a tab no
+        // one's watching). The standard `Bash` tool covers their needs.
+        const tools = buildIdeTools(sdk, null);
         mcpServers.pipilot = sdk.createSdkMcpServer({ name: 'pipilot', version: '1.0.0', tools });
       } catch (err) {
         console.warn('[mission-agent] pipilot mcp register failed', err.message);

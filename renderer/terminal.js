@@ -349,9 +349,19 @@
     const fit = new FitAddon();
     term.loadAddon(fit);
     try {
+      // Clicking a URL anywhere in the terminal opens it in our embedded
+      // browser tab (same UX as Ctrl+Click in VS Code's terminal). The
+      // `browser:open` bus event is handled by renderer/browser-tab.js
+      // which mounts an editor tab around a real <webview>.
+      // mailto: still falls back to the OS so the system mail client opens.
       term.loadAddon(new WebLinksAddon((e, url) => {
         e.preventDefault();
-        window.electronAPI?.shell?.openExternal?.(url);
+        if (/^mailto:/i.test(url)) {
+          window.electronAPI?.shell?.openExternal?.(url);
+        } else {
+          try { bus.emit('browser:open', { url }); }
+          catch { window.electronAPI?.shell?.openExternal?.(url); }
+        }
       }));
     } catch {}
     term.open(div);
@@ -361,17 +371,28 @@
     const profileId = opts.profileId || selectedProfileId || state.settings?.terminalProfile || undefined;
 
     let created;
-    try {
-      created = await api.terminal.create({
-        profileId,
-        cwd,
-        cols: term.cols,
-        rows: term.rows,
-      });
-    } catch (err) {
-      console.error('[terminal] create failed', err);
-      term.write(`\r\n\x1b[31m[Failed to create terminal: ${String(err && err.message || err)}]\x1b[0m\r\n`);
-      return null;
+    if (opts.attachExistingId) {
+      // Agent-driven flow: main has already spawned a PTY (for the
+      // run_in_terminal tool). We just need to wire xterm to its
+      // existing data/exit streams.
+      created = {
+        id: opts.attachExistingId,
+        pid: opts.pid || 0,
+        profileId: opts.profileId || profileId,
+      };
+    } else {
+      try {
+        created = await api.terminal.create({
+          profileId,
+          cwd,
+          cols: term.cols,
+          rows: term.rows,
+        });
+      } catch (err) {
+        console.error('[terminal] create failed', err);
+        term.write(`\r\n\x1b[31m[Failed to create terminal: ${String(err && err.message || err)}]\x1b[0m\r\n`);
+        return null;
+      }
     }
 
     const profiles = await getProfiles();
@@ -474,7 +495,10 @@
         bus.emit('devserver:open-url', url);
       });
       urlBanner.querySelector('[data-action="browser"]').addEventListener('click', () => {
-        window.electronAPI?.shell?.openExternal?.(url);
+        // Detected localhost URL — route to our embedded browser so the
+        // user can preview in-IDE rather than spawning their system browser.
+        try { bus.emit('browser:open', { url }); }
+        catch { window.electronAPI?.shell?.openExternal?.(url); }
       });
       urlBanner.querySelector('.terminal-preview-close').addEventListener('click', () => {
         urlBanner.remove(); urlBanner = null;
@@ -731,6 +755,27 @@
     list,
     toggle: toggleTerminalPanel,
   };
+
+  // Agent-driven `run_in_terminal` tool: main spawns a PTY, broadcasts
+  // this event, we mount a visible xterm tab around the existing PTY so
+  // the user can watch the command run.
+  if (window.electronAPI?.onTerminalAgentSpawn) {
+    window.electronAPI.onTerminalAgentSpawn(async (payload) => {
+      if (!payload?.id) return;
+      try {
+        // Reveal the bottom panel with the terminal tab so the user
+        // sees the command actually appear instead of finding it later.
+        try { bus.emit('panel:bottom:show', { tab: 'terminal' }); } catch {}
+        await createNew({
+          attachExistingId: payload.id,
+          profileId: payload.profileId,
+          pid: payload.pid,
+        });
+      } catch (err) {
+        console.warn('[terminal] agent-spawn attach failed', err);
+      }
+    });
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

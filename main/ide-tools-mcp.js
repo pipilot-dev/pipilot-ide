@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const ideTools = require('./mcp-ide-tools');
 
-function buildIdeTools(sdk) {
+function buildIdeTools(sdk, ctx) {
   const { z } = require('zod');
   const browserCtl = require('./browser-control'); // module.browserExec singleton
 
@@ -684,6 +684,55 @@ function buildIdeTools(sdk) {
           if (r?.savePath) return { content: [{ type: 'text', text: `PDF saved to ${r.savePath}` }] };
           throw new Error(r?.error || 'unknown');
         } catch (e) { return { content: [{ type: 'text', text: `browser_pdf error: ${e.message}` }], isError: true }; }
+      }
+    ),
+
+    sdk.tool('run_in_terminal',
+      'Run a shell command in a real, visible terminal tab. Output streams live to the user as it runs, AND a captured copy is returned to you so you can read the result.\n\n' +
+      'Differs from `Bash`: that tool runs in an invisible subprocess. This one opens an actual terminal tab the user can see, type into, and inspect after you finish — useful when the user should watch a build, when you want to leave a long-running process for them to observe, or when seeing the output in context (with surrounding shell prompt + colours) matters.\n\n' +
+      'Modes:\n' +
+      '  • Default (foreground): waits for the command to finish (or `timeoutMs`) and returns `{ output, exitCode, terminalId, truncated, durationMs }`.\n' +
+      '  • `background: true`: writes the command and returns immediately. Use this for long-lived processes (`npm run dev`, `python app.py`). The terminal stays open and the user can Ctrl+C it later.\n\n' +
+      'Output is capped at 100 KB. `truncated: true` in the result means the cap was hit. The terminal tab itself shows the full unbuffered output regardless.',
+      {
+        command: z.string().describe('The full shell command to run, exactly as you would type it. Quote args containing spaces.'),
+        cwd: z.string().optional().describe('Absolute working directory. Defaults to the user\'s home dir if not set; pass the project path you got from `get_working_directory` for project-scoped commands.'),
+        background: z.boolean().optional().describe('If true, fire the command and return immediately without waiting for completion. Use for long-running servers.'),
+        timeoutMs: z.number().int().positive().optional().describe('How long to wait for completion in foreground mode. Default 60000 (1 min). Max 600000 (10 min). Ignored when background=true.'),
+      },
+      async (args) => {
+        const runner = ctx?.runInTerminal;
+        if (typeof runner !== 'function') {
+          return { content: [{ type: 'text', text: 'run_in_terminal: terminal runtime not available in this build.' }], isError: true };
+        }
+        try {
+          const r = await runner({
+            command: args.command,
+            cwd: args.cwd,
+            background: !!args.background,
+            timeoutMs: args.timeoutMs,
+          });
+          if (!r?.ok) {
+            return { content: [{ type: 'text', text: `run_in_terminal error: ${r?.error || 'unknown'}` }], isError: true };
+          }
+          if (r.background) {
+            return { content: [{ type: 'text',
+              text: `Command started in background (terminal id: ${r.terminalId}). Output is streaming live in the terminal panel — the user can see it. Use a follow-up tool call to interact with the terminal if needed.`,
+            }] };
+          }
+          const lines = [];
+          lines.push(`exitCode: ${r.exitCode === null ? '(timed out / unknown)' : r.exitCode}`);
+          lines.push(`durationMs: ${r.durationMs}`);
+          lines.push(`terminalId: ${r.terminalId}`);
+          if (r.timedOut) lines.push('NOTE: command exceeded the timeout — it may still be running. Output below is partial.');
+          if (r.truncated) lines.push('NOTE: output was capped at 100 KB. The terminal tab shows the full output.');
+          lines.push('');
+          lines.push('--- output ---');
+          lines.push(r.output || '(no output)');
+          return { content: [{ type: 'text', text: lines.join('\n') }], isError: r.exitCode !== null && r.exitCode !== 0 };
+        } catch (e) {
+          return { content: [{ type: 'text', text: `run_in_terminal failed: ${e.message}` }], isError: true };
+        }
       }
     ),
   ];

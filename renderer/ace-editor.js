@@ -384,6 +384,43 @@
       exec: () => { if (activePath) closeFile(activePath); },
     });
 
+    // Ctrl+Click (Cmd+Click on macOS) on a URL → open in our embedded
+    // browser tab. Mirrors VS Code / JetBrains behaviour. Falls back to
+    // opening in the system browser if the embedded browser bus event
+    // isn't handled.
+    //
+    // Ace's mousedown event fires before the click is processed; the
+    // domEvent gives us the modifier state. We hit-test the cursor
+    // position, snap to the URL token under it, and intercept.
+    const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+|\bwww\.[^\s<>"'`]+/g;
+    aceEditor.on('mousedown', (e) => {
+      const ev = e.domEvent;
+      const ctrlOrMeta = (process.platform === 'darwin') ? ev?.metaKey : ev?.ctrlKey;
+      if (!ctrlOrMeta || ev?.button !== 0) return;
+      try {
+        const pos = e.getDocumentPosition();
+        const session = aceEditor.session;
+        const line = session.getLine(pos.row) || '';
+        URL_RE.lastIndex = 0;
+        let m;
+        while ((m = URL_RE.exec(line))) {
+          const start = m.index;
+          const end = start + m[0].length;
+          if (pos.column >= start && pos.column <= end) {
+            e.preventDefault();
+            e.stop?.();
+            const raw = m[0];
+            const url = raw.startsWith('www.') ? `https://${raw}` : raw;
+            try { bus.emit('browser:open', { url }); }
+            catch { window.electronAPI?.shell?.openExternal?.(url); }
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('[ace] ctrl-click handler failed', err);
+      }
+    });
+
     console.log(`[startup] ensureEditor (Ace init) took ${(performance.now() - _t0).toFixed(0)}ms`);
     bus.emit('ace:ready', aceEditor);
 
