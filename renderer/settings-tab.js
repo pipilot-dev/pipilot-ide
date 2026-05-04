@@ -105,9 +105,12 @@
       .st-account-plan {
         text-transform: uppercase; letter-spacing: 0.05em;
         padding: 2px 8px; border-radius: 999px;
-        background: color-mix(in srgb, var(--accent) 18%, transparent);
-        color: var(--accent); font-weight: 600;
+        font-weight: 600; font-size: 10px;
       }
+      .st-account-plan.plan-free   { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+      .st-account-plan.plan-paid   { background: color-mix(in srgb, var(--ok, #6ee7a7) 22%, transparent); color: var(--ok, #6ee7a7); }
+      .st-account-plan.plan-admin  { background: color-mix(in srgb, var(--err, #ff7b85) 22%, transparent); color: var(--err, #ff7b85); }
+      .st-account-plan.plan-sponsor{ background: linear-gradient(135deg,#ff7eb6,#f5b254); color: #16161a; }
       .st-account-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; align-items: flex-end; }
       .st-account-actions button {
         padding: 6px 12px; border-radius: 5px; font: inherit; font-size: 12px; cursor: pointer;
@@ -502,6 +505,79 @@
         ? `<img class="st-account-avatar" src="${escapeHtml(u.avatar_url)}" alt="${escapeHtml(u.login || '')}" />`
         : `<div class="st-account-avatar placeholder">${escapeHtml(initial)}</div>`;
 
+      // Plan badge — admin / sponsor get distinct colours.
+      const planLabel = String(u.plan || 'free').toUpperCase();
+      const planClass = u.plan === 'admin' ? 'plan-admin'
+        : u.sponsor ? 'plan-sponsor'
+        : (u.plan === 'pro' || u.plan === 'team') ? 'plan-paid'
+        : 'plan-free';
+
+      // Quota bar — only shown for capped tiers.
+      let quotaCard = '';
+      if (u.quota_unlimited) {
+        const reason = u.plan === 'admin' ? 'Admin account'
+          : u.sponsor ? `GitHub Sponsor ($${u.sponsor_tier_usd}/mo)`
+          : 'Pro plan';
+        quotaCard = `
+          <div class="st-card" style="margin-top:14px;">
+            <div class="st-row">
+              <div class="lbl">
+                <div class="t">Daily usage · Unlimited</div>
+                <div class="d">${escapeHtml(reason)} — no quota.</div>
+              </div>
+            </div>
+          </div>
+        `;
+      } else {
+        const used = u.quota_used_today || 0;
+        const cap  = u.quota_per_day    || 50;
+        const pct  = Math.min(100, Math.round((used / cap) * 100));
+        const colour = pct >= 90 ? 'var(--err,#ff7b85)' : pct >= 60 ? 'var(--warn,#f5b254)' : 'var(--accent)';
+        const refBonus = u.referral_bonus_per_day || 0;
+        const streakBonus = u.streak_bonus_per_day || 0;
+        quotaCard = `
+          <div class="st-card" style="margin-top:14px;">
+            <div class="st-row" style="display:block;">
+              <div class="lbl" style="margin-bottom:8px;">
+                <div class="t">Daily usage · ${used} / ${cap}</div>
+                <div class="d">Resets at midnight UTC.</div>
+              </div>
+              <div style="height:6px;background:var(--surface-alt);border-radius:3px;overflow:hidden;">
+                <div style="width:${pct}%;height:100%;background:${colour};transition:width 200ms;"></div>
+              </div>
+              <div style="display:flex;gap:14px;margin-top:10px;font-size:11px;color:var(--text-dim);font-variant-numeric:tabular-nums;">
+                <span>Base ${u.base_quota || 50}</span>
+                ${refBonus ? `<span style="color:var(--accent);">+${refBonus} referrals</span>` : ''}
+                ${streakBonus ? `<span style="color:var(--warn,#f5b254);">+${streakBonus} streak (${u.streak_days}d)</span>` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // Referral card — code + invite link + count.
+      const referralLink = u.referral_code
+        ? `https://github.com/pipilot-dev/pipilot-ide?r=${encodeURIComponent(u.referral_code)}`
+        : '';
+      const referralCard = u.referral_code ? `
+        <div class="st-card" style="margin-top:14px;">
+          <div class="st-row" style="display:block;">
+            <div class="lbl" style="margin-bottom:10px;">
+              <div class="t">Invite friends, earn quota</div>
+              <div class="d">Each friend who signs up + sends one chat = +20 turns/day for both of you (max +200).</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+              <code style="flex:1;font-family:var(--font-mono);font-size:12px;padding:7px 10px;background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text-strong);user-select:all;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(referralLink)}</code>
+              <button data-action="copy-link" style="padding:7px 12px;border-radius:5px;font:inherit;font-size:11.5px;cursor:pointer;border:1px solid var(--border);background:var(--surface-alt);color:var(--text);">Copy link</button>
+            </div>
+            <div style="font-size:11.5px;color:var(--text-mid);">
+              <strong style="color:var(--text-strong);">${u.referrals_count || 0}</strong> qualified ${u.referrals_count === 1 ? 'invite' : 'invites'}
+              · Code: <code style="font-family:var(--font-mono);">${escapeHtml(u.referral_code)}</code>
+            </div>
+          </div>
+        </div>
+      ` : '';
+
       host.innerHTML = `
         <div class="st-account-card">
           ${avatar}
@@ -509,13 +585,25 @@
             <div class="login">${escapeHtml(u.login || 'unknown')}</div>
             ${u.email ? `<div class="email">${escapeHtml(u.email)}</div>` : ''}
             <div class="st-account-meta">
-              <span class="st-account-plan">${escapeHtml((u.plan || 'free').toUpperCase())}</span>
+              <span class="st-account-plan ${planClass}">${escapeHtml(planLabel)}</span>
+              ${u.sponsor ? '<span class="st-account-plan plan-sponsor">SPONSOR</span>' : ''}
               <span>via GitHub</span>
             </div>
           </div>
           <div class="st-account-actions">
             <button data-action="open-github">View on GitHub</button>
             <button class="danger" data-action="signout">Sign out</button>
+          </div>
+        </div>
+        ${quotaCard}
+        ${referralCard}
+        <div class="st-card" style="margin-top:14px;">
+          <div class="st-row" style="display:block;">
+            <div class="lbl" style="margin-bottom:8px;">
+              <div class="t">Show your support</div>
+              <div class="d">Drop a "Made with PiPilot" badge in your README — it links back here so other developers can find the IDE.</div>
+            </div>
+            <button data-action="get-badge" style="padding:7px 12px;border-radius:5px;font:inherit;font-size:11.5px;cursor:pointer;border:1px solid var(--border);background:var(--surface-alt);color:var(--text);">Get the badge</button>
           </div>
         </div>
         <div class="st-card" style="margin-top:14px;">
@@ -539,6 +627,18 @@
         await api.auth.signOut();
         try { window.dispatchEvent(new CustomEvent('pipilot:auth-changed', { detail: { authenticated: false } })); } catch {}
         hydrateAccountSection(scope);
+      });
+      host.querySelector('[data-action="copy-link"]')?.addEventListener('click', async (e) => {
+        try {
+          await navigator.clipboard.writeText(referralLink);
+          const btn = e.currentTarget;
+          const orig = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = orig; }, 1200);
+        } catch {}
+      });
+      host.querySelector('[data-action="get-badge"]')?.addEventListener('click', () => {
+        window.PiPilot?.badgeDialog?.show?.(u.login);
       });
     }
 
