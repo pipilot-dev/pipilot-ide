@@ -759,20 +759,33 @@
   // Agent-driven `run_in_terminal` tool: main spawns a PTY, broadcasts
   // this event, we mount a visible xterm tab around the existing PTY so
   // the user can watch the command run.
+  //
+  // Defensive: any failure here MUST NOT corrupt the user's existing
+  // terminal tabs. We catch + log everything and fall back to creating
+  // a fresh terminal if the existing-PTY attach path goes wrong.
   if (window.electronAPI?.onTerminalAgentSpawn) {
     window.electronAPI.onTerminalAgentSpawn(async (payload) => {
-      if (!payload?.id) return;
+      if (!payload?.id) {
+        console.warn('[terminal] agent-spawn: missing id payload', payload);
+        return;
+      }
+      console.log('[terminal] agent-spawn for id', payload.id, 'label:', payload.label);
       try {
         // Reveal the bottom panel with the terminal tab so the user
         // sees the command actually appear instead of finding it later.
         try { bus.emit('panel:bottom:show', { tab: 'terminal' }); } catch {}
-        await createNew({
+        const entry = await createNew({
           attachExistingId: payload.id,
           profileId: payload.profileId,
           pid: payload.pid,
         });
+        if (!entry) {
+          console.warn('[terminal] agent-spawn createNew returned null for', payload.id);
+        }
       } catch (err) {
-        console.warn('[terminal] agent-spawn attach failed', err);
+        console.error('[terminal] agent-spawn attach failed:', err);
+        // Don't rethrow — we don't want a busted agent terminal to
+        // crash the renderer's terminal panel for the user.
       }
     });
   }

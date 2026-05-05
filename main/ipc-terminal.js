@@ -312,8 +312,10 @@ module.exports = function register(ipcMain, ctx) {
       const timer = setTimeout(() => {
         // Don't kill the PTY — leave the tab open for the user to inspect.
         // Just hand back what we have so far.
+        const lastTagIdx = buffer.lastIndexOf(tag);
         finish({
-          ok: true, terminalId: id, output: trimSentinel(buffer, tag),
+          ok: true, terminalId: id,
+          output: lastTagIdx >= 0 ? trimSentinelAt(buffer, lastTagIdx) : sanitizeAnsi(buffer),
           exitCode: null, truncated, timedOut: true,
           durationMs: Date.now() - startTs,
         });
@@ -329,17 +331,22 @@ module.exports = function register(ipcMain, ctx) {
         }
         // Resolve ONLY when we find the sentinel preceded by an integer
         // exit code — that pattern only appears in the *output* of the
-        // `echo $? <tag>` command, never in the typed echo of the
-        // command itself. Without the integer guard we'd false-positive
-        // on the moment the shell echoed back our typed command.
+        // `echo $?/%ERRORLEVEL% <tag>` command, never in the typed echo
+        // of the command itself. The tag string DOES appear in the typed
+        // echo, but cmd.exe / shells don't emit a leading digit-then-
+        // space prefix on echoed input lines, so the regex skips them.
         //
-        // The regex tolerates ANSI control sequences between bytes
-        // (some shells wrap output in cursor-visibility escapes).
-        const m = buffer.match(/(?:^|[\r\n])\s*\x1b?\[?[?\d;]*[a-zA-Z]?\s*(-?\d+)[ \t]+__pp_done_[a-z0-9]{8}__/);
-        if (m && buffer.indexOf(tag) >= 0) {
+        // We capture the regex match index too so trimSentinel cuts at
+        // the *output* sentinel line, not the typed-echo occurrence
+        // (which is earlier in the buffer and would lose all real
+        // command output if we naively used indexOf(tag)).
+        const sentinelRe = /(?:^|[\r\n])[ \t]*(-?\d+)[ \t]+__pp_done_[a-z0-9]{8}__/;
+        const m = buffer.match(sentinelRe);
+        if (m && typeof m.index === 'number') {
           const exitCode = parseInt(m[1], 10);
           finish({
-            ok: true, terminalId: id, output: trimSentinel(buffer, tag),
+            ok: true, terminalId: id,
+            output: trimSentinelAt(buffer, m.index),
             exitCode: Number.isFinite(exitCode) ? exitCode : null,
             truncated, timedOut: false,
             durationMs: Date.now() - startTs,
@@ -349,8 +356,12 @@ module.exports = function register(ipcMain, ctx) {
 
       const exitDisposable = proc.onExit((code) => {
         if (done) return;
+        // No structured sentinel — cut at last tag occurrence if any,
+        // otherwise return the whole buffer (the shell exited unexpectedly).
+        const lastTagIdx = buffer.lastIndexOf(tag);
         finish({
-          ok: true, terminalId: id, output: trimSentinel(buffer, tag),
+          ok: true, terminalId: id,
+          output: lastTagIdx >= 0 ? trimSentinelAt(buffer, lastTagIdx) : sanitizeAnsi(buffer),
           exitCode: typeof code === 'number' ? code : null,
           truncated, timedOut: false,
           durationMs: Date.now() - startTs,
@@ -374,25 +385,25 @@ module.exports = function register(ipcMain, ctx) {
   // it directly from the main process without going through IPC.
   if (ctx) ctx.runInTerminal = runAndCapture;
 
-  // Strip the sentinel line + ANSI escape codes from the captured
-  // output so the AI doesn't see our marker noise OR the cursor/colour
-  // control bytes the user's xterm renders. The visible terminal tab
-  // still shows the raw output; we only sanitize what we hand to the AI.
-  function trimSentinel(buffer, tag) {
-    const idx = buffer.indexOf(tag);
-    let body = buffer;
-    if (idx >= 0) {
-      const lineStart = buffer.lastIndexOf('\n', idx) + 1;
-      body = buffer.slice(0, lineStart);
-    }
-    // Drop CSI sequences (ESC [ ... letter), OSC sequences (ESC ] ... BEL),
-    // and bare bell / DEC private mode toggles. Conservative — keeps
-    // newlines, tabs, and printable characters intact.
+  // Trim everything from `cutAt` onwards (the sentinel line + after) and
+  // sanitise ANSI in the surviving prefix. The `cutAt` index MUST point
+  // at the start (or inside) of the sentinel-output line — never at the
+  // typed-echo occurrence of the tag, otherwise we'd lose the real
+  // command output.
+  function trimSentinelAt(buffer, cutAt) {
+    const lineStart = buffer.lastIndexOf('\n', cutAt) + 1;
+    return sanitizeAnsi(buffer.slice(0, lineStart)).trimEnd() + '\n';
+  }
+
+  // Drop CSI / OSC / keypad-mode escape sequences and bare control
+  // bytes so the AI doesn't have to wade through cursor-toggle noise.
+  // The visible xterm tab still renders the raw stream — only the
+  // AI-facing copy is sanitised.
+  function sanitizeAnsi(body) {
     return body
       .replace(/\x1b\[[?0-9;]*[a-zA-Z]/g, '')   // CSI: cursor moves, colours, mode toggles
       .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')   // OSC: window title, hyperlinks
       .replace(/\x1b[=>]/g, '')                  // keypad mode
-      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')   // bare control chars (keep \t \n \r)
-      .trimEnd() + '\n';
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');     // bare control chars (keep \t \n \r)
   }
 };
