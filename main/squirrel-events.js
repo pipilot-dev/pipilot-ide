@@ -27,12 +27,51 @@ const { spawn } = require('node:child_process');
 // Settings → Features instead so it's opt-in.
 const SHORTCUT_LOCATIONS = 'StartMenu,Desktop';
 
-function spawnUpdate(args) {
+// Spawn Update.exe and wait for it to finish. The previous
+// implementation used a fixed setTimeout(..., 1000) → process.exit(0)
+// which sometimes killed Update.exe mid-flight on slower machines and
+// no shortcuts were created. Listening for `close` is the canonical
+// pattern (electron-squirrel-startup uses the same model).
+function spawnUpdate(args, done) {
   // Update.exe lives in the Squirrel install root, one level up from
   // the per-version app dir that hosts our exe.
   const exeDir   = path.dirname(process.execPath);
   const updateExe = path.resolve(exeDir, '..', 'Update.exe');
-  return spawn(updateExe, args, { detached: true, stdio: 'ignore' });
+  let child;
+  try {
+    child = spawn(updateExe, args, { detached: true });
+  } catch (err) {
+    console.error('[squirrel] Update.exe spawn failed:', err);
+    done();
+    return null;
+  }
+  child.on('close', (code) => {
+    if (code !== 0) console.warn('[squirrel] Update.exe exited code', code, 'for args', args);
+    done();
+  });
+  child.on('error', (err) => {
+    console.error('[squirrel] Update.exe error:', err);
+    done();
+  });
+  // Hard fallback in case Update.exe hangs — never block install/uninstall
+  // forever. 30s is far longer than the operation actually takes.
+  setTimeout(done, 30_000);
+  return child;
+}
+
+// Quit using app.quit() when Electron is available (graceful), fall back
+// to process.exit otherwise (the squirrel-event launches don't fully
+// initialise the app module path on some versions).
+function quit() {
+  try {
+    const { app } = require('electron');
+    app.quit();
+    // app.quit is async; if main.js hasn't run any other quit blockers,
+    // process exits naturally. Hard exit after a beat if not.
+    setTimeout(() => process.exit(0), 500);
+  } catch {
+    process.exit(0);
+  }
 }
 
 // Returns true if the process should quit immediately (i.e. we were
@@ -46,25 +85,18 @@ function handleSquirrelEvent() {
 
   switch (flag) {
     case '--squirrel-install':
-    case '--squirrel-updated': {
-      // Create / refresh shortcuts in StartMenu + Desktop.
-      try { spawnUpdate(['--createShortcut', exeName, '-l', SHORTCUT_LOCATIONS]); } catch {}
-      // Squirrel expects us to exit promptly so it can finish its work.
-      // We use a tiny delay so the spawn isn't killed by our own exit.
-      setTimeout(() => process.exit(0), 1000);
+    case '--squirrel-updated':
+      // Create / refresh shortcuts in StartMenu + Desktop, THEN quit.
+      spawnUpdate(['--createShortcut', exeName, '-l', SHORTCUT_LOCATIONS], quit);
       return true;
-    }
-    case '--squirrel-uninstall': {
-      try { spawnUpdate(['--removeShortcut', exeName, '-l', SHORTCUT_LOCATIONS]); } catch {}
-      setTimeout(() => process.exit(0), 1000);
+    case '--squirrel-uninstall':
+      spawnUpdate(['--removeShortcut', exeName, '-l', SHORTCUT_LOCATIONS], quit);
       return true;
-    }
-    case '--squirrel-obsolete': {
+    case '--squirrel-obsolete':
       // Old version being torn down after a successful update — nothing
       // for us to do; just exit so Squirrel can move on.
-      process.exit(0);
+      quit();
       return true;
-    }
     default:
       return false;
   }
