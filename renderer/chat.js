@@ -485,6 +485,12 @@
 }
 .attachment-chip .x { cursor: pointer; color: var(--text-dim); }
 .attachment-chip .x:hover { color: var(--error); }
+/* Preview-element pills get an accent tint so they read as "from the preview". */
+.attachment-chip.attachment-chip-preview {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text-strong, var(--text));
+}
 
 /* ── Todo Panel ──────────────────────────────────────────────────────── */
 .chat-todo-panel {
@@ -3703,7 +3709,15 @@
     attachments.forEach((a, idx) => {
       const chip = document.createElement('span');
       chip.className = 'attachment-chip';
-      chip.innerHTML = `&#128206; ${escapeHtml(a.name || a.path)} <span class="x">&times;</span>`;
+      // Different icon per attachment kind so users can tell at a glance
+      // which pills are files vs picked preview elements.
+      const isPreviewEl = a.kind === 'preview-element';
+      const icon = isPreviewEl ? '&#127919;' : '&#128206;';   // 🎯 vs 📎
+      if (isPreviewEl) chip.classList.add('attachment-chip-preview');
+      chip.innerHTML = `${icon} ${escapeHtml(a.name || a.path)} <span class="x">&times;</span>`;
+      if (isPreviewEl && a.meta?.selector) {
+        chip.title = `Picked from preview: ${a.meta.selector}`;
+      }
       chip.querySelector('.x').addEventListener('click', () => {
         attachments.splice(idx, 1);
         renderAttachments();
@@ -5396,15 +5410,41 @@
 
     // History context is injected server-side by ipc-agent.js from _pipilot_history.json
     let messageToSend = text;
-    // If files are attached, append read instructions so the agent knows to look at them
-    if (sentAttachments.length > 0) {
-      const fileLines = sentAttachments.map(a => {
+    // Split file attachments from preview-element picks — they need
+    // different prompt framing.
+    const fileAttachments    = sentAttachments.filter(a => a.kind !== 'preview-element');
+    const previewAttachments = sentAttachments.filter(a => a.kind === 'preview-element');
+
+    if (fileAttachments.length > 0) {
+      const fileLines = fileAttachments.map(a => {
         const isImg = a.isImage || /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/i.test(a.name || '');
         return isImg
           ? `- Image: ${a.path} (Use the Read tool to view this image)`
           : `- File: ${a.path} (Read this file for reference)`;
       }).join('\n');
       messageToSend += `\n\n[Attached files — read these for context]\n${fileLines}`;
+    }
+
+    // Picked-from-preview elements: serialise the metadata inline. The
+    // agent needs the selector + outerHTML to find/edit the element in
+    // the source files. Truncate outerHTML to keep prompts compact.
+    if (previewAttachments.length > 0) {
+      const blocks = previewAttachments.map((a, i) => {
+        const m = a.meta || {};
+        const html = (m.outerHTML || '').slice(0, 2000);
+        return [
+          `### Element ${i + 1} — \`${m.describe || a.name || ''}\``,
+          m.url ? `URL: ${m.url}` : '',
+          m.selector ? `Selector: \`${m.selector}\`` : '',
+          m.text ? `Text: ${JSON.stringify(m.text.slice(0, 200))}` : '',
+          m.styles ? `Computed: color=${m.styles.color}, bg=${m.styles.background}, font=${m.styles.fontSize} ${m.styles.fontFamily}` : '',
+          m.rect ? `Rect: ${m.rect.w}×${m.rect.h} @ (${m.rect.x},${m.rect.y})` : '',
+          html ? '```html\n' + html + '\n```' : '',
+        ].filter(Boolean).join('\n');
+      }).join('\n\n');
+      messageToSend +=
+        '\n\n[Tagged elements from the live preview — locate these in the source files to edit them]\n' +
+        blocks;
     }
 
     // Embedded-browser context: if the user has any browser tabs open in the
@@ -6209,6 +6249,33 @@ Voice: first person plural ("we tried…"), warm but precise. No fluff, no greet
     } catch (e) {
       console.error('chat:clear-attachments', e);
     }
+  });
+
+  // Tag-to-select: the preview panel posted us metadata for an element
+  // the user clicked while in select mode. Render it as an attachment
+  // pill (kind='preview-element' so renderAttachments can give it a
+  // distinct icon + sendMessage can serialise it into prompt context).
+  bus.on('chat:attach-preview-element', (el) => {
+    if (!el) return;
+    const name = el.describe || el.tag || 'element';
+    attachments.push({
+      kind: 'preview-element',
+      name,
+      meta: {
+        selector:  el.selector,
+        outerHTML: el.outerHTML,
+        text:      el.text,
+        rect:      el.rect,
+        styles:    el.styles,
+        url:       el.url,
+        tag:       el.tag,
+        id:        el.id,
+        classes:   el.classes,
+      },
+    });
+    renderAttachments();
+    if (chatPanel) chatPanel.classList.remove('hidden');
+    try { inputEl?.focus(); } catch {}
   });
 
   // ---------- Vite-style window events bridge ----------

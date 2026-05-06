@@ -14,6 +14,10 @@
   let history = [];
   let historyIdx = -1;
   let responsiveMode = 'desktop';
+  // "Tag-to-select" mode: when ON, clicking an element in the preview
+  // iframe captures it and attaches it to the chat panel (Webflow / v0
+  // / Cursor-style). Toggle from the preview header.
+  let selectMode = false;
   let logUnsub = null;
   let pollTimer = null;
   let mountedContainer = null;
@@ -90,6 +94,34 @@
         btn.addEventListener('click', () => { responsiveMode = mode; renderInto(); });
         toolbar.appendChild(btn);
       });
+
+      // Spacer pushes the select-mode toggle to the right edge.
+      const spacer = document.createElement('div');
+      spacer.style.cssText = 'flex:1;';
+      toolbar.appendChild(spacer);
+
+      // Tag-to-select toggle. When ON: hovering an element in the preview
+      // outlines it; clicking captures it and posts to the chat panel as
+      // an attachment chip. Re-injects on every renderInto() so the
+      // iframe always knows the current mode, even after mode flips.
+      const selectBtn = document.createElement('button');
+      selectBtn.className = 'preview-resp-btn preview-select-toggle' + (selectMode ? ' active' : '');
+      selectBtn.title = selectMode
+        ? 'Click to stop tagging elements'
+        : 'Click an element in the preview to attach it to chat';
+      selectBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg><span style="margin-left:6px;font-size:11px;font-weight:500;">Tag</span>';
+      selectBtn.addEventListener('click', () => {
+        selectMode = !selectMode;
+        applySelectModeToIframe();
+        // Update active class without re-rendering the whole panel
+        // (avoids reloading the iframe and losing scroll position).
+        selectBtn.classList.toggle('active', selectMode);
+        selectBtn.title = selectMode
+          ? 'Click to stop tagging elements'
+          : 'Click an element in the preview to attach it to chat';
+      });
+      toolbar.appendChild(selectBtn);
+
       container.appendChild(toolbar);
     }
 
@@ -198,6 +230,10 @@
           `;
           iframeWin.document.head.appendChild(script);
         } catch (e) { /* cross-origin — can't inject */ }
+
+        // Apply the current select-mode state. Re-applied on every load
+        // so navigation inside the preview keeps tag-mode active.
+        try { applySelectModeToIframe(); } catch {}
       });
 
       content.appendChild(wrapper);
@@ -460,6 +496,13 @@
 }
 .preview-resp-btn:hover { background: var(--surface-alt); color: var(--text); }
 .preview-resp-btn.active { background: var(--surface-alt); color: var(--accent); border-color: var(--accent); }
+/* Tag-to-select toggle is wider (icon + label) and uses a stronger
+   active state because it has user-facing consequences. */
+.preview-select-toggle { width: auto; padding: 0 9px; gap: 2px; }
+.preview-select-toggle.active {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+.preview-select-toggle.active:hover { filter: brightness(1.1); }
 .preview-content {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; min-height: 0; overflow: auto;
@@ -642,10 +685,192 @@
     }
   }
 
-  // Listen for iframe console messages
+  // ── Tag-to-select: iframe injection + parent-side message handler ──
+  //
+  // When the user toggles the Tag button in the toolbar, we inject a
+  // self-contained script into the preview iframe. The script:
+  //   - Adds a transparent overlay <div> that draws an outline around
+  //     the element under the cursor on every mousemove
+  //   - Captures click events (in capture phase, preventDefault) and
+  //     postMessage's the element's metadata to the parent
+  //   - Re-installs cleanly on every toggle so we never double-wire
+  //
+  // applySelectModeToIframe() is also called from the iframe's load
+  // listener so navigations within the preview keep the mode active.
+
+  function applySelectModeToIframe() {
+    const iframe = document.querySelector('.preview-iframe');
+    if (!iframe) return;
+    let win;
+    try { win = iframe.contentWindow; } catch { return; }
+    if (!win) return;
+    try {
+      win.postMessage({ __pipilot_select_mode: true, enabled: !!selectMode }, '*');
+      // The script may not be installed yet (iframe might not have
+      // received our injection in this load cycle). Inject the listener
+      // on demand — it's idempotent.
+      ensureSelectScriptInIframe(iframe);
+    } catch {}
+  }
+
+  function ensureSelectScriptInIframe(iframe) {
+    let doc;
+    try { doc = iframe.contentDocument; } catch { return; }
+    if (!doc) return;
+    if (doc.querySelector('script[data-pipilot-select]')) return;
+    const script = doc.createElement('script');
+    script.setAttribute('data-pipilot-select', '1');
+    script.textContent = `
+      (function() {
+        if (window.__pipilotSelect) return;
+        window.__pipilotSelect = { enabled: false };
+        var state = window.__pipilotSelect;
+
+        // Floating outline shown over the hovered element. Single shared
+        // node for performance — moved + resized via getBoundingClientRect.
+        var overlay = document.createElement('div');
+        overlay.style.cssText = [
+          'position:fixed', 'pointer-events:none', 'z-index:2147483647',
+          'border:2px solid #6e9fff',
+          'background:rgba(110,159,255,0.10)',
+          'transition:all 60ms linear',
+          'display:none',
+          'border-radius:2px',
+        ].join(';');
+        var label = document.createElement('div');
+        label.style.cssText = [
+          'position:absolute', 'top:-22px', 'left:0',
+          'background:#6e9fff', 'color:#fff',
+          'font-family:-apple-system,system-ui,sans-serif',
+          'font-size:11px', 'font-weight:600',
+          'padding:2px 7px', 'border-radius:3px',
+          'white-space:nowrap', 'pointer-events:none',
+        ].join(';');
+        overlay.appendChild(label);
+        document.documentElement.appendChild(overlay);
+
+        function describe(el) {
+          if (!el || el.nodeType !== 1) return '';
+          var tag = (el.tagName || '').toLowerCase();
+          var id = el.id ? '#' + el.id : '';
+          var cls = (el.className && typeof el.className === 'string')
+            ? '.' + el.className.trim().split(/\\s+/).filter(Boolean).slice(0, 3).join('.')
+            : '';
+          return tag + id + cls;
+        }
+
+        function fullSelector(el) {
+          var path = [];
+          var node = el;
+          var depth = 0;
+          while (node && node.nodeType === 1 && depth < 6) {
+            var seg = node.tagName.toLowerCase();
+            if (node.id) { seg += '#' + node.id; path.unshift(seg); break; }
+            if (node.className && typeof node.className === 'string') {
+              var c = node.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2);
+              if (c.length) seg += '.' + c.join('.');
+            }
+            // nth-of-type for de-ambiguation
+            if (node.parentNode) {
+              var sibs = Array.from(node.parentNode.children).filter(function(s) { return s.tagName === node.tagName; });
+              if (sibs.length > 1) seg += ':nth-of-type(' + (sibs.indexOf(node) + 1) + ')';
+            }
+            path.unshift(seg);
+            node = node.parentElement;
+            depth++;
+          }
+          return path.join(' > ');
+        }
+
+        function moveOverlay(el) {
+          if (!el) { overlay.style.display = 'none'; return; }
+          var r = el.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) { overlay.style.display = 'none'; return; }
+          overlay.style.display = 'block';
+          overlay.style.left   = r.left + 'px';
+          overlay.style.top    = r.top + 'px';
+          overlay.style.width  = r.width + 'px';
+          overlay.style.height = r.height + 'px';
+          label.textContent = describe(el);
+        }
+
+        function onMove(e) {
+          if (!state.enabled) return;
+          var el = e.target;
+          if (el === overlay || overlay.contains(el)) return;
+          moveOverlay(el);
+        }
+
+        function onClick(e) {
+          if (!state.enabled) return;
+          var el = e.target;
+          if (el === overlay || overlay.contains(el)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          // Capture metadata. outerHTML is truncated to avoid blowing up
+          // the chat panel with mega-elements.
+          var html = '';
+          try { html = (el.outerHTML || '').slice(0, 4000); } catch {}
+          var rect = el.getBoundingClientRect();
+          var cs = window.getComputedStyle(el);
+          var payload = {
+            __pipilot_select_pick: true,
+            tag:       (el.tagName || '').toLowerCase(),
+            id:        el.id || '',
+            classes:   (el.className && typeof el.className === 'string') ? el.className : '',
+            text:      (el.textContent || '').trim().slice(0, 200),
+            selector:  fullSelector(el),
+            describe:  describe(el),
+            outerHTML: html,
+            rect: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) },
+            styles: {
+              color:      cs.color,
+              background: cs.backgroundColor,
+              fontSize:   cs.fontSize,
+              fontFamily: cs.fontFamily,
+              display:    cs.display,
+              position:   cs.position,
+            },
+            url: location.href,
+          };
+          window.parent.postMessage(payload, '*');
+          // Pulse the overlay so the user gets visual feedback.
+          overlay.style.background = 'rgba(110,159,255,0.35)';
+          setTimeout(function() { overlay.style.background = 'rgba(110,159,255,0.10)'; }, 200);
+        }
+
+        function onLeave() { if (state.enabled) overlay.style.display = 'none'; }
+
+        document.addEventListener('mousemove', onMove, true);
+        document.addEventListener('click', onClick, true);
+        document.addEventListener('mouseleave', onLeave, true);
+
+        // Listen for parent toggling mode on/off.
+        window.addEventListener('message', function(e) {
+          if (e.data && e.data.__pipilot_select_mode) {
+            state.enabled = !!e.data.enabled;
+            if (!state.enabled) overlay.style.display = 'none';
+            // Crosshair cursor while in select mode for affordance.
+            document.documentElement.style.cursor = state.enabled ? 'crosshair' : '';
+          }
+        });
+      })();
+    `;
+    try { doc.head.appendChild(script); } catch {}
+  }
+
+  // Listen for iframe console messages + tagged element picks.
   window.addEventListener('message', (e) => {
     if (e.data?.__pipilot_console) {
       addConsoleEntry(e.data.level || 'log', e.data.text || '', 'runtime');
+    }
+    if (e.data?.__pipilot_select_pick) {
+      // Hand off to the chat panel as an attachment.
+      try {
+        bus.emit('chat:attach-preview-element', e.data);
+      } catch (err) {
+        console.warn('[preview] failed to attach picked element', err);
+      }
     }
   });
 
