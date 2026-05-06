@@ -765,10 +765,30 @@ kbd {
 }
 .chat-attachments {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;       /* keep all pills on a single row */
   gap: var(--space-1);
+  overflow-x: auto;        /* scroll instead of wrapping when many */
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  /* Soft fade on the right edge — visual hint that there's more to scroll. */
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+  /* Slim scrollbar so it doesn't dominate the compose area. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  padding-bottom: 2px;     /* tiny breathing room above scrollbar track */
 }
+.chat-attachments::-webkit-scrollbar { height: 4px; }
+.chat-attachments::-webkit-scrollbar-track { background: transparent; }
+.chat-attachments::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.chat-attachments::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 .chat-attachments:empty { display: none; }
+/* Drop the fade if there's nothing to scroll past. */
+.chat-attachments:not(:hover) {
+  mask-image: linear-gradient(to right, black calc(100% - 18px), transparent);
+}
+/* Pills shouldn't shrink (would clip the close X). */
+.attachment-chip { flex-shrink: 0; max-width: 220px; }
 
 .chat-input {
   width: 100%;

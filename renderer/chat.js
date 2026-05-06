@@ -3703,6 +3703,23 @@
   }
 
   // ---------- Attachments ----------
+  // One-time wiring: turn vertical mouse-wheel into horizontal scroll on
+  // the pills strip so users can flick through many attachments without
+  // hunting for the tiny scrollbar.
+  if (attachmentsEl && !attachmentsEl.dataset.wheelHorz) {
+    attachmentsEl.dataset.wheelHorz = '1';
+    attachmentsEl.addEventListener('wheel', (e) => {
+      // Only convert when there's actual horizontal overflow AND the
+      // user is using a regular vertical wheel (Shift+wheel users
+      // already get horizontal scroll natively, leave it alone).
+      if (e.shiftKey) return;
+      if (attachmentsEl.scrollWidth <= attachmentsEl.clientWidth) return;
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      attachmentsEl.scrollLeft += e.deltaY;
+      e.preventDefault();
+    }, { passive: false });
+  }
+
   function renderAttachments() {
     if (!attachmentsEl) return;
     attachmentsEl.innerHTML = '';
@@ -3741,6 +3758,12 @@
         countEl.classList.add('hidden');
       }
     }
+    // Scroll the strip to the rightmost pill so the user always sees the
+    // one they JUST added — they're tagging elements left-to-right and
+    // shouldn't have to scroll to confirm the latest pick landed.
+    requestAnimationFrame(() => {
+      try { attachmentsEl.scrollLeft = attachmentsEl.scrollWidth; } catch {}
+    });
   }
 
   if (uploadBtn) {
