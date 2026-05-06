@@ -395,7 +395,12 @@
     const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+|\bwww\.[^\s<>"'`]+/g;
     aceEditor.on('mousedown', (e) => {
       const ev = e.domEvent;
-      const ctrlOrMeta = (process.platform === 'darwin') ? ev?.metaKey : ev?.ctrlKey;
+      // Detect macOS via navigator.platform — `process.platform` is
+      // undefined in the renderer (we use nodeIntegration:false), and
+      // referencing it throws, which kills the mousedown handler and
+      // breaks ALL text selection in the editor. Took a while to spot.
+      const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform || '');
+      const ctrlOrMeta = isMac ? ev?.metaKey : ev?.ctrlKey;
       if (!ctrlOrMeta || ev?.button !== 0) return;
       try {
         const pos = e.getDocumentPosition();
