@@ -105,6 +105,15 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
       webviewTag: true,
+      // Required so the preview iframe (localhost:5173) is reachable
+      // cross-origin from this file:// renderer — we need to read its
+      // contentDocument to inject the tag-to-select bridge script.
+      // Acceptable risk: the only frames we ever load are
+      //   1. our own index.html (trusted)
+      //   2. the user's own dev server in the preview iframe (trusted)
+      //   3. external sites in <webview> tabs which have their own
+      //      isolated security context regardless of this flag.
+      webSecurity: false,
     },
   });
 

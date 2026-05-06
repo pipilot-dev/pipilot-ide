@@ -701,22 +701,32 @@
   function applySelectModeToIframe() {
     const iframe = document.querySelector('.preview-iframe');
     if (!iframe) return;
+    // 1. Install the bridge script FIRST. Without this the postMessage
+    //    below has no listener inside the iframe and the toggle silently
+    //    no-ops on the very first click.
+    ensureSelectScriptInIframe(iframe);
+    // 2. Tell the iframe what mode to be in. PostMessage is async, so by
+    //    the time the message is delivered the script's listener is
+    //    already attached.
     let win;
     try { win = iframe.contentWindow; } catch { return; }
     if (!win) return;
     try {
       win.postMessage({ __pipilot_select_mode: true, enabled: !!selectMode }, '*');
-      // The script may not be installed yet (iframe might not have
-      // received our injection in this load cycle). Inject the listener
-      // on demand — it's idempotent.
-      ensureSelectScriptInIframe(iframe);
     } catch {}
   }
 
   function ensureSelectScriptInIframe(iframe) {
     let doc;
-    try { doc = iframe.contentDocument; } catch { return; }
-    if (!doc) return;
+    try { doc = iframe.contentDocument; }
+    catch (err) {
+      console.warn('[preview] tag-to-select: cannot access iframe document (cross-origin blocked). webSecurity may be enabled.', err);
+      return;
+    }
+    if (!doc) {
+      console.warn('[preview] tag-to-select: iframe.contentDocument is null — usually means cross-origin block. webSecurity must be off in main.js.');
+      return;
+    }
     if (doc.querySelector('script[data-pipilot-select]')) return;
     const script = doc.createElement('script');
     script.setAttribute('data-pipilot-select', '1');
