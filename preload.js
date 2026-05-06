@@ -129,13 +129,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 
-  // Fired by main when the agent's `run_in_terminal` tool spawns a PTY
-  // it wants the renderer to mount a visible tab around.
-  onTerminalAgentSpawn: (handler) => {
-    const fn = (_e, payload) => handler(payload);
-    ipcRenderer.on('terminal:agent-spawn', fn);
-    return () => ipcRenderer.removeListener('terminal:agent-spawn', fn);
-  },
+  // NOTE: onTerminalAgentSpawn (the bridge for the agent's
+  // run_in_terminal tool) is disabled because the renderer side
+  // corrupts the terminal panel. Re-enable when the matching IPC
+  // handler in main/ipc-terminal.js is restored.
 
   // ---------- Agent (AI) ----------
   agent: {

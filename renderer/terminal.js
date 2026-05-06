@@ -371,28 +371,17 @@
     const profileId = opts.profileId || selectedProfileId || state.settings?.terminalProfile || undefined;
 
     let created;
-    if (opts.attachExistingId) {
-      // Agent-driven flow: main has already spawned a PTY (for the
-      // run_in_terminal tool). We just need to wire xterm to its
-      // existing data/exit streams.
-      created = {
-        id: opts.attachExistingId,
-        pid: opts.pid || 0,
-        profileId: opts.profileId || profileId,
-      };
-    } else {
-      try {
-        created = await api.terminal.create({
-          profileId,
-          cwd,
-          cols: term.cols,
-          rows: term.rows,
-        });
-      } catch (err) {
-        console.error('[terminal] create failed', err);
-        term.write(`\r\n\x1b[31m[Failed to create terminal: ${String(err && err.message || err)}]\x1b[0m\r\n`);
-        return null;
-      }
+    try {
+      created = await api.terminal.create({
+        profileId,
+        cwd,
+        cols: term.cols,
+        rows: term.rows,
+      });
+    } catch (err) {
+      console.error('[terminal] create failed', err);
+      term.write(`\r\n\x1b[31m[Failed to create terminal: ${String(err && err.message || err)}]\x1b[0m\r\n`);
+      return null;
     }
 
     const profiles = await getProfiles();
@@ -756,39 +745,13 @@
     toggle: toggleTerminalPanel,
   };
 
-  // Agent-driven `run_in_terminal` tool: main spawns a PTY, broadcasts
-  // this event, we mount a visible xterm tab around the existing PTY so
-  // the user can watch the command run.
-  //
-  // Defensive: any failure here MUST NOT corrupt the user's existing
-  // terminal tabs. We catch + log everything and fall back to creating
-  // a fresh terminal if the existing-PTY attach path goes wrong.
-  if (window.electronAPI?.onTerminalAgentSpawn) {
-    window.electronAPI.onTerminalAgentSpawn(async (payload) => {
-      if (!payload?.id) {
-        console.warn('[terminal] agent-spawn: missing id payload', payload);
-        return;
-      }
-      console.log('[terminal] agent-spawn for id', payload.id, 'label:', payload.label);
-      try {
-        // Reveal the bottom panel with the terminal tab so the user
-        // sees the command actually appear instead of finding it later.
-        try { bus.emit('panel:bottom:show', { tab: 'terminal' }); } catch {}
-        const entry = await createNew({
-          attachExistingId: payload.id,
-          profileId: payload.profileId,
-          pid: payload.pid,
-        });
-        if (!entry) {
-          console.warn('[terminal] agent-spawn createNew returned null for', payload.id);
-        }
-      } catch (err) {
-        console.error('[terminal] agent-spawn attach failed:', err);
-        // Don't rethrow — we don't want a busted agent terminal to
-        // crash the renderer's terminal panel for the user.
-      }
-    });
-  }
+  // NOTE: Agent-driven `run_in_terminal` mount path was disabled in
+  // commit (see follow-up). It corrupted the renderer's terminal panel
+  // when the agent invoked it. Re-enable once the attach-existing-PTY
+  // flow is hardened (likely needs to NOT share `terminals[]` with
+  // user-created tabs OR fully replicate setActive() bookkeeping).
+  // The matching window.electronAPI.onTerminalAgentSpawn / IPC
+  // handler are also disabled in main/ipc-terminal.js + preload.js.
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

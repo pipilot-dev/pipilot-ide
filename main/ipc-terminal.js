@@ -377,13 +377,17 @@ module.exports = function register(ipcMain, ctx) {
     });
   }
 
-  // Renderer-facing wrapper. Same shape as the rest of this file's
-  // ipcMain.handle calls.
-  ipcMain.handle('terminal:run-and-capture', (_e, opts) => runAndCapture(opts));
-
-  // Expose to ctx so the agent SDK tool (`run_in_terminal`) can call
-  // it directly from the main process without going through IPC.
-  if (ctx) ctx.runInTerminal = runAndCapture;
+  // DISABLED — the run_in_terminal agent tool was breaking the
+  // renderer's terminal panel (the agent-spawn flow corrupted the
+  // shared terminals[] state and tabs went missing). The runAndCapture
+  // implementation above is kept intact for when we revisit the
+  // attach-existing-PTY model. To re-enable: uncomment both lines and
+  // restore the matching pieces in renderer/terminal.js + preload.js +
+  // main/ide-tools-mcp.js.
+  //
+  // ipcMain.handle('terminal:run-and-capture', (_e, opts) => runAndCapture(opts));
+  // if (ctx) ctx.runInTerminal = runAndCapture;
+  void runAndCapture;   // silence unused-warning
 
   // Trim everything from `cutAt` onwards (the sentinel line + after) and
   // sanitise ANSI in the surviving prefix. The `cutAt` index MUST point
