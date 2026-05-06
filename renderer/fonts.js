@@ -102,7 +102,15 @@
       // Custom user value (raw CSS font-family stack) — apply as-is.
       cssValue = String(value);
     }
+    // Set BOTH --font-mono AND --font-sans to the same stack so the
+    // whole IDE switches font when the user picks one — sidebar, chat
+    // panel, status bar, welcome tab, virtual tabs, etc. all inherit
+    // from body { font-family: var(--font-sans) } in tokens.css.
+    // Mono and sans pointing at the same coding font is the right
+    // default ("PiPilot's font" rather than "PiPilot's editor font");
+    // can split later via a separate "UI font" picker if needed.
     document.documentElement.style.setProperty('--font-mono', cssValue);
+    document.documentElement.style.setProperty('--font-sans', cssValue);
     console.log('[fonts] apply', { value, family: font?.family, url: font?.url, css: cssValue });
     bus.emit('fonts:applied', { value, font, css: cssValue });
     return cssValue;
