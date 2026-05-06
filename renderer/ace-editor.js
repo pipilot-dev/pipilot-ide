@@ -1297,7 +1297,14 @@
           showPrintMargin: false,
           highlightActiveLine: false,
           fontSize: 13,
-          fontFamily: '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace',
+          // Honour the user's --font-mono pick; the diff view should
+          // match the main editor exactly. Read the live CSS var since
+          // Ace's setOption('fontFamily', cssVar) doesn't get resolved
+          // by the renderer until we pass a literal stack.
+          fontFamily: (() => {
+            const v = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim();
+            return v || '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace';
+          })(),
           showGutter: true,
           scrollPastEnd: 0,
           useWrapMode: false,

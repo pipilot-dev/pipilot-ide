@@ -1199,6 +1199,12 @@
         aceHost.style.cssText = 'flex:1;min-height:0;width:100%;';
         host.appendChild(aceHost);
         try {
+          // Honour the user's --font-mono pick; falls back to the
+          // hard-coded stack only if the CSS var is somehow empty.
+          const fontFamily = (() => {
+            const v = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim();
+            return v || '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace';
+          })();
           const editorInst = ace.edit(aceHost, {
             theme: 'ace/theme/midnight',
             mode: 'ace/mode/' + detectMode(filePath),
@@ -1206,7 +1212,7 @@
             showPrintMargin: false,
             highlightActiveLine: false,
             fontSize: 13,
-            fontFamily: '"JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace',
+            fontFamily,
             showGutter: true,
             scrollPastEnd: 0,
             useWrapMode: false,

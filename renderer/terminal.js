@@ -338,8 +338,16 @@
     removeEmptyPlaceholder();
     stackEl.appendChild(div);
 
+    // Read the live --font-mono CSS variable so the terminal honours
+    // whichever editor font the user picked. xterm.js doesn't accept
+    // CSS vars — we have to resolve to a literal stack here, then
+    // re-apply on every fonts:applied event below.
+    const liveMono = (() => {
+      const v = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim();
+      return v || 'JetBrains Mono, Cascadia Code, monospace';
+    })();
     const term = new Terminal({
-      fontFamily: 'JetBrains Mono, Cascadia Code, monospace',
+      fontFamily: liveMono,
       fontSize: state.settings?.terminalFontSize || 13,
       theme: THEME,
       cursorBlink: true,
@@ -535,6 +543,23 @@
 
     return entry;
   }
+
+  // Live-apply font-family changes (Settings → General → Font Family).
+  // fonts.js emits this event after writing --font-mono to the document
+  // root + reloading the @font-face stylesheet. xterm needs the literal
+  // stack passed in via term.options.fontFamily — CSS vars don't work
+  // there. fit.fit() recomputes column widths since glyph widths change.
+  bus.on('fonts:applied', (payload) => {
+    const css = payload?.css
+      || getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim();
+    if (!css) return;
+    for (const entry of terminals) {
+      try {
+        entry.term.options.fontFamily = css;
+        entry.fit && entry.fit.fit && entry.fit.fit();
+      } catch {}
+    }
+  });
 
   // Live-apply terminalFontSize changes from Settings to every open terminal.
   bus.on('settings:changed', (p) => {
