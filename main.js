@@ -27,6 +27,20 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell, session } = require('e
 const path = require('path');
 const fs = require('fs');
 
+// Force the preview iframe (localhost dev server) to live in the SAME
+// process as the renderer. Without this Chromium puts cross-origin
+// iframes in their own process (Site Isolation / OOPIFs), which makes
+// `iframe.contentDocument` unreadable from the parent regardless of
+// the BrowserWindow's webSecurity flag — breaking the tag-to-select
+// bridge + console-injection.
+//
+// MUST be called before app.whenReady(). Safe for an IDE: the only
+// frames we ever embed are the user's own dev server (preview) and
+// our own help/settings pages. External browsing happens in <webview>
+// tags which have their own isolated security context.
+app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
+app.commandLine.appendSwitch('disable-site-isolation-trials');
+
 // Single-instance lock — even after Squirrel handling, two normal launches
 // of the app would race for the same IndexedDB / userData files. The
 // second-instance handler focuses the existing window instead.
