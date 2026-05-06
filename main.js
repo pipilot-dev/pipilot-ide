@@ -1,7 +1,11 @@
 // PiPilot IDE — Electron main process entry
 // Loads .env, creates BrowserWindow, wires all IPC handlers.
 
-require('dotenv').config();
+// Load runtime env. Explicit path so production builds (where cwd is
+// the install dir, NOT the asar root containing .env) find the file.
+// `path.join(__dirname, '.env')` resolves correctly in both dev and
+// asar-packaged production.
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 // Squirrel.Windows install/update event handler. MUST run before anything
 // else that reads process.argv or opens a window.

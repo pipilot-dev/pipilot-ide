@@ -54,7 +54,11 @@ const ALWAYS_DROP = [
   /\.DS_Store$/,
   /[\\/]out[\\/]/,
   /[\\/]dist[\\/]/,
-  /^[\\/]?\.env$/,
+  // .env DELIBERATELY NOT excluded — it has to ship so CODESTRAL_API_KEY,
+  // GROQ_API_KEY etc. are available in the packaged app. CI writes it
+  // from GitHub Actions secrets before forge runs (see workflow).
+  // Anthropic creds are NOT in this file — they come from the user's
+  // JWT via the auth-gated proxy at runtime.
   /^[\\/]?auth-token\.bin$/,
   /^[\\/]?test[\\/]/,                      // our own smoke tests, not shipped
 ];
