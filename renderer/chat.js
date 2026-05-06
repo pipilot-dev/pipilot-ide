@@ -3714,9 +3714,16 @@
       const isPreviewEl = a.kind === 'preview-element';
       const icon = isPreviewEl ? '&#127919;' : '&#128206;';   // 🎯 vs 📎
       if (isPreviewEl) chip.classList.add('attachment-chip-preview');
-      chip.innerHTML = `${icon} ${escapeHtml(a.name || a.path)} <span class="x">&times;</span>`;
-      if (isPreviewEl && a.meta?.selector) {
-        chip.title = `Picked from preview: ${a.meta.selector}`;
+      // Truncate long element descriptors so the chip stays compact.
+      // Full value lives on the title tooltip + the meta we ship to the AI,
+      // so nothing's lost on the model side.
+      const fullLabel = a.name || a.path || '';
+      const display = fullLabel.length > 12 ? fullLabel.slice(0, 12) + '…' : fullLabel;
+      chip.innerHTML = `${icon} ${escapeHtml(display)} <span class="x">&times;</span>`;
+      if (isPreviewEl) {
+        chip.title = `${fullLabel}${a.meta?.selector ? `\n${a.meta.selector}` : ''}`;
+      } else if (fullLabel.length > 12) {
+        chip.title = fullLabel;
       }
       chip.querySelector('.x').addEventListener('click', () => {
         attachments.splice(idx, 1);
