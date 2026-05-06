@@ -228,6 +228,36 @@ module.exports = function register(ipcMain, ctx) {
     await clearJwtOnDisk(userDataPath);
     return { ok: true };
   });
+
+  // Authenticated proxy fetch helper. Used by the desktop's admin panel
+  // to call /admin/* endpoints without ever exposing the raw JWT to the
+  // renderer. Returns { ok, status, data, error }.
+  ipcMain.handle('auth:admin-fetch', async (_e, { path, method, body } = {}) => {
+    const jwt = await getJWT(userDataPath);
+    if (!jwt) return { ok: false, error: 'unauthenticated' };
+    const safePath = String(path || '');
+    if (!safePath.startsWith('/admin/')) {
+      return { ok: false, error: 'admin_only_paths_allowed' };
+    }
+    try {
+      const url = getProxyUrl() + safePath;
+      const res = await fetch(url, {
+        method: method || 'GET',
+        headers: {
+          Authorization: 'Bearer ' + jwt,
+          'content-type': 'application/json',
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        return { ok: false, status: res.status, error: data?.error || `http_${res.status}`, data };
+      }
+      return { ok: true, status: res.status, data };
+    } catch (err) {
+      return { ok: false, error: err?.message || 'network_error' };
+    }
+  });
 };
 
 // Surface for ipc-agent.js to read the JWT + proxy URL when wiring the

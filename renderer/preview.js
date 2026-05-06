@@ -160,7 +160,9 @@
       const iframe = document.createElement('iframe');
       iframe.className = 'preview-iframe';
       iframe.src = currentUrl;
-      iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
+      // Sandbox intentionally NOT set — we need cross-origin contentDocument access
+      // for tag-to-select + console-injection. Trust scope: only loads the user's own
+      // localhost dev server (same trust as their normal browser).
       wrapper.appendChild(iframe);
       content.appendChild(wrapper);
     } else if (serverStatus === 'running' && currentUrl) {
@@ -182,7 +184,9 @@
         const iframe = document.createElement('iframe');
         iframe.className = 'preview-iframe';
         iframe.src = currentUrl;
-        iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
+        // Sandbox intentionally NOT set — we need cross-origin contentDocument access
+      // for tag-to-select + console-injection. Trust scope: only loads the user's own
+      // localhost dev server (same trust as their normal browser).
         screen.appendChild(iframe);
       } else {
         wrapper.className = 'preview-iframe-wrap';
@@ -190,7 +194,9 @@
         const iframe = document.createElement('iframe');
         iframe.className = 'preview-iframe';
         iframe.src = currentUrl;
-        iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
+        // Sandbox intentionally NOT set — we need cross-origin contentDocument access
+      // for tag-to-select + console-injection. Trust scope: only loads the user's own
+      // localhost dev server (same trust as their normal browser).
         wrapper.appendChild(iframe);
       }
 

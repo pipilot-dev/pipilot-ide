@@ -141,6 +141,108 @@
       .st-account-loading {
         padding: 32px; text-align: center; color: var(--text-dim); font-size: 12.5px;
       }
+
+      /* Leaderboard */
+      .st-lb-list { display: flex; flex-direction: column; gap: 4px; }
+      .st-lb-row {
+        display: flex; align-items: center; gap: 10px;
+        padding: 6px 10px; border-radius: 5px;
+        font-size: 12.5px;
+      }
+      .st-lb-row:hover { background: var(--surface-alt); }
+      .st-lb-row.me {
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        border-left: 3px solid var(--accent);
+        padding-left: 7px;
+      }
+      .st-lb-row .rank {
+        font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);
+        width: 28px; flex-shrink: 0;
+      }
+      .st-lb-row.me .rank { color: var(--accent); font-weight: 700; }
+      .st-lb-row .avatar {
+        width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+        background: var(--bg); border: 1px solid var(--border);
+        object-fit: cover;
+      }
+      .st-lb-row .avatar.placeholder {
+        display: grid; place-items: center;
+        font-family: var(--font-mono); font-size: 10px;
+        color: var(--text-strong); font-weight: 600;
+      }
+      .st-lb-row .login { flex: 1; color: var(--text); text-decoration: none; }
+      .st-lb-row .login:hover { color: var(--accent); }
+      .st-lb-row.me .login { color: var(--text-strong); font-weight: 600; }
+      .st-lb-row .count {
+        font-family: var(--font-mono); font-size: 11px; color: var(--text-strong);
+        font-variant-numeric: tabular-nums;
+      }
+      .st-lb-row .count .word { color: var(--text-dim); font-weight: 400; margin-left: 2px; }
+
+      /* Admin overview */
+      .st-admin-stats {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+        margin-top: 6px;
+      }
+      .st-admin-stat {
+        background: var(--bg); border: 1px solid var(--border);
+        border-radius: 5px; padding: 9px 10px;
+      }
+      .st-admin-stat .n {
+        font-family: var(--font-mono); font-size: 17px; font-weight: 700;
+        color: var(--text-strong); font-variant-numeric: tabular-nums;
+      }
+      .st-admin-stat .l {
+        font-size: 10px; color: var(--text-dim);
+        text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px;
+      }
+      .st-admin-users {
+        max-height: 360px; overflow: auto;
+        border: 1px solid var(--border); border-radius: 5px;
+      }
+      .st-admin-user {
+        display: flex; align-items: center; gap: 10px;
+        padding: 8px 10px; border-bottom: 1px solid var(--border);
+        font-size: 12px;
+      }
+      .st-admin-user:last-child { border-bottom: 0; }
+      .st-admin-user.blocked { background: color-mix(in srgb, var(--err,#ff7b85) 8%, transparent); }
+      .st-admin-user .avatar {
+        width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+        background: var(--bg); border: 1px solid var(--border);
+        object-fit: cover;
+      }
+      .st-admin-user .avatar.placeholder {
+        display: grid; place-items: center;
+        font-family: var(--font-mono); font-size: 12px;
+        color: var(--text-strong); font-weight: 600;
+      }
+      .st-admin-user .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+      .st-admin-user .who .login {
+        color: var(--text-strong); font-weight: 500;
+        display: flex; align-items: center; gap: 6px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .st-admin-user .who .email { color: var(--text-dim); font-size: 11px; }
+      .st-admin-user .usage {
+        font-family: var(--font-mono); font-size: 11px;
+        color: var(--text); text-align: right;
+        font-variant-numeric: tabular-nums; flex-shrink: 0;
+      }
+      .st-admin-user .usage .alltime { color: var(--text-dim); font-size: 10px; margin-top: 1px; }
+      .st-admin-user .acts button {
+        padding: 4px 9px; font: inherit; font-size: 11px; cursor: pointer;
+        border: 1px solid var(--border); border-radius: 4px;
+        background: var(--surface-alt); color: var(--text);
+      }
+      .st-admin-user .acts button.block:hover {
+        background: color-mix(in srgb, var(--err,#ff7b85) 18%, var(--surface-alt));
+        color: var(--err,#ff7b85); border-color: var(--err,#ff7b85);
+      }
+      .st-admin-user .acts button.unblock:hover {
+        background: color-mix(in srgb, var(--ok,#6ee7a7) 18%, var(--surface-alt));
+        color: var(--ok,#6ee7a7); border-color: var(--ok,#6ee7a7);
+      }
     `;
     document.head.appendChild(st);
   }
@@ -597,6 +699,28 @@
         </div>
         ${quotaCard}
         ${referralCard}
+        <div class="st-card" style="margin-top:14px;" data-leaderboard-host>
+          <div class="st-row" style="display:block;">
+            <div class="lbl" style="margin-bottom:8px;">
+              <div class="t">Top referrers</div>
+              <div class="d">Loading…</div>
+            </div>
+          </div>
+        </div>
+        ${u.plan === 'admin' ? `
+          <div class="st-card" style="margin-top:14px;border-color:color-mix(in srgb, var(--err,#ff7b85) 35%, var(--border));" data-admin-host>
+            <div class="st-row" style="display:block;">
+              <div class="lbl" style="margin-bottom:8px;">
+                <div class="t" style="display:flex;align-items:center;gap:8px;">
+                  Admin tools
+                  <span class="st-account-plan plan-admin" style="font-size:9px;">RESTRICTED</span>
+                </div>
+                <div class="d">Platform overview + user management. Visible only to admin accounts.</div>
+              </div>
+              <div data-admin-body style="margin-top:10px;color:var(--text-dim);font-size:12px;">Loading…</div>
+            </div>
+          </div>
+        ` : ''}
         <div class="st-card" style="margin-top:14px;">
           <div class="st-row" style="display:block;">
             <div class="lbl" style="margin-bottom:8px;">
@@ -639,6 +763,171 @@
       });
       host.querySelector('[data-action="get-badge"]')?.addEventListener('click', () => {
         window.PiPilot?.badgeDialog?.show?.(u.login);
+      });
+
+      // ── Leaderboard (everyone) ────────────────────────────────────
+      hydrateLeaderboard(host, u, proxyUrl);
+
+      // ── Admin tools (admin only) ──────────────────────────────────
+      if (u.plan === 'admin') {
+        hydrateAdminPanel(host, u, proxyUrl);
+      }
+    }
+
+    // Public top-100 referrers, fetched fresh on each panel open
+    // (proxy edge-caches it 60s so this is cheap). Highlights the
+    // current user's row if they're in the list.
+    async function hydrateLeaderboard(host, u, proxyUrl) {
+      const lbHost = host.querySelector('[data-leaderboard-host]');
+      if (!lbHost) return;
+      try {
+        const res = await fetch(`${proxyUrl}/leaderboard`);
+        if (!res.ok) throw new Error('http_' + res.status);
+        const data = await res.json();
+        const entries = (data?.entries || []).slice(0, 25);
+        if (!entries.length) {
+          lbHost.querySelector('.lbl .d').textContent =
+            'No qualified referrals yet — be the first by sharing your invite link above.';
+          return;
+        }
+        const meRank = entries.findIndex(e => e.login === u.login);
+        const list = entries.map((e) => `
+          <div class="st-lb-row${e.login === u.login ? ' me' : ''}">
+            <div class="rank">#${e.rank}</div>
+            ${e.avatar_url
+              ? `<img class="avatar" src="${escapeHtml(e.avatar_url)}" alt="" />`
+              : `<div class="avatar placeholder">${escapeHtml(e.login.slice(0,1).toUpperCase())}</div>`}
+            <a class="login" href="${escapeHtml(e.profile_url)}" target="_blank" rel="noopener">${escapeHtml(e.login)}</a>
+            <div class="count">${e.qualified_referrals} <span class="word">${e.qualified_referrals === 1 ? 'invite' : 'invites'}</span></div>
+          </div>
+        `).join('');
+        lbHost.innerHTML = `
+          <div class="st-row" style="display:block;">
+            <div class="lbl" style="margin-bottom:10px;">
+              <div class="t">Top referrers</div>
+              <div class="d">${meRank >= 0
+                ? `You're at <strong style="color:var(--accent);">#${meRank + 1}</strong>. Keep inviting to climb the board.`
+                : `Show the world how PiPilot grows. Top 25 globally.`}</div>
+            </div>
+            <div class="st-lb-list">${list}</div>
+          </div>
+        `;
+        // Open profile links in embedded browser instead of OS browser.
+        lbHost.querySelectorAll('a[target="_blank"]').forEach((a) => {
+          a.addEventListener('click', (e) => {
+            e.preventDefault();
+            const url = a.getAttribute('href');
+            try { bus.emit('browser:open', { url }); }
+            catch { api.shell?.openExternal?.(url); }
+          });
+        });
+      } catch (err) {
+        lbHost.querySelector('.lbl .d').textContent =
+          'Could not load leaderboard: ' + (err?.message || 'unknown');
+      }
+    }
+
+    // Admin overview + user management. Calls /admin/stats + /admin/users
+    // both authed via the user's JWT (proxy gates on plan='admin').
+    async function hydrateAdminPanel(host, _u, proxyUrl) {
+      const adminBody = host.querySelector('[data-admin-body]');
+      if (!adminBody) return;
+      // The proxy routes accept either Authorization: Bearer <jwt> or
+      // x-api-key: <jwt>. We don't have direct JWT access in the renderer
+      // — main does. Use a thin IPC pass-through call for everything.
+      const callAdmin = async (path, opts = {}) => {
+        const r = await api.auth.adminFetch?.(path, opts);
+        if (!r) return { ok: false, error: 'admin_fetch_unavailable' };
+        return r;
+      };
+      adminBody.innerHTML = '<div style="padding:6px 0;">Loading…</div>';
+      const stats = await callAdmin('/admin/stats');
+      const usersRes = await callAdmin('/admin/users?limit=25');
+      if (!stats?.ok) {
+        adminBody.innerHTML = `<div style="color:var(--err,#ff7b85);">Admin fetch failed: ${escapeHtml(stats?.error || 'unknown')}</div>`;
+        return;
+      }
+      const s = stats.data || {};
+      const users = (usersRes?.data?.users) || [];
+      adminBody.innerHTML = `
+        <div class="st-admin-stats">
+          <div class="st-admin-stat"><div class="n">${s.total_users ?? 0}</div><div class="l">Users</div></div>
+          <div class="st-admin-stat"><div class="n">${s.total_admins ?? 0}</div><div class="l">Admins</div></div>
+          <div class="st-admin-stat"><div class="n">${s.total_blocked ?? 0}</div><div class="l">Blocked</div></div>
+          <div class="st-admin-stat"><div class="n">${s.total_sponsors ?? 0}</div><div class="l">Sponsors</div></div>
+          <div class="st-admin-stat"><div class="n">${s.total_turns_today ?? 0}</div><div class="l">Turns today</div></div>
+          <div class="st-admin-stat"><div class="n">${s.total_turns_alltime ?? 0}</div><div class="l">Turns total</div></div>
+        </div>
+        <div style="display:flex;gap:8px;margin:14px 0 8px;align-items:center;">
+          <input class="st-admin-search" data-admin-search type="text" placeholder="Filter by login or email…"
+                 style="flex:1;padding:5px 9px;font:inherit;font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);" />
+          <button class="st-admin-refresh" data-admin-refresh
+                  style="padding:5px 12px;font:inherit;font-size:11.5px;border:1px solid var(--border);background:var(--surface-alt);color:var(--text);border-radius:4px;cursor:pointer;">↻</button>
+        </div>
+        <div class="st-admin-users" data-admin-users>${renderAdminUsers(users)}</div>
+      `;
+
+      // Search debounce
+      let searchTimer = null;
+      adminBody.querySelector('[data-admin-search]')?.addEventListener('input', (e) => {
+        clearTimeout(searchTimer);
+        const q = e.target.value;
+        searchTimer = setTimeout(async () => {
+          const r = await callAdmin('/admin/users?limit=25&q=' + encodeURIComponent(q));
+          const usersEl = adminBody.querySelector('[data-admin-users]');
+          if (usersEl) usersEl.innerHTML = renderAdminUsers((r?.data?.users) || []);
+          wireAdminUserActions(adminBody, callAdmin, () => hydrateAdminPanel(host, _u, proxyUrl));
+        }, 250);
+      });
+      adminBody.querySelector('[data-admin-refresh]')?.addEventListener('click', () => {
+        hydrateAdminPanel(host, _u, proxyUrl);
+      });
+      wireAdminUserActions(adminBody, callAdmin, () => hydrateAdminPanel(host, _u, proxyUrl));
+    }
+
+    function renderAdminUsers(users) {
+      if (!users.length) return '<div style="padding:12px;color:var(--text-dim);font-size:12px;text-align:center;">No users match.</div>';
+      return users.map(u => {
+        const isBlocked = !!u.blocked;
+        const planBadge = `<span class="st-account-plan plan-${u.plan === 'admin' ? 'admin' : (u.sponsor_active ? 'sponsor' : 'free')}" style="font-size:9px;">${escapeHtml((u.plan||'free').toUpperCase())}</span>`;
+        return `
+          <div class="st-admin-user${isBlocked ? ' blocked' : ''}">
+            ${u.avatar_url
+              ? `<img class="avatar" src="${escapeHtml(u.avatar_url)}" alt="" />`
+              : `<div class="avatar placeholder">${escapeHtml((u.github_login||'?').slice(0,1).toUpperCase())}</div>`}
+            <div class="who">
+              <div class="login">${escapeHtml(u.github_login || u.id)} ${planBadge}</div>
+              <div class="email">${escapeHtml(u.email || '—')}</div>
+            </div>
+            <div class="usage">
+              <div><strong>${u.turns_today}</strong> today</div>
+              <div class="alltime">${u.turns_alltime} all-time</div>
+            </div>
+            <div class="acts">
+              ${isBlocked
+                ? `<button class="unblock" data-admin-unblock="${escapeHtml(u.id)}">Unblock</button>`
+                : `<button class="block" data-admin-block="${escapeHtml(u.id)}">Block</button>`}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function wireAdminUserActions(scope, callAdmin, refresh) {
+      scope.querySelectorAll('[data-admin-block]').forEach((b) => {
+        b.addEventListener('click', async () => {
+          const id = b.dataset.adminBlock;
+          if (!confirm(`Block ${id}? They won't be able to use AI features until unblocked.`)) return;
+          await callAdmin(`/admin/users/${encodeURIComponent(id)}/block`, { method: 'POST' });
+          refresh();
+        });
+      });
+      scope.querySelectorAll('[data-admin-unblock]').forEach((b) => {
+        b.addEventListener('click', async () => {
+          const id = b.dataset.adminUnblock;
+          await callAdmin(`/admin/users/${encodeURIComponent(id)}/unblock`, { method: 'POST' });
+          refresh();
+        });
       });
     }
 

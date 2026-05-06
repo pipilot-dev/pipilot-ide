@@ -65,6 +65,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getStatus: () => ipcRenderer.invoke('auth:get-status'),
     me:        () => ipcRenderer.invoke('auth:me'),
     signOut:   () => ipcRenderer.invoke('auth:sign-out'),
+    // Admin-panel-only: thin pass-through that adds the JWT to a proxy
+    // request without exposing the raw JWT to the renderer. Restricted
+    // to /admin/* paths in main.
+    adminFetch: (path, opts) => ipcRenderer.invoke('auth:admin-fetch', { path, ...(opts || {}) }),
   },
 
   onMenu: (event, handler) => {
