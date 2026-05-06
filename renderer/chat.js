@@ -5436,12 +5436,32 @@
     // agent needs the selector + outerHTML to find/edit the element in
     // the source files. Truncate outerHTML to keep prompts compact.
     if (previewAttachments.length > 0) {
+      // file:// URLs → absolute OS path so the agent can Read/Edit
+      // directly without trying to fetch the URL. Handles Windows
+      // (file:///C:/foo → C:\foo) and POSIX (file:///home/x → /home/x).
+      const fileUrlToPath = (url) => {
+        if (!url || !url.startsWith('file://')) return null;
+        try {
+          const u = new URL(url);
+          if (u.protocol !== 'file:') return null;
+          let p = decodeURIComponent(u.pathname);
+          // Windows: pathname is /C:/foo on file:///C:/foo
+          if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1).replace(/\//g, '\\');
+          return p;
+        } catch { return null; }
+      };
+
       const blocks = previewAttachments.map((a, i) => {
         const m = a.meta || {};
         const html = (m.outerHTML || '').slice(0, 2000);
+        const sourcePath = fileUrlToPath(m.url);
         return [
           `### Element ${i + 1} — \`${m.describe || a.name || ''}\``,
-          m.url ? `URL: ${m.url}` : '',
+          // For file:// URLs surface the absolute filesystem path FIRST
+          // so the agent doesn't waste a turn trying to fetch the URL.
+          sourcePath
+            ? `Source file: \`${sourcePath}\` (open + edit with the Read / Edit tools)`
+            : (m.url ? `URL: ${m.url}` : ''),
           m.selector ? `Selector: \`${m.selector}\`` : '',
           m.text ? `Text: ${JSON.stringify(m.text.slice(0, 200))}` : '',
           m.styles ? `Computed: color=${m.styles.color}, bg=${m.styles.background}, font=${m.styles.fontSize} ${m.styles.fontFamily}` : '',
