@@ -24,6 +24,7 @@ module.exports = function register(ipcMain, ctx) {
   // same module instance + same agent-runtime resolution (Electron-as-Node
   // executable + asar-unpacked cli.js path).
   const { loadSdk, resolveAgentRuntime } = require('./sdk-loader');
+  const { formatCurrentTimePrefix } = require('./agent-shared');
 
   // Build IDE-specific MCP tools — shared with mission agents.
   const { buildIdeTools } = require('./ide-tools-mcp');
@@ -403,7 +404,11 @@ module.exports = function register(ipcMain, ctx) {
       }
     }
 
-    let promptText = String(message || '');
+    // Always prefix every user prompt with the current local time +
+    // ISO timestamp. The agent otherwise has to guess "today" and
+    // gets it wrong on commit trailers, scheduled-task references,
+    // anything time-relative.
+    let promptText = `${formatCurrentTimePrefix()}\n\n${String(message || '')}`;
     if (Array.isArray(attachments) && attachments.length) {
       const lines = attachments.map(a => `@${typeof a === 'string' ? a : a.path}`).join('\n');
       promptText = `${promptText}\n\nAttached files:\n${lines}\n\nInstruction: Read the attached files directly from the paths above before answering.`.trim();

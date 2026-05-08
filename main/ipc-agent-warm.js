@@ -25,6 +25,7 @@ const {
   loadUserMcpConfig,
   makeAskUserCanUseTool,
   dispatchSdkMessage,
+  formatCurrentTimePrefix,
 } = require('./agent-shared');
 
 module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
@@ -283,11 +284,16 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
         timestamp: new Date().toISOString(),
       });
 
+      // Always prefix every user prompt with the current local time +
+      // ISO timestamp so the agent never has to guess "today". Cold
+      // path does the same (see agent-shared.formatCurrentTimePrefix).
+      const timed = `${formatCurrentTimePrefix()}\n\n${String(message)}`;
+
       // First turn of a fresh warm session: inject prior-conversation
       // context the same way cold path's agent:send does. The SDK
       // process holds no memory of pre-restart turns; subsequent turns
       // inside this session don't need it (SDK keeps context natively).
-      let promptForSdk = String(message);
+      let promptForSdk = timed;
       if (entry.turnCount === 0) {
         try {
           const raw = readHistoryRaw(projectPath);
@@ -304,7 +310,7 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
               const trimmed = c.length > MAX_MSG_LEN ? c.slice(0, MAX_MSG_LEN) + '...[truncated]' : c;
               return `${m.role === 'user' ? 'Human' : 'Assistant'}: ${trimmed}`;
             }).join('\n\n');
-            promptForSdk = `Previous conversation:\n${ctxBlock}\n\nCurrent request: ${message}`;
+            promptForSdk = `Previous conversation:\n${ctxBlock}\n\nCurrent request: ${timed}`;
             console.log(`[agent-warm] Injected ${recent.length} prior entries on turn 0`);
           }
         } catch (err) {

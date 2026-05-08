@@ -280,10 +280,31 @@ function dispatchSdkMessage(msg, sendEvent, opts = {}) {
   return n;
 }
 
+// One-line "current time" prefix injected into every user prompt so
+// the agent never has to guess the date for things like commit
+// trailers, scheduled-task references, or "today's" anything. Format
+// is the host-local time (with offset) AND the absolute ISO so the
+// model has both human-readable and machine-parseable forms.
+function formatCurrentTimePrefix() {
+  const now = new Date();
+  // Pretty local time, e.g. "Fri, May 8, 2026, 08:34 AM (-04:00)".
+  let pretty;
+  try {
+    pretty = now.toLocaleString(undefined, {
+      weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', timeZoneName: 'shortOffset',
+    });
+  } catch {
+    pretty = now.toString();
+  }
+  return `[Current time: ${pretty} • ISO ${now.toISOString()}]`;
+}
+
 module.exports = {
   builtinMcpServers,
   BUILTIN_ALLOWED_TOOLS,
   loadUserMcpConfig,
   makeAskUserCanUseTool,
   dispatchSdkMessage,
+  formatCurrentTimePrefix,
 };
