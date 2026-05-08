@@ -162,20 +162,49 @@ function dispatchSdkMessage(msg, sendEvent, opts = {}) {
     return n;
   }
 
+  // stream_event carries the partial-message deltas when
+  // includePartialMessages: true. Unpack the same shapes the cold
+  // path emits so chat.js's text_delta / block_start / block_stop /
+  // message_stop cases all fire.
   if (msg.type === 'stream_event') {
-    sendEvent({ type: 'stream_event', event: msg.event, parent_tool_use_id: msg.parent_tool_use_id }); n++;
+    const ev = msg.event;
+    if (!ev) return n;
+    if (ev.type === 'content_block_delta' && ev.delta) {
+      if (ev.delta.type === 'text_delta') {
+        sendEvent({ type: 'text_delta', text: ev.delta.text || '', index: ev.index }); n++;
+      } else if (ev.delta.type === 'thinking_delta') {
+        sendEvent({ type: 'thinking_delta', text: ev.delta.thinking || '', index: ev.index }); n++;
+      } else if (ev.delta.type === 'input_json_delta') {
+        sendEvent({ type: 'input_delta', partial: ev.delta.partial_json || '', index: ev.index }); n++;
+      }
+    } else if (ev.type === 'content_block_start') {
+      sendEvent({ type: 'block_start', block: ev.content_block, index: ev.index }); n++;
+    } else if (ev.type === 'content_block_stop') {
+      sendEvent({ type: 'block_stop', index: ev.index }); n++;
+    } else if (ev.type === 'message_stop') {
+      sendEvent({ type: 'message_stop' }); n++;
+    }
     return n;
   }
 
   if (msg.type === 'assistant') {
     const blocks = msg.message?.content || [];
     for (const b of blocks) {
-      if (b.type === 'text') {
-        sendEvent({ type: 'text', text: b.text || '' }); n++;
-      } else if (b.type === 'tool_use') {
-        sendEvent({ type: 'tool_call', id: b.id, name: b.name, input: b.input }); n++;
-      } else if (b.type === 'thinking') {
-        sendEvent({ type: 'thinking', text: b.thinking || '' }); n++;
+      if (!b || typeof b !== 'object') continue;
+      if (b.type === 'text' && typeof b.text === 'string') {
+        sendEvent({ type: 'text', text: b.text }); n++;
+      } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
+        sendEvent({ type: 'thinking', text: b.thinking }); n++;
+      } else if (b.type === 'redacted_thinking') {
+        sendEvent({ type: 'thinking', text: '[redacted]', redacted: true }); n++;
+      } else if (b.type === 'tool_use' || b.type === 'mcp_tool_use' || b.type === 'server_tool_use') {
+        sendEvent({
+          type: 'tool_call',
+          id: b.id, name: b.name, input: b.input,
+          kind: b.type,
+          serverName: b.server_name || null,
+          parentToolUseId: msg.parent_tool_use_id || null,
+        }); n++;
       }
     }
     return n;
@@ -184,28 +213,66 @@ function dispatchSdkMessage(msg, sendEvent, opts = {}) {
   if (msg.type === 'user') {
     const blocks = Array.isArray(msg.message?.content) ? msg.message.content : [];
     for (const b of blocks) {
-      if (b.type === 'tool_result') {
-        const content = typeof b.content === 'string'
-          ? b.content
-          : Array.isArray(b.content)
-            ? b.content.map(c => c.type === 'text' ? c.text : '').join('')
-            : JSON.stringify(b.content);
-        sendEvent({ type: 'tool_result', toolUseId: b.tool_use_id, content, isError: !!b.is_error }); n++;
+      if (!b || typeof b !== 'object') continue;
+      const TR_KINDS = ['tool_result', 'mcp_tool_result', 'web_search_tool_result',
+        'code_execution_tool_result', 'bash_code_execution_tool_result',
+        'text_editor_code_execution_tool_result'];
+      if (TR_KINDS.includes(b.type)) {
+        let preview = b.content;
+        if (Array.isArray(preview)) {
+          preview = preview.map(p => (p && p.type === 'text') ? p.text : JSON.stringify(p)).join('\n');
+        } else if (preview && typeof preview === 'object') {
+          preview = JSON.stringify(preview);
+        }
+        let cleanContent = typeof preview === 'string' ? preview : String(preview ?? '');
+        cleanContent = cleanContent.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\].*?\x07/g, '');
+        sendEvent({
+          type: 'tool_result',
+          toolUseId: b.tool_use_id,
+          content: cleanContent,
+          isError: !!b.is_error,
+          kind: b.type,
+        }); n++;
       }
     }
+    return n;
+  }
+
+  if (msg.type === 'tool_progress') {
+    sendEvent({
+      type: 'tool_progress',
+      toolUseId: msg.tool_use_id,
+      toolName: msg.tool_name,
+      elapsedSeconds: msg.elapsed_time_seconds,
+    }); n++;
+    return n;
+  }
+  if (msg.type === 'auth_status') {
+    sendEvent({
+      type: 'auth_status',
+      isAuthenticating: msg.isAuthenticating,
+      output: msg.output,
+      error: msg.error,
+    }); n++;
     return n;
   }
 
   if (msg.type === 'result') {
     sendEvent({
       type: 'result',
-      subtype: msg.subtype,
-      duration_ms: msg.duration_ms,
-      duration_api_ms: msg.duration_api_ms,
-      num_turns: msg.num_turns,
-      total_cost_usd: msg.total_cost_usd,
-      usage: msg.usage,
-      result: msg.result,
+      subtype: msg.subtype || 'success',
+      total_cost_usd: msg.total_cost_usd || 0,
+      totalCostUsd: msg.total_cost_usd || 0,
+      duration_ms: msg.duration_ms || 0,
+      durationMs: msg.duration_ms || 0,
+      duration_api_ms: msg.duration_api_ms || 0,
+      num_turns: msg.num_turns || 0,
+      is_error: !!msg.is_error,
+      usage: msg.usage || null,
+      modelUsage: msg.modelUsage || null,
+      permission_denials: msg.permission_denials || [],
+      result: msg.result || null,
+      errors: msg.errors || null,
     }); n++;
     return n;
   }

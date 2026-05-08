@@ -67,30 +67,27 @@ class WorkspaceAgentSession {
     const runtime = resolveAgentRuntime();
     const inputStream = this._makeInputStream();
 
-    // Build the options the SDK expects. We deliberately surface the
-    // bits a workspace-scoped session needs and pass through the rest.
+    // Build the options the SDK expects. Spread caller options FIRST,
+    // then overlay our runtime-critical fields so they can never be
+    // clobbered. The previous order had `...this.options` last, which
+    // wiped out env (losing ELECTRON_RUN_AS_NODE=1) and made the
+    // spawned CLI subprocess hang trying to launch as a GUI Electron
+    // app instead of running as Node.
     const sdkOptions = {
+      ...this.options,
       cwd: this.workspaceDir,
-      // Resume a prior conversation if the caller saved a sessionId.
-      // The SDK rehydrates message history from ~/.claude/projects/.
-      resume: this.options.resume,
       permissionMode: this.options.permissionMode || 'bypassPermissions',
-      // Token-by-token UI updates — same flag the cold path uses.
       includePartialMessages: this.options.includePartialMessages !== false,
       // Production runtime — Electron's binary as Node, asar.unpacked cli.js.
       executable: runtime.executable,
       executableArgs: runtime.executableArgs,
       pathToClaudeCodeExecutable: runtime.pathToClaudeCodeExecutable,
       env: { ...runtime.extraEnv, ...(this.options.env || {}) },
-      // Pass through any extra options the caller specified (model,
-      // mcpServers, allowedTools, agents, customSystemPrompt, hooks,
-      // canUseTool, etc.). These become session-scoped.
-      ...this.options,
+      // Resume a prior conversation if the caller saved a sessionId.
+      // SDK rehydrates message history from ~/.claude/projects/. We
+      // keep this AFTER the spread so the explicit value wins.
+      resume: this.options.resume || undefined,
     };
-    // Don't let our explicit fields above get clobbered by spread.
-    sdkOptions.cwd = this.workspaceDir;
-    sdkOptions.executable = runtime.executable;
-    sdkOptions.pathToClaudeCodeExecutable = runtime.pathToClaudeCodeExecutable;
 
     this.q = sdk.query({ prompt: inputStream, options: sdkOptions });
 

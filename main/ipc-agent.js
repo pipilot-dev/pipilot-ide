@@ -117,6 +117,8 @@ module.exports = function register(ipcMain, ctx) {
     }
   }
 
+  // Exposed on ctx so the warm-session path (ipc-agent-warm.js) reuses
+  // the same connector + dotenv + auth-token wiring without duplicating.
   function loadConnectorEnvVars(workDir) {
     const envs = {};
     try {
@@ -213,6 +215,11 @@ module.exports = function register(ipcMain, ctx) {
 
     return out;
   }
+
+  // Make these available to the warm-session register fn. ipc-agent
+  // registers first so the assignments are present before warm runs.
+  ctx.loadConnectorEnvVars = loadConnectorEnvVars;
+  ctx.loadRuntimeEnvVars = loadRuntimeEnvVars;
 
   function buildEnvDebugSnapshot(workDir) {
     // IMPORTANT: Never include actual env values. Booleans only.

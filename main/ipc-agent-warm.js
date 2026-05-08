@@ -93,7 +93,6 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
     const ideMcp = sdk.createSdkMcpServer({ name: 'pipilot', version: '1.0.0', tools: ideToolsList });
 
     const userMcp = loadUserMcpConfig(workDir, ctx.userDataPath);
-    const persistedId = readPersistedSessionId(workDir);
 
     return {
       // Session-stable
@@ -111,12 +110,19 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
       ],
       env: {
         ENABLE_TOOL_SEARCH: 'auto',
+        // The auth-gated proxy URL + JWT live in loadRuntimeEnvVars
+        // (sets ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN). Without
+        // those the SDK can't reach the model and the turn hangs
+        // silently — this was step-3's biggest gotcha. Pull from ctx
+        // (populated by ipc-agent.js's register fn).
+        ...(typeof ctx.loadConnectorEnvVars === 'function' ? ctx.loadConnectorEnvVars(workDir) : {}),
+        ...(typeof ctx.loadRuntimeEnvVars === 'function' ? ctx.loadRuntimeEnvVars() : {}),
       },
-      // canUseTool is set per-turn (it captures the streamId for the
-      // ask_user bridge). See attachTurn() below.
-      // Resume the persisted SDK session_id when present so the SDK
-      // rehydrates conversation history from ~/.claude/projects/.
-      resume: persistedId || undefined,
+      // NOTE: `resume` deliberately omitted. We persist the sessionId
+      // at the top of .pipilot/_pipilot_history.json (step 1) for
+      // future use, but auto-resuming a stale id where the on-disk
+      // session has been deleted causes the SDK to hang silently.
+      // Once we wire a "continue last conversation?" UI we can opt in.
     };
   }
 
