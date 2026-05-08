@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     maximize: () => ipcRenderer.invoke('window:maximize'),
     close: () => ipcRenderer.invoke('window:close'),
     isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+    flashFrame: (on) => ipcRenderer.invoke('window:flash-frame', !!on),
   },
   // Background mode + power management. Renderer signals when the agent
   // is active so the main process can hold a powerSaveBlocker, and
@@ -599,6 +600,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('browser:download:event', fn);
       return () => ipcRenderer.removeListener('browser:download:event', fn);
     },
+    onDownloadEvent: (handler) => {
+      const fn = (_e, payload) => handler(payload);
+      ipcRenderer.on('browser:download:event', fn);
+      return () => ipcRenderer.removeListener('browser:download:event', fn);
+    },
+    setExtraHeaders: (webContentsId, headers) => ipcRenderer.invoke('browser:set-extra-headers', { webContentsId, headers }),
     onPopupRequest: (h) => { const fn = (_e, p) => h(p); ipcRenderer.on('browser:popup-request', fn); return () => ipcRenderer.removeListener('browser:popup-request', fn); },
     // Webview preload bridging
     getPreloadPath: () => ipcRenderer.invoke('browser:get-preload-path'),

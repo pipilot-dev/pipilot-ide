@@ -280,6 +280,16 @@ ipcMain.handle('window:maximize', () => {
 });
 ipcMain.handle('window:close', () => { mainWindow?.close(); });
 ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() || false);
+// Bounce the OS taskbar/dock to grab attention when the agent needs the
+// user (e.g. AskUserQuestion). No-op when the window is already focused.
+ipcMain.handle('window:flash-frame', (_e, on) => {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    if (on && mainWindow.isFocused()) return false;
+    mainWindow.flashFrame(!!on);
+    return true;
+  } catch { return false; }
+});
 
 ipcMain.handle('app:recent-projects:get', () => {
   const file = path.join(app.getPath('userData'), 'recent-projects.json');

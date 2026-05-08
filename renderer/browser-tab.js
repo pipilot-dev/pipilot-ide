@@ -3528,6 +3528,127 @@
         return { tree: lines.join('\n'), refCount: pp._refSeq, url: location.href, title: document.title };
       };
 
+      // ── Selector + accessible-name helpers ──────────────────────────
+      // Build a stable-ish CSS selector for an element: prefer #id,
+      // then a chain of tag:nth-of-type up to <body>. Skips classes
+      // because Tailwind / CSS-in-JS rotate them.
+      pp._cssPath = (el) => {
+        if (!el || el.nodeType !== 1) return '';
+        if (el.id) return '#' + CSS.escape(el.id);
+        const parts = [];
+        let node = el;
+        while (node && node.nodeType === 1 && node !== document.documentElement) {
+          let part = node.tagName.toLowerCase();
+          if (node.parentNode) {
+            const sibs = Array.from(node.parentNode.children).filter(c => c.tagName === node.tagName);
+            if (sibs.length > 1) part += ':nth-of-type(' + (sibs.indexOf(node) + 1) + ')';
+          }
+          parts.unshift(part);
+          node = node.parentNode;
+        }
+        return parts.join(' > ');
+      };
+      pp._accessibleName = (el) => {
+        if (!el) return '';
+        const aria = el.getAttribute('aria-label');
+        if (aria) return aria.trim();
+        const labelledby = el.getAttribute('aria-labelledby');
+        if (labelledby) {
+          const ref = document.getElementById(labelledby);
+          if (ref) return (ref.textContent || '').trim();
+        }
+        if (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
+          if (el.id) {
+            const lbl = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+            if (lbl) return (lbl.textContent || '').trim();
+          }
+          const wrap = el.closest('label');
+          if (wrap) return (wrap.textContent || '').trim();
+          if (el.placeholder) return el.placeholder.trim();
+          if (el.title) return el.title.trim();
+        }
+        return (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+      };
+      // Map ARIA roles to candidate selectors, including implicit roles
+      // for native HTML elements (button, link, textbox, etc.).
+      pp._roleSelector = (role) => {
+        const r = String(role || '').toLowerCase();
+        const explicit = '[role="' + r + '"]';
+        const implicit = {
+          button:   ', button, input[type=button], input[type=submit], input[type=reset]',
+          link:     ', a[href]',
+          textbox:  ', input:not([type]), input[type=text], input[type=search], input[type=email], input[type=url], input[type=tel], input[type=password], input[type=number], textarea',
+          checkbox: ', input[type=checkbox]',
+          radio:    ', input[type=radio]',
+          combobox: ', select',
+          heading:  ', h1, h2, h3, h4, h5, h6',
+          img:      ', img',
+          listitem: ', li',
+          list:     ', ul, ol',
+          option:   ', option',
+        }[r] || '';
+        return explicit + implicit;
+      };
+      pp.findByRole = (role, name, limit) => {
+        const sel = pp._roleSelector(role);
+        const wanted = String(name || '').toLowerCase();
+        const out = [];
+        for (const el of document.querySelectorAll(sel)) {
+          if (!pp._isVisible(el)) continue;
+          const accName = pp._accessibleName(el).toLowerCase();
+          if (wanted && !accName.includes(wanted)) continue;
+          out.push({ selector: pp._cssPath(el), name: pp._accessibleName(el), role });
+          if (out.length >= (limit || 5)) break;
+        }
+        return { matches: out };
+      };
+      pp.findByText = (text, exact, limit) => {
+        const wanted = String(text || '').trim();
+        if (!wanted) return { matches: [] };
+        const lower = wanted.toLowerCase();
+        const out = [];
+        // Walk leaf-ish elements first to avoid matching giant <body> blobs.
+        const candidates = document.querySelectorAll('a, button, [role="button"], h1, h2, h3, h4, h5, h6, label, li, span, p, td, th, summary');
+        for (const el of candidates) {
+          if (!pp._isVisible(el)) continue;
+          const txt = (el.textContent || '').trim().replace(/\s+/g, ' ');
+          const ok = exact ? txt === wanted : txt.toLowerCase().includes(lower);
+          if (!ok) continue;
+          out.push({ selector: pp._cssPath(el), text: txt.slice(0, 200), tag: el.tagName.toLowerCase() });
+          if (out.length >= (limit || 5)) break;
+        }
+        return { matches: out };
+      };
+      pp.findByLabel = (label, limit) => {
+        const wanted = String(label || '').toLowerCase();
+        if (!wanted) return { matches: [] };
+        const out = [];
+        // <label for=...>
+        for (const lbl of document.querySelectorAll('label')) {
+          const txt = (lbl.textContent || '').trim().toLowerCase();
+          if (!txt.includes(wanted)) continue;
+          let target = null;
+          const forId = lbl.getAttribute('for');
+          if (forId) target = document.getElementById(forId);
+          if (!target) target = lbl.querySelector('input, select, textarea');
+          if (!target || !pp._isVisible(target)) continue;
+          out.push({ selector: pp._cssPath(target), label: (lbl.textContent || '').trim().slice(0, 200), tag: target.tagName.toLowerCase() });
+          if (out.length >= (limit || 5)) break;
+        }
+        // aria-label / placeholder fallback
+        if (out.length < (limit || 5)) {
+          for (const el of document.querySelectorAll('input, select, textarea, [contenteditable]')) {
+            if (!pp._isVisible(el)) continue;
+            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            const ph = (el.placeholder || '').toLowerCase();
+            if (!aria.includes(wanted) && !ph.includes(wanted)) continue;
+            out.push({ selector: pp._cssPath(el), label: (el.getAttribute('aria-label') || el.placeholder || '').trim(), tag: el.tagName.toLowerCase() });
+            if (out.length >= (limit || 5)) break;
+          }
+        }
+        return { matches: out };
+      };
+
       pp.summary = () => ({
         url: location.href,
         title: document.title,
@@ -3904,6 +4025,110 @@
     async cookies_get({ tabId, url }) {
       const e = findTab(tabId); if (!e) throw new Error('no such tab');
       return { result: await execJs(e, `(async () => document.cookie)()`) };
+    },
+    async cookies_set({ tabId, name, value, days }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      if (!name) throw new Error('name is required');
+      const expires = (days && Number.isFinite(+days))
+        ? `; expires=${new Date(Date.now() + Number(days) * 86400000).toUTCString()}`
+        : '';
+      const code = `(() => { document.cookie = ${jsLit(name)} + '=' + encodeURIComponent(${jsLit(String(value ?? ''))}) + '; path=/' + ${jsLit(expires)}; return document.cookie; })()`;
+      return { ok: true, cookie: await execJs(e, code) };
+    },
+    async cookies_clear({ tabId }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      const code = `(() => {
+        const past = '; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+        const names = document.cookie.split(';').map(s => s.split('=')[0].trim()).filter(Boolean);
+        for (const n of names) document.cookie = n + '=' + past;
+        return { cleared: names.length };
+      })()`;
+      return await execJs(e, code);
+    },
+    async storage_get({ tabId, type, key }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      const store = type === 'session' ? 'sessionStorage' : 'localStorage';
+      if (key) {
+        return { value: await execJs(e, `(() => ${store}.getItem(${jsLit(key)}))()`) };
+      }
+      return { entries: await execJs(e, `(() => { const o = {}; for (let i=0;i<${store}.length;i++) { const k = ${store}.key(i); o[k] = ${store}.getItem(k); } return o; })()`) };
+    },
+    async storage_set({ tabId, type, key, value }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      const store = type === 'session' ? 'sessionStorage' : 'localStorage';
+      if (!key) throw new Error('key is required');
+      await execJs(e, `(() => { ${store}.setItem(${jsLit(key)}, ${jsLit(String(value ?? ''))}); })()`);
+      return { ok: true };
+    },
+    async storage_remove({ tabId, type, key }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      const store = type === 'session' ? 'sessionStorage' : 'localStorage';
+      if (!key) throw new Error('key is required');
+      await execJs(e, `(() => { ${store}.removeItem(${jsLit(key)}); })()`);
+      return { ok: true };
+    },
+    async storage_clear({ tabId, type }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      const store = type === 'session' ? 'sessionStorage' : 'localStorage';
+      await execJs(e, `(() => { ${store}.clear(); })()`);
+      return { ok: true };
+    },
+    // ── Semantic finders ─────────────────────────────────────────────
+    // Each returns one or more CSS selectors the agent can pass to the
+    // existing click/type/etc. ops. Selectors prefer #id, then a chain
+    // of nth-child/tag so they survive DOM mutation reasonably well.
+    async find_by_role({ tabId, role, name, limit }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      await ensureHelpers(e);
+      const code = `__pipilot.findByRole(${jsLit(role)}, ${jsLit(name || '')}, ${Number(limit) || 5})`;
+      return await execJs(e, code);
+    },
+    async find_by_text({ tabId, text, exact, limit }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      await ensureHelpers(e);
+      const code = `__pipilot.findByText(${jsLit(text)}, ${!!exact}, ${Number(limit) || 5})`;
+      return await execJs(e, code);
+    },
+    async find_by_label({ tabId, label, limit }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      await ensureHelpers(e);
+      const code = `__pipilot.findByLabel(${jsLit(label)}, ${Number(limit) || 5})`;
+      return await execJs(e, code);
+    },
+    // ── HTTP header override ─────────────────────────────────────────
+    // Routes through the main process (renderer can't hook the network
+    // stack). Headers apply to the originating tab's session and persist
+    // until cleared. Use sparingly — easy to break sites with bad values.
+    async set_extra_headers({ tabId, headers }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      const wcId = e.wv.getWebContentsId();
+      return await api.browser.setExtraHeaders(wcId, headers || {});
+    },
+    async clear_extra_headers({ tabId }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      const wcId = e.wv.getWebContentsId();
+      return await api.browser.setExtraHeaders(wcId, null);
+    },
+    // ── File downloads ───────────────────────────────────────────────
+    // The browser session already auto-saves to <downloads>/PiPilot/ via
+    // ipc-browser.js. This op subscribes for the next 'done' event and
+    // resolves with the saved path. Pass timeoutMs to cap the wait.
+    async wait_for_download({ tabId, timeoutMs }) {
+      const e = findTab(tabId); if (!e) throw new Error('no such tab');
+      const cap = Math.max(1000, Math.min(600000, Number(timeoutMs) || 60000));
+      return await new Promise((resolve) => {
+        const off = api.browser.onDownloadEvent((evt) => {
+          if (!evt) return;
+          if (evt.kind === 'done') {
+            try { off && off(); } catch {}
+            resolve({ ok: evt.state === 'completed', state: evt.state, savePath: evt.savePath });
+          }
+        });
+        setTimeout(() => {
+          try { off && off(); } catch {}
+          resolve({ ok: false, state: 'timeout' });
+        }, cap);
+      });
     },
     async pdf({ tabId, name }) {
       const e = findTab(tabId); if (!e) throw new Error('no such tab');

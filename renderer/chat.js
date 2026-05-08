@@ -4952,6 +4952,25 @@
     const root = document.getElementById('chat-ask-root');
     if (!root) return;
 
+    // Force the chat panel open. The dialog itself uses position:fixed
+    // so it overlays everything, but the user reported missing it
+    // entirely — almost certainly because the chat panel was collapsed
+    // and they had no visual cue that the agent was waiting on input.
+    // Pop the panel open so the rest of the chat surface is visible too.
+    try {
+      const ide = document.getElementById('ide-root');
+      if (ide && ide.classList.contains('chat-collapsed')) {
+        ide.classList.remove('chat-collapsed');
+        const sideCollapsed = ide.classList.contains('side-collapsed');
+        ide.style.gridTemplateColumns = sideCollapsed
+          ? 'var(--activity-w) 0 0 1fr 4px var(--chat-panel-w)'
+          : 'var(--activity-w) var(--side-panel-w) 4px 1fr 4px var(--chat-panel-w)';
+      }
+    } catch {}
+    try { bus.emit('toast:show', { type: 'info', message: 'Agent needs your input', durationMs: 6000 }); } catch {}
+    // Flash the OS taskbar so users notice when the IDE is in the background.
+    try { window.electronAPI?.window?.flashFrame?.(true); } catch {}
+
     const normalized = (Array.isArray(questions) ? questions : []).map((q) => {
       if (typeof q === 'string') {
         return { question: q, options: [], multiSelect: false, allowFreeformInput: true };
@@ -5068,6 +5087,7 @@
     const root = document.getElementById('chat-ask-root');
     if (root) root.innerHTML = '';
     pendingQuestion = null;
+    try { window.electronAPI?.window?.flashFrame?.(false); } catch {}
   }
 
   // ---------- Feature #5: Slash Commands ----------
@@ -5680,6 +5700,14 @@
       case 'ask_user':
         try {
           showAskDialog(evt.requestId, evt.questions || []);
+        } catch {}
+        break;
+      case 'ask_user_timeout':
+        // Main hit the 30-min cap and denied the tool. Clear the dialog
+        // so the user isn't staring at a now-ignored prompt.
+        try {
+          hideAskDialog();
+          bus.emit('toast:show', { type: 'warning', message: 'Question timed out — agent will retry or give up.', durationMs: 5000 });
         } catch {}
         break;
       case 'tool_result':

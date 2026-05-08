@@ -687,6 +687,114 @@ function buildIdeTools(sdk, ctx) {
       }
     ),
 
+    // ── Storage tools (cookies + localStorage + sessionStorage) ──────
+    sdk.tool('browser_cookies_set',
+      'Set a non-HTTP-only cookie via document.cookie. For HttpOnly or cross-origin cookies, use browser_set_extra_headers with a Cookie header instead.',
+      { tabId: z.string().optional(), name: z.string(), value: z.string().optional(), days: z.number().optional().describe('Lifetime in days; omit for session cookie') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('cookies_set', args, 5000); return { content: [{ type: 'text', text: browserToolText('Cookie set', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_cookies_set error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_cookies_clear',
+      'Delete every cookie visible to document.cookie on the current page (does not touch HttpOnly cookies).',
+      { tabId: z.string().optional() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('cookies_clear', args, 5000); return { content: [{ type: 'text', text: browserToolText('Cookies cleared', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_cookies_clear error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_storage_get',
+      'Read a value from localStorage or sessionStorage. Omit `key` to dump the entire store (capped server-side).',
+      { tabId: z.string().optional(), type: z.enum(['local', 'session']).default('local'), key: z.string().optional() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('storage_get', args, 5000); return { content: [{ type: 'text', text: browserToolText('Storage', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_storage_get error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_storage_set',
+      'Write a string value into localStorage or sessionStorage. Useful for priming auth tokens before navigation.',
+      { tabId: z.string().optional(), type: z.enum(['local', 'session']).default('local'), key: z.string(), value: z.string() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('storage_set', args, 5000); return { content: [{ type: 'text', text: browserToolText('Storage set', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_storage_set error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_storage_remove',
+      'Delete a single key from localStorage or sessionStorage.',
+      { tabId: z.string().optional(), type: z.enum(['local', 'session']).default('local'), key: z.string() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('storage_remove', args, 5000); return { content: [{ type: 'text', text: browserToolText('Storage remove', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_storage_remove error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_storage_clear',
+      'Wipe localStorage or sessionStorage for the current origin.',
+      { tabId: z.string().optional(), type: z.enum(['local', 'session']).default('local') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('storage_clear', args, 5000); return { content: [{ type: 'text', text: browserToolText('Storage cleared', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_storage_clear error: ${e.message}` }], isError: true }; }
+      }
+    ),
+
+    // ── Semantic finders (return CSS selectors) ──────────────────────
+    sdk.tool('browser_find_by_role',
+      'Find elements by ARIA role (with implicit roles for native HTML — e.g. role="button" matches <button>). Returns up to `limit` matches with stable CSS selectors you can pass to browser_click / browser_type.',
+      { tabId: z.string().optional(), role: z.string().describe('e.g. "button", "link", "textbox", "checkbox", "heading"'), name: z.string().optional().describe('Optional accessible-name substring filter (case-insensitive)'), limit: z.number().default(5) },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('find_by_role', args, 5000); return { content: [{ type: 'text', text: browserToolText('Found', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_find_by_role error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_find_by_text',
+      'Find visible elements whose textContent matches. Substring by default; pass exact:true for whole-string equality. Searches interactive + leaf elements (a, button, h*, label, li, span, p, etc.).',
+      { tabId: z.string().optional(), text: z.string(), exact: z.boolean().default(false), limit: z.number().default(5) },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('find_by_text', args, 5000); return { content: [{ type: 'text', text: browserToolText('Found', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_find_by_text error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_find_by_label',
+      'Find form controls by their associated <label> text, aria-label, or placeholder. Returns the input/select/textarea selector — not the label itself.',
+      { tabId: z.string().optional(), label: z.string(), limit: z.number().default(5) },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('find_by_label', args, 5000); return { content: [{ type: 'text', text: browserToolText('Found', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_find_by_label error: ${e.message}` }], isError: true }; }
+      }
+    ),
+
+    // ── HTTP request header override ─────────────────────────────────
+    sdk.tool('browser_set_extra_headers',
+      'Inject extra HTTP headers (Authorization, X-Test-User, Cookie, etc.) on every request from this tab. Persists until clear_extra_headers or tab close. Use sparingly — bad header values can break sites silently.',
+      { tabId: z.string().optional(), headers: z.record(z.string(), z.string()).describe('Header name → value map') },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('set_extra_headers', args, 5000); return { content: [{ type: 'text', text: browserToolText('Headers set', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_set_extra_headers error: ${e.message}` }], isError: true }; }
+      }
+    ),
+    sdk.tool('browser_clear_extra_headers',
+      'Remove any extra request headers previously set by browser_set_extra_headers on this tab.',
+      { tabId: z.string().optional() },
+      async (args) => {
+        try { const r = await browserCtl.browserExec('clear_extra_headers', args, 5000); return { content: [{ type: 'text', text: browserToolText('Headers cleared', r) }] }; }
+        catch (e) { return { content: [{ type: 'text', text: `browser_clear_extra_headers error: ${e.message}` }], isError: true }; }
+      }
+    ),
+
+    // ── File downloads ───────────────────────────────────────────────
+    sdk.tool('browser_wait_for_download',
+      'Block until the next download finishes (or timeoutMs elapses) and return its saved path on disk. Pair with browser_click on a download link. Files land under the user\'s Downloads/PiPilot/ folder.',
+      { tabId: z.string().optional(), timeoutMs: z.number().default(60000) },
+      async (args) => {
+        try {
+          const cap = Math.max(2000, Math.min(600000, Number(args?.timeoutMs) || 60000));
+          const r = await browserCtl.browserExec('wait_for_download', args, cap + 5000);
+          if (r?.ok && r.savePath) return { content: [{ type: 'text', text: `Downloaded to ${r.savePath}` }] };
+          return { content: [{ type: 'text', text: `Download did not complete (state=${r?.state || 'unknown'}).` }], isError: true };
+        } catch (e) { return { content: [{ type: 'text', text: `browser_wait_for_download error: ${e.message}` }], isError: true }; }
+      }
+    ),
+
     // ──────────────────────────────────────────────────────────────
     // run_in_terminal — DISABLED for now.
     //

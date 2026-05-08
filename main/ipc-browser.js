@@ -331,6 +331,49 @@ module.exports = function register(ipcMain, ctx) {
     try { if (p) shell.showItemInFolder(p); return { ok: true }; } catch (err) { return { ok: false, error: err.message }; }
   });
 
+  // ── Per-tab extra request headers ────────────────────────────────
+  // Agents can prime auth or X-Test-* headers on the next browser tab
+  // request. We keep a map of webContentsId → { Header: value } and
+  // install a single onBeforeSendHeaders on each browser session that
+  // looks up the originating webContents at request time.
+  const extraHeadersByWcId = new Map(); // webContentsId → headers object
+  const wiredHeaderSessions = new WeakSet();
+  function wireExtraHeaders(sess) {
+    if (!sess || wiredHeaderSessions.has(sess)) return;
+    wiredHeaderSessions.add(sess);
+    sess.webRequest.onBeforeSendHeaders((details, callback) => {
+      const wcId = details.webContents?.id || details.webContentsId;
+      const extras = wcId != null ? extraHeadersByWcId.get(wcId) : null;
+      if (extras && Object.keys(extras).length) {
+        callback({ requestHeaders: { ...details.requestHeaders, ...extras } });
+      } else {
+        callback({ requestHeaders: details.requestHeaders });
+      }
+    });
+  }
+  ipcMain.handle('browser:set-extra-headers', (_e, { webContentsId, headers } = {}) => {
+    try {
+      const { webContents } = require('electron');
+      const wc = webContents.fromId(Number(webContentsId));
+      if (!wc) return { ok: false, error: 'no such webContents' };
+      // Wire the session lazily — this also covers incognito tabs.
+      wireExtraHeaders(wc.session);
+      if (!headers || typeof headers !== 'object') {
+        extraHeadersByWcId.delete(wc.id);
+        return { ok: true, cleared: true };
+      }
+      // Coerce all values to strings (Electron rejects non-strings).
+      const clean = {};
+      for (const [k, v] of Object.entries(headers)) {
+        if (k && v != null) clean[String(k)] = String(v);
+      }
+      extraHeadersByWcId.set(wc.id, clean);
+      return { ok: true, count: Object.keys(clean).length };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
   return {
     BROWSER_PARTITION,
     INCOGNITO_PARTITION,

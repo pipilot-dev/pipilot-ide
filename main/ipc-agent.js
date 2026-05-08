@@ -585,20 +585,41 @@ module.exports = function register(ipcMain, ctx) {
               const requestId = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
               send(event, ch, { type: 'ask_user', requestId, questions: input?.questions || [] });
 
-              const answer = await new Promise((resolve) => {
-                pendingInputRequests.set(requestId, { resolve, question: input, streamId });
+              // Wait for the user to answer. We previously auto-picked
+              // option[0] after 5 minutes, which silently lied to the
+              // agent — e.g. an idle "Racing game (e.g., car, bike)"
+              // reply when the user actually didn't see the dialog. That
+              // was always wrong: the agent then committed to a choice
+              // the user never made.
+              //
+              // New policy: 30-minute hard cap, then DENY the tool with
+              // a clear message so the agent knows it has no answer and
+              // must either ask differently or give up. The user can
+              // also abort the run via the interrupt button at any time
+              // — the abort path clears pendingInputRequests cleanly.
+              const outcome = await new Promise((resolve) => {
+                pendingInputRequests.set(requestId, {
+                  resolve: (a) => resolve({ kind: 'answer', value: a }),
+                  question: input,
+                  streamId,
+                });
                 setTimeout(() => {
                   if (!pendingInputRequests.has(requestId)) return;
                   pendingInputRequests.delete(requestId);
-                  const autoAnswers = {};
-                  for (const q of input?.questions || []) {
-                    autoAnswers[q.question] = q.options?.[0]?.label || 'yes';
-                  }
-                  resolve({ questions: input?.questions, answers: autoAnswers });
-                }, 300000);
+                  resolve({ kind: 'timeout' });
+                }, 30 * 60 * 1000);
               });
 
-              return { behavior: 'allow', updatedInput: answer };
+              if (outcome.kind === 'timeout') {
+                // Tell the renderer to clear the (possibly still-open) dialog.
+                send(event, ch, { type: 'ask_user_timeout', requestId });
+                return {
+                  behavior: 'deny',
+                  message: 'AskUserQuestion was not answered within 30 minutes. Do not assume any choice on the user\'s behalf — proceed only with information you already have, or ask again with a clearer question.',
+                };
+              }
+
+              return { behavior: 'allow', updatedInput: outcome.value };
             }
 
             return { behavior: 'allow', updatedInput: input };
