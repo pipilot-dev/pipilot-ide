@@ -329,13 +329,42 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
   });
 
   // ── agent:warm-interrupt ──
+  // Order matters here: we MUST emit a synthetic result before
+  // clearing currentTurn, otherwise the renderer spinner stays up
+  // forever because (a) the dispatch's `if (!t) return` drops any
+  // post-clear SDK messages and (b) the SDK doesn't always emit a
+  // result event after Query.interrupt().
   ipcMain.handle('agent:warm-interrupt', async (_e, { streamId } = {}) => {
     const projectPath = streamToWorkspace.get(streamId);
     if (!projectPath) return { ok: false, error: 'no active turn for streamId' };
     const entry = sessions.get(projectPath);
     if (!entry) return { ok: false, error: 'no session' };
+    const turn = entry.currentTurn;
     try {
-      await entry.session.interrupt();
+      // Tell the SDK to stop generating. Doesn't kill the subprocess
+      // — the warm session lives on, ready for the next turn.
+      try { await entry.session.interrupt(); } catch (err) {
+        console.warn('[agent-warm] interrupt failed:', err.message);
+      }
+      // Hand the renderer a terminal event so chat.js's case 'result'
+      // fires (clears isSending, hides "Working…", saves the partial
+      // assistant message). Same shape cold path emits on abort.
+      if (turn) {
+        send(turn.channel, {
+          type: 'result',
+          subtype: 'aborted',
+          total_cost_usd: 0, totalCostUsd: 0,
+          duration_ms: 0,    durationMs: 0,
+          duration_api_ms: 0,
+          num_turns: 0,
+          is_error: false,
+          usage: null,
+          modelUsage: null,
+          permission_denials: [],
+          result: null,
+          errors: null,
+        });
+      }
       streamToWorkspace.delete(streamId);
       entry.currentTurn = null;
       return { ok: true };

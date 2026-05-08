@@ -476,8 +476,28 @@ function tryRunMissionWarm(opts, safeEmit, abortController) {
 
     // Abort wires to interrupt — keeps the session warm for the next
     // run. Closing it here would erase the speedup we just built.
+    // We ALSO synthesize a terminal result event because Query.interrupt()
+    // doesn't always emit one, and without it the renderer stream tab
+    // sits at "Running…" forever and turnPromise never resolves.
     const onAbort = () => {
       try { cached.session.interrupt(); } catch {}
+      const turn = cached.currentTurn;
+      if (!turn) return;
+      const synth = {
+        type: 'result',
+        subtype: 'aborted',
+        totalCostUsd: 0,
+        durationMs: 0,
+        num_turns: 0,
+        is_error: true,
+        usage: null,
+        permission_denials: [],
+        result: null,
+      };
+      try { turn.safeEmit(synth); } catch {}
+      try { turn.resolveTurn(synth); } catch {}
+      cached.currentTurn = null;
+      cached.lastUsed = Date.now();
     };
     abortController.signal.addEventListener('abort', onAbort, { once: true });
 
