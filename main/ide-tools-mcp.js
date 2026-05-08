@@ -286,7 +286,7 @@ function buildIdeTools(sdk, ctx) {
       },
       async (args) => {
         try {
-          const r = await browserCtl.browserExec('screenshot', args, 25000);
+          const r = await browserCtl.browserExec('screenshot', args, 60000);
           if (!r?.base64 || r.size < 1024) throw new Error('screenshot returned no data');
           const b64Clean = String(r.base64).replace(/\s+/g, '');
           if (b64Clean.length < 200) throw new Error('screenshot base64 was empty after cleanup');
@@ -347,7 +347,7 @@ function buildIdeTools(sdk, ctx) {
       { tabId: z.string().optional() },
       async (args) => {
         try {
-          const r = await browserCtl.browserExec('snapshot', args, 15000);
+          const r = await browserCtl.browserExec('snapshot', args, 30000);
           const os = require('os');
           const dir = path.join(os.tmpdir(), 'pipilot-screenshots');
           try { fs.mkdirSync(dir, { recursive: true }); } catch {}
@@ -378,7 +378,7 @@ function buildIdeTools(sdk, ctx) {
       { tabId: z.string().optional(), clear: z.boolean().default(false).describe('Clear the buffer after reading') },
       async (args) => {
         try {
-          const r = await browserCtl.browserExec('console_log', args, 5000);
+          const r = await browserCtl.browserExec('console_log', args, 15000);
           const entries = r?.entries || [];
           if (!entries.length) return { content: [{ type: 'text', text: '(no console messages)' }] };
           const lines = entries.map(c => {
@@ -399,7 +399,7 @@ function buildIdeTools(sdk, ctx) {
         settleMs: z.number().optional().describe('How long to wait for DOM to settle (default 350ms)'),
       },
       async (args) => {
-        try { const r = await browserCtl.browserExec('click_ref', args, 15000); return { content: [{ type: 'text', text: browserToolText('Click', r) }] }; }
+        try { const r = await browserCtl.browserExec('click_ref', args, 30000); return { content: [{ type: 'text', text: browserToolText('Click', r) }] }; }
         catch (e) { return { content: [{ type: 'text', text: `browser_click_ref error: ${e.message}` }], isError: true }; }
       }
     ),
@@ -407,7 +407,7 @@ function buildIdeTools(sdk, ctx) {
       'Fill an input/textarea by its [ref=eN] from a recent snapshot. Set submit=true to press Enter after.',
       { tabId: z.string().optional(), ref: z.string().describe('Ref id like "e42"'), text: z.string(), submit: z.boolean().default(false) },
       async (args) => {
-        try { const r = await browserCtl.browserExec('fill_ref', args, 10000); return { content: [{ type: 'text', text: browserToolText('Fill', r) }] }; }
+        try { const r = await browserCtl.browserExec('fill_ref', args, 20000); return { content: [{ type: 'text', text: browserToolText('Fill', r) }] }; }
         catch (e) { return { content: [{ type: 'text', text: `browser_fill_ref error: ${e.message}` }], isError: true }; }
       }
     ),
@@ -419,7 +419,7 @@ function buildIdeTools(sdk, ctx) {
         settleMs: z.number().optional().describe('How long to wait for DOM to settle after the click (default 350ms, range 150-2000)'),
       },
       async (args) => {
-        try { const r = await browserCtl.browserExec('click', args, 15000); return { content: [{ type: 'text', text: browserToolText('Click', r) }] }; }
+        try { const r = await browserCtl.browserExec('click', args, 30000); return { content: [{ type: 'text', text: browserToolText('Click', r) }] }; }
         catch (e) { return { content: [{ type: 'text', text: `browser_click error: ${e.message}` }], isError: true }; }
       }
     ),
@@ -427,7 +427,7 @@ function buildIdeTools(sdk, ctx) {
       'Type text into an input/textarea/contentEditable element. Triggers proper input/change events so React/Vue/etc. detect it. Set submit=true to press Enter after.',
       { tabId: z.string().optional(), selector: z.string().describe('CSS selector for the input'), text: z.string().describe('Text to type'), submit: z.boolean().default(false).describe('Press Enter after typing') },
       async (args) => {
-        try { const r = await browserCtl.browserExec('type', args, 10000); return { content: [{ type: 'text', text: browserToolText('Type', r) }] }; }
+        try { const r = await browserCtl.browserExec('type', args, 20000); return { content: [{ type: 'text', text: browserToolText('Type', r) }] }; }
         catch (e) { return { content: [{ type: 'text', text: `browser_type error: ${e.message}` }], isError: true }; }
       }
     ),
@@ -452,7 +452,7 @@ function buildIdeTools(sdk, ctx) {
       { tabId: z.string().optional(), selector: z.string().optional().describe('Optional CSS selector — omit to get the whole document body text') },
       async (args) => {
         try {
-          const r = await browserCtl.browserExec('get_text', args, 10000);
+          const r = await browserCtl.browserExec('get_text', args, 30000);
           const text = r?.text || '';
           // Cap response to avoid blowing the context — first 8000 chars
           const capped = text.length > 8000 ? text.slice(0, 8000) + `\n…\n[truncated, ${text.length} total chars]` : text;
@@ -465,7 +465,7 @@ function buildIdeTools(sdk, ctx) {
       { tabId: z.string().optional(), selector: z.string().optional() },
       async (args) => {
         try {
-          const r = await browserCtl.browserExec('get_html', args, 10000);
+          const r = await browserCtl.browserExec('get_html', args, 30000);
           const html = r?.html || '';
           const capped = html.length > 12000 ? html.slice(0, 12000) + `\n…\n[truncated, ${html.length} total chars]` : html;
           return { content: [{ type: 'text', text: capped || '(no html)' }] };
@@ -494,7 +494,7 @@ function buildIdeTools(sdk, ctx) {
       'Get a structured summary of the active page: URL, title, viewport, scroll position, and lists of links / buttons / inputs. Use this BEFORE clicking or typing so you know which selectors are valid.',
       { tabId: z.string().optional() },
       async (args) => {
-        try { const r = await browserCtl.browserExec('summary', args, 10000); return { content: [{ type: 'text', text: browserToolText('Page summary', r) }] }; }
+        try { const r = await browserCtl.browserExec('summary', args, 20000); return { content: [{ type: 'text', text: browserToolText('Page summary', r) }] }; }
         catch (e) { return { content: [{ type: 'text', text: `browser_summary error: ${e.message}` }], isError: true }; }
       }
     ),

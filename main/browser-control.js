@@ -26,7 +26,11 @@ function register(ipcMain, ctx) {
     else r.reject(new Error(error || 'browser control failed'));
   });
 
-  _browserExec = (op, args = {}, timeoutMs = 30000) => {
+  // Default raised from 30s → 60s. Real-world heavy SPAs (multi-frame
+  // dashboards, image-rich landing pages) routinely exceed 30s for
+  // get_text / observe — and a needless timeout aborts work the agent
+  // would otherwise have completed if it just waited a moment longer.
+  _browserExec = (op, args = {}, timeoutMs = 60000) => {
     return new Promise((resolve, reject) => {
       const win = ctx.getWindow && ctx.getWindow();
       if (!win || win.isDestroyed()) return reject(new Error('No window available'));
