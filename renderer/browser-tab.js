@@ -3056,6 +3056,22 @@
           const n = parseInt(k.slice(1), 10);
           return { code: k, keyCode: 111 + n, key: k };
         }
+        // KeyboardEvent.code style — agents commonly pass "KeyA", "KeyW",
+        // "Digit1" etc. (matching DevTools / Playwright). Without this
+        // branch we used to drop into the fallback with keyCode:0, which
+        // Phaser & other game engines silently ignore (they read keyCode,
+        // not key). Map back to the canonical letter/digit so the event
+        // carries all three of {code, keyCode, key} correctly.
+        const codeLetter = /^Key([A-Z])$/.exec(k);
+        if (codeLetter) {
+          const ch = codeLetter[1];
+          return { code: 'Key' + ch, keyCode: ch.charCodeAt(0), key: ch.toLowerCase() };
+        }
+        const codeDigit = /^Digit([0-9])$/.exec(k);
+        if (codeDigit) {
+          const d = codeDigit[1];
+          return { code: 'Digit' + d, keyCode: d.charCodeAt(0), key: d };
+        }
         if (k.length === 1) {
           const upper = k.toUpperCase();
           const isLetter = /[A-Z]/.test(upper);

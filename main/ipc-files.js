@@ -370,7 +370,16 @@ module.exports = function register(ipcMain, ctx) {
       return { binary: true, size: stat.size, mime };
     }
     const buf = await fsp.readFile(p);
-    if (isLikelyBinary(buf)) {
+    // MIME-first short-circuit: small JPGs (and some videos/fonts/pdfs)
+    // can have zero NUL bytes in the first 8 KB, so isLikelyBinary's
+    // null-byte heuristic misses them and they get UTF-8-decoded into
+    // mojibake in the editor. If the extension already tells us it's a
+    // known media/font/pdf type, trust it.
+    const knownBinary = isImage
+      || /^(video|audio|font)\//.test(mime)
+      || mime === 'application/pdf'
+      || mime === 'application/zip';
+    if (knownBinary || isLikelyBinary(buf)) {
       let dataUrl = null;
       // Inline a data URL for any media type the renderer can preview, up to 25MB
       const isMedia = isImage || /^(video|audio)\//.test(mime) || mime === 'application/pdf';
