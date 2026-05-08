@@ -9,7 +9,11 @@ module.exports = function register(ipcMain, ctx) {
   const sessionStorage = new Map(); // sessionId -> { id, title, messages, createdAt, lastMessageAt, projectPath }
 
   // AskUserQuestion pending map (requestId -> { resolve, question, streamId })
-  const pendingInputRequests = new Map();
+  // Shared with the warm-session path (ipc-agent-warm.js) via ctx so a
+  // single agent:answer-question handler resolves AskUserQuestion
+  // bridges from either path. Lazy-init so register order doesn't matter.
+  const pendingInputRequests = ctx.pendingInputRequests
+    || (ctx.pendingInputRequests = new Map());
 
   const sessionsDir = path.join(ctx.userDataPath, 'sessions');
   try { fs.mkdirSync(sessionsDir, { recursive: true }); } catch {}

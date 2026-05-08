@@ -341,6 +341,12 @@ app.whenReady().then(() => {
   // the first chat turn lands.
   registerAuthHandlers(ipcMain, ctx);
   registerAgentHandlers(ipcMain, ctx);
+  // Warm-session IPC (agent:warm-*) — opt-in path that keeps one CLI
+  // subprocess per workspace alive, eliminating the ~12 s cold start
+  // on follow-up messages. Registered AFTER agent handlers so they
+  // share ctx.pendingInputRequests for the AskUserQuestion bridge.
+  try { require('./main/ipc-agent-warm')(ipcMain, ctx); }
+  catch (err) { console.error('[agent-warm] register failed:', err); }
   registerGitHandlers(ipcMain, ctx);
   registerCloudHandlers(ipcMain, ctx);
   registerCheckpointHandlers(ipcMain, ctx);
