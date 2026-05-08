@@ -57,30 +57,66 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
       return null;
     } catch { return null; }
   }
-  // Update the same file when a fresh session_id is issued by the SDK.
-  function persistSessionId(workDir, sessionId) {
-    if (!workDir || !sessionId) return;
+  // Read+modify+write the history object. Returns the saved object so
+  // callers can chain reads (e.g. recent-history injection) without a
+  // second disk hit.
+  function readHistoryRaw(workDir) {
+    const empty = { sessionId: null, updatedAt: null, messages: [] };
+    if (!workDir) return empty;
+    try {
+      const f = path.join(workDir, '.pipilot', '_pipilot_history.json');
+      if (!fs.existsSync(f)) return empty;
+      const parsed = JSON.parse(fs.readFileSync(f, 'utf8'));
+      if (Array.isArray(parsed)) return { sessionId: null, updatedAt: null, messages: parsed };
+      if (parsed && typeof parsed === 'object') return {
+        sessionId: parsed.sessionId || null,
+        updatedAt: parsed.updatedAt || null,
+        messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      };
+      return empty;
+    } catch { return empty; }
+  }
+  function writeHistoryRaw(workDir, raw) {
+    if (!workDir) return;
     try {
       const dir = path.join(workDir, '.pipilot');
       try { fs.mkdirSync(dir, { recursive: true }); } catch {}
       const f = path.join(dir, '_pipilot_history.json');
-      let raw = { sessionId: null, updatedAt: null, messages: [] };
-      try {
-        const parsed = JSON.parse(fs.readFileSync(f, 'utf8'));
-        if (Array.isArray(parsed)) raw.messages = parsed;
-        else if (parsed && typeof parsed === 'object') raw = {
-          sessionId: parsed.sessionId || null,
-          updatedAt: parsed.updatedAt || null,
-          messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-        };
-      } catch {}
-      if (raw.sessionId === sessionId) return;
-      raw.sessionId = sessionId;
-      raw.updatedAt = new Date().toISOString();
-      fs.writeFileSync(f, JSON.stringify(raw, null, 2), 'utf8');
+      const out = {
+        sessionId: raw.sessionId || null,
+        updatedAt: new Date().toISOString(),
+        messages: Array.isArray(raw.messages) ? raw.messages : [],
+      };
+      fs.writeFileSync(f, JSON.stringify(out, null, 2), 'utf8');
     } catch (err) {
-      console.error('[agent-warm] persistSessionId failed:', err.message);
+      console.error('[agent-warm] writeHistoryRaw failed:', err.message);
     }
+  }
+  // Append a {role, content, timestamp} entry. Same shape + 40-message
+  // cap the cold path uses, so the wiki + recent-conversation viewers
+  // can't tell which path produced an entry.
+  function appendHistoryEntry(workDir, entry) {
+    if (!workDir || !entry) return;
+    try {
+      if (entry.role === 'assistant' && entry.content && entry.content.length > 300) {
+        entry.content = entry.content.slice(0, 300) + '...';
+      }
+      const raw = readHistoryRaw(workDir);
+      raw.messages.push(entry);
+      if (raw.messages.length > 40) raw.messages = raw.messages.slice(-40);
+      writeHistoryRaw(workDir, raw);
+    } catch (err) {
+      console.error('[agent-warm] appendHistoryEntry failed:', err.message);
+    }
+  }
+
+  // Update the same file when a fresh session_id is issued by the SDK.
+  function persistSessionId(workDir, sessionId) {
+    if (!workDir || !sessionId) return;
+    const raw = readHistoryRaw(workDir);
+    if (raw.sessionId === sessionId) return;
+    raw.sessionId = sessionId;
+    writeHistoryRaw(workDir, raw);
   }
 
   // Build the SDK options for a fresh warm session. Workspace-stable;
@@ -174,7 +210,27 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
             persistSessionId(projectPath, sid);
           },
         });
+        // Accumulate assistant text for the current turn so we can
+        // write a single history entry at result-time. Cold path does
+        // the same — chat.js shows a stream of bubbles, the persisted
+        // log keeps just the final text (capped to 300 chars by
+        // appendHistoryEntry).
+        if (msg && msg.type === 'assistant') {
+          for (const b of (msg.message?.content || [])) {
+            if (b?.type === 'text' && typeof b.text === 'string') {
+              t.assistantText = (t.assistantText || '') + b.text;
+            }
+          }
+        }
         if (msg && msg.type === 'result') {
+          // Persist the assistant turn before we clear state.
+          if (t.assistantText) {
+            appendHistoryEntry(projectPath, {
+              role: 'assistant',
+              content: t.assistantText,
+              timestamp: new Date().toISOString(),
+            });
+          }
           // Turn complete — clear so the next agent:warm-send can take.
           streamToWorkspace.delete(t.streamId);
           entry.currentTurn = null;
@@ -209,9 +265,17 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
     // `agent.send` listener machinery (preload streamListeners) works
     // without a second subscription path.
     const channel = `agent:event:${streamId}`;
-    entry.currentTurn = { streamId, channel };
+    entry.currentTurn = { streamId, channel, assistantText: '' };
     streamToWorkspace.set(streamId, projectPath);
     try {
+      // Persist the user turn BEFORE we hand to the SDK. Same shape
+      // and 40-message cap the cold path uses, so the wiki + recent-
+      // conversation viewers can't tell which path produced an entry.
+      appendHistoryEntry(projectPath, {
+        role: 'user',
+        content: String(message),
+        timestamp: new Date().toISOString(),
+      });
       entry.session.send(String(message));
       return { ok: true, channel };
     } catch (err) {
