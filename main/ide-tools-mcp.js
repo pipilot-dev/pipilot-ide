@@ -22,6 +22,41 @@ function buildIdeTools(sdk, ctx) {
     return `${label}:\n${JSON.stringify(payload, null, 2)}`;
   }
 
+  // Spill long browser-tool payloads to disk so we don't blow the
+  // agent's context with a 50 KB get_text dump. The full content is
+  // saved under <tmp>/pipilot-browser-text/, the response shows the
+  // first `inlineLimit` chars + a path the Read tool can pull the
+  // rest from. Returns the response text.
+  function spillIfLong(label, body, inlineLimit, ext) {
+    const text = String(body || '');
+    if (text.length <= inlineLimit) return text;
+    let savedPath = null;
+    try {
+      const os = require('os');
+      const dir = path.join(os.tmpdir(), 'pipilot-browser-text');
+      try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+      const ts = Date.now();
+      const rand = Math.random().toString(36).slice(2, 8);
+      savedPath = path.join(dir, `${label}-${ts}-${rand}.${ext || 'txt'}`);
+      fs.writeFileSync(savedPath, text, 'utf8');
+    } catch (err) {
+      // Spill failed — fall back to the old "show head + suffix note"
+      // behaviour so the agent at least gets something.
+      console.warn('[browser-tools] spill failed:', err.message);
+      return text.slice(0, inlineLimit) + `\n…\n[truncated, ${text.length} total chars — could not spill to disk: ${err.message}]`;
+    }
+    const head = text.slice(0, inlineLimit);
+    return [
+      head,
+      '',
+      '…',
+      '',
+      `[truncated — ${text.length.toLocaleString()} total chars; ${(inlineLimit).toLocaleString()} shown above]`,
+      `Full ${ext === 'html' ? 'HTML' : 'text'} written to: ${savedPath}`,
+      `Use the Read tool on that path to load the rest.`,
+    ].join('\n');
+  }
+
   return [
     sdk.tool('reason',
       'Record your private thinking in ONE call before producing your text reply. Pass the full reasoning as a single `thought` field — synthesize all your analysis (clarify, options, tradeoffs, decision) into one structured markdown block. Do NOT make multiple reason calls per turn. The IDE renders the call in a collapsed Chain of Thought panel separate from your reply. After the call, write your user-facing answer as normal markdown text. The tool returns a short ack — ignore it.',
@@ -448,27 +483,24 @@ function buildIdeTools(sdk, ctx) {
       }
     ),
     sdk.tool('browser_get_text',
-      'Extract visible text from the page (or just the matched element if selector is given). Best for reading article body, search results, etc.',
+      'Extract visible text from the page (or just the matched element if selector is given). Best for reading article body, search results, etc. If the result is longer than ~8 KB the full text is written to a temp file and the response truncates with a path the Read tool can pull the rest from.',
       { tabId: z.string().optional(), selector: z.string().optional().describe('Optional CSS selector — omit to get the whole document body text') },
       async (args) => {
         try {
           const r = await browserCtl.browserExec('get_text', args, 30000);
           const text = r?.text || '';
-          // Cap response to avoid blowing the context — first 8000 chars
-          const capped = text.length > 8000 ? text.slice(0, 8000) + `\n…\n[truncated, ${text.length} total chars]` : text;
-          return { content: [{ type: 'text', text: capped || '(no text)' }] };
+          return { content: [{ type: 'text', text: spillIfLong('text', text, 8000, 'txt') || '(no text)' }] };
         } catch (e) { return { content: [{ type: 'text', text: `browser_get_text error: ${e.message}` }], isError: true }; }
       }
     ),
     sdk.tool('browser_get_html',
-      'Get outerHTML of the document or a matched element. Useful for parsing structured pages — prefer browser_get_text for readability.',
+      'Get outerHTML of the document or a matched element. Useful for parsing structured pages — prefer browser_get_text for readability. If the result is longer than ~12 KB the full HTML is written to a temp file and the response truncates with a path the Read tool can pull the rest from.',
       { tabId: z.string().optional(), selector: z.string().optional() },
       async (args) => {
         try {
           const r = await browserCtl.browserExec('get_html', args, 30000);
           const html = r?.html || '';
-          const capped = html.length > 12000 ? html.slice(0, 12000) + `\n…\n[truncated, ${html.length} total chars]` : html;
-          return { content: [{ type: 'text', text: capped || '(no html)' }] };
+          return { content: [{ type: 'text', text: spillIfLong('html', html, 12000, 'html') || '(no html)' }] };
         } catch (e) { return { content: [{ type: 'text', text: `browser_get_html error: ${e.message}` }], isError: true }; }
       }
     ),
