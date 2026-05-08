@@ -1975,6 +1975,18 @@
     browser_set_viewport: S('<rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/>'),
     browser_reset_viewport:S('<rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/><path d="M19 9l-3 3 3 3"/>'),
     browser_cookies_get:  S('<circle cx="12" cy="12" r="9"/><circle cx="9" cy="9" r="1"/><circle cx="14" cy="13" r="1"/><circle cx="10" cy="15" r="1"/><circle cx="15" cy="8" r="1"/>'),
+    browser_cookies_set:  S('<circle cx="12" cy="12" r="9"/><circle cx="9" cy="9" r="1"/><circle cx="14" cy="13" r="1"/><path d="M16 5v3M14.5 6.5h3"/>'),
+    browser_cookies_clear:S('<circle cx="12" cy="12" r="9"/><path d="M8 8l8 8M16 8l-8 8"/>'),
+    browser_storage_get:  S('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M9 4v16"/><circle cx="14.5" cy="14.5" r="1.5" fill="currentColor"/>'),
+    browser_storage_set:  S('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M9 4v16"/><path d="M14 14h3M15.5 12.5v3"/>'),
+    browser_storage_remove:S('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M9 4v16"/><path d="M14 14h3"/>'),
+    browser_storage_clear:S('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M9 4v16"/><path d="M13 12l4 4M17 12l-4 4"/>'),
+    browser_find_by_role: S('<circle cx="11" cy="11" r="6"/><line x1="20" y1="20" x2="15.5" y2="15.5"/><path d="M8 11h6M11 8v6"/>'),
+    browser_find_by_text: S('<circle cx="11" cy="11" r="6"/><line x1="20" y1="20" x2="15.5" y2="15.5"/><path d="M8 10h6M8 13h4"/>'),
+    browser_find_by_label:S('<circle cx="11" cy="11" r="6"/><line x1="20" y1="20" x2="15.5" y2="15.5"/><path d="M9 11h4"/>'),
+    browser_set_extra_headers:  S('<rect x="3" y="4" width="18" height="6" rx="1"/><path d="M3 14h18M3 18h12"/>'),
+    browser_clear_extra_headers:S('<rect x="3" y="4" width="18" height="6" rx="1"/><path d="M5 6h2M9 6h2M13 6h2M17 6h2"/><path d="M7 14l4 4M11 14l-4 4"/>'),
+    browser_wait_for_download:  S('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'),
     browser_pdf:          S('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 14h.01M11 14h2"/>'),
     /* RETIRED — coordinate-input + game-bot pill icons. Re-enable in lockstep with the matching tools.
     browser_click_at:     S('<path d="M3 3l7 17 2-7 7-2z"/><path d="M16 16l5 5"/>'),
@@ -2039,6 +2051,18 @@
     browser_set_viewport: 'Browser · Viewport',
     browser_reset_viewport: 'Browser · Reset Viewport',
     browser_cookies_get: 'Browser · Cookies',
+    browser_cookies_set: 'Browser · Set Cookie',
+    browser_cookies_clear: 'Browser · Clear Cookies',
+    browser_storage_get: 'Browser · Storage',
+    browser_storage_set: 'Browser · Set Storage',
+    browser_storage_remove: 'Browser · Remove Storage',
+    browser_storage_clear: 'Browser · Clear Storage',
+    browser_find_by_role: 'Browser · Find by Role',
+    browser_find_by_text: 'Browser · Find by Text',
+    browser_find_by_label: 'Browser · Find by Label',
+    browser_set_extra_headers: 'Browser · Set Headers',
+    browser_clear_extra_headers: 'Browser · Clear Headers',
+    browser_wait_for_download: 'Browser · Wait Download',
     browser_pdf: 'Browser · PDF',
     /* RETIRED — coordinate-input + game-bot pill labels. Re-enable in lockstep with the matching tools.
     browser_click_at: 'Browser · Click @',
@@ -2080,7 +2104,13 @@
     browser_hover: '#56d4dd', browser_drag: '#56d4dd', browser_scroll_to: '#56d4dd',
     browser_upload: '#56d4dd', browser_wait_load: '#56d4dd',
     browser_set_viewport: '#56d4dd', browser_reset_viewport: '#56d4dd',
-    browser_cookies_get: '#56d4dd', browser_pdf: '#56d4dd',
+    browser_cookies_get: '#56d4dd', browser_cookies_set: '#56d4dd', browser_cookies_clear: '#56d4dd',
+    browser_storage_get: '#56d4dd', browser_storage_set: '#56d4dd',
+    browser_storage_remove: '#56d4dd', browser_storage_clear: '#56d4dd',
+    browser_find_by_role: '#56d4dd', browser_find_by_text: '#56d4dd', browser_find_by_label: '#56d4dd',
+    browser_set_extra_headers: '#56d4dd', browser_clear_extra_headers: '#56d4dd',
+    browser_wait_for_download: '#56d4dd',
+    browser_pdf: '#56d4dd',
     /* RETIRED — coordinate-input + game-bot pill colors. Re-enable in lockstep with the matching tools.
     browser_click_at: '#56d4dd', browser_mouse_move: '#56d4dd',
     browser_drag_at: '#56d4dd', browser_poll_until: '#56d4dd', browser_sample: '#56d4dd',
@@ -2213,6 +2243,27 @@
     if (n === 'browser_wait_load') return input.idleMs ? `idle ${input.idleMs}ms` : '';
     if (n === 'browser_set_viewport') return `${input.width}×${input.height}`;
     if (n === 'browser_reset_viewport' || n === 'browser_cookies_get') return '';
+    if (n === 'browser_cookies_set') return input.name ? `${input.name}=…` : '';
+    if (n === 'browser_cookies_clear') return '';
+    if (n === 'browser_storage_get' || n === 'browser_storage_set' ||
+        n === 'browser_storage_remove' || n === 'browser_storage_clear') {
+      const t = input.type || 'local';
+      if (n === 'browser_storage_clear') return t;
+      return input.key ? `${t}.${input.key}` : `${t} (all)`;
+    }
+    if (n === 'browser_find_by_role') {
+      const role = input.role || '';
+      const name = input.name ? ` "${input.name}"` : '';
+      return role + name;
+    }
+    if (n === 'browser_find_by_text') return `"${(input.text || '').slice(0, 40)}"${input.exact ? ' (exact)' : ''}`;
+    if (n === 'browser_find_by_label') return `"${(input.label || '').slice(0, 40)}"`;
+    if (n === 'browser_set_extra_headers') {
+      const keys = Object.keys(input.headers || {});
+      return keys.length ? keys.slice(0, 3).join(', ') + (keys.length > 3 ? `, +${keys.length - 3}` : '') : '';
+    }
+    if (n === 'browser_clear_extra_headers') return '';
+    if (n === 'browser_wait_for_download') return input.timeoutMs ? `≤${input.timeoutMs}ms` : '';
     if (n === 'browser_pdf') return input.name || '';
     /* RETIRED — coordinate-input + game-bot previewFor cases. Re-enable in lockstep with the matching tools.
     if (n === 'browser_click_at') return `(${input.x}, ${input.y})`;
