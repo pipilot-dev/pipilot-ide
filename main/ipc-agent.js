@@ -312,9 +312,53 @@ module.exports = function register(ipcMain, ctx) {
       console.warn('[agent] No projectPath — history file will NOT be created');
     }
 
-    function readHistory() {
-      if (!historyFile) return [];
-      try { return JSON.parse(fs.readFileSync(historyFile, 'utf8')); } catch { return []; }
+    // History file format. Was a bare array of message entries; we
+    // upgraded it to an object so the SDK's session_id (handed out by
+    // the system/init message) can ride at the top of the file. Step 2
+    // will use that id to resume warm sessions across IDE restarts —
+    // for now we just persist it.
+    //
+    //   {
+    //     "sessionId": "abc-123-...",      // SDK session, may be null
+    //     "updatedAt": "2026-...",         // ISO timestamp of last write
+    //     "messages": [{ role, content, timestamp }, ...]
+    //   }
+    //
+    // readHistoryRaw returns the full object (creating an empty shell if
+    // the file is missing/corrupt). readHistory returns just the
+    // messages array — every existing caller that did `for (const m of
+    // history)` keeps working unchanged.
+    function readHistoryRaw() {
+      const empty = { sessionId: null, updatedAt: null, messages: [] };
+      if (!historyFile) return empty;
+      try {
+        const parsed = JSON.parse(fs.readFileSync(historyFile, 'utf8'));
+        // Legacy: file is a bare array of messages.
+        if (Array.isArray(parsed)) return { sessionId: null, updatedAt: null, messages: parsed };
+        if (parsed && typeof parsed === 'object') {
+          return {
+            sessionId: parsed.sessionId || null,
+            updatedAt: parsed.updatedAt || null,
+            messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+          };
+        }
+        return empty;
+      } catch { return empty; }
+    }
+    function readHistory() { return readHistoryRaw().messages; }
+
+    function writeHistoryRaw(obj) {
+      if (!historyFile) return;
+      try {
+        const out = {
+          sessionId: obj.sessionId || null,
+          updatedAt: new Date().toISOString(),
+          messages: Array.isArray(obj.messages) ? obj.messages : [],
+        };
+        fs.writeFileSync(historyFile, JSON.stringify(out, null, 2), 'utf8');
+      } catch (err) {
+        console.error('[agent] Failed to write history:', err.message);
+      }
     }
 
     function appendHistory(entry) {
@@ -323,12 +367,28 @@ module.exports = function register(ipcMain, ctx) {
         if (entry.role === 'assistant' && entry.content && entry.content.length > 300) {
           entry.content = entry.content.slice(0, 300) + '...';
         }
-        let h = readHistory();
-        h.push(entry);
-        if (h.length > 40) h = h.slice(-40);
-        fs.writeFileSync(historyFile, JSON.stringify(h, null, 2), 'utf8');
+        const raw = readHistoryRaw();
+        raw.messages.push(entry);
+        if (raw.messages.length > 40) raw.messages = raw.messages.slice(-40);
+        writeHistoryRaw(raw);
       } catch (err) {
         console.error('[agent] Failed to write history:', err.message);
+      }
+    }
+
+    // Stamp the SDK's session_id at the top of the history file the
+    // first time we see it for this turn. Cheap (single read+write of a
+    // small file) and idempotent — only writes if the id actually
+    // changed, so we don't churn updatedAt on every init message.
+    function persistSessionId(sessionId) {
+      if (!historyFile || !sessionId) return;
+      try {
+        const raw = readHistoryRaw();
+        if (raw.sessionId === sessionId) return;
+        raw.sessionId = sessionId;
+        writeHistoryRaw(raw);
+      } catch (err) {
+        console.error('[agent] Failed to persist sessionId:', err.message);
       }
     }
 
@@ -856,6 +916,9 @@ Always show available servers first, let user choose, then configure.`,
 
         if (msg.type === 'system') {
           if (msg.subtype === 'init') {
+            // Stamp the SDK session id at the top of .pipilot history
+            // so step 2 (warm-session wiring) can pass it as `resume`.
+            persistSessionId(msg.session_id);
             send(event, ch, {
               type: 'system',
               subtype: 'init',
