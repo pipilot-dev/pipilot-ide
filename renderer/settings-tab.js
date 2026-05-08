@@ -410,6 +410,9 @@
         <div class="st-card">
           ${rowSwitch('autoUpdateWiki', 'Auto-Update Wiki', 'Refresh project wiki docs after the agent finishes a meaningful change.', settings.autoUpdateWiki !== false)}
           ${rowNumber('__autoUpdateWikiCooldownMin', 'Wiki Cooldown (minutes)', 'Minimum gap between automatic wiki refreshes.', cooldownMin, 1, 240)}
+        </div>
+        <div class="st-card">
+          ${rowSwitch('agentWarmSessions', 'Warm Agent Sessions (experimental)', 'Keep one Claude SDK process alive per workspace so follow-up chat messages skip the ~12 s cold start. First message still pays the boot cost. Disables for plan mode and chats with attachments.', !!settings.agentWarmSessions)}
         </div>`;
     }
     if (id === 'features') {

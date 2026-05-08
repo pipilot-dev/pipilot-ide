@@ -5540,16 +5540,33 @@
       }
     } catch (err) { console.warn('[chat] browser-context inject failed:', err); }
 
-    activeStream = api.agent.send({
-      sessionId: currentSessionId,
-      projectPath: state.projectPath,
-      message: messageToSend,
-      mode: state.agentMode,
-      effort: state.reasoningEffort || 'medium',
-      attachments: sentAttachments,
-    }, (evt) => {
-      handleAgentEvent(evt);
-    });
+    // Warm-session opt-in: when the user has enabled it AND the call
+    // doesn't need cold-only features (plan mode, attachments — those
+    // need the cold path's per-call prompt assembly), route through
+    // api.agent.warmSend. Same event shape, no boot cost on follow-ups.
+    const warmEligible = !!state.settings?.agentWarmSessions
+      && !!state.projectPath
+      && state.agentMode !== 'plan'
+      && !(Array.isArray(sentAttachments) && sentAttachments.length);
+    if (warmEligible && api.agent.warmSend) {
+      activeStream = api.agent.warmSend({
+        projectPath: state.projectPath,
+        message: messageToSend,
+      }, (evt) => {
+        handleAgentEvent(evt);
+      });
+    } else {
+      activeStream = api.agent.send({
+        sessionId: currentSessionId,
+        projectPath: state.projectPath,
+        message: messageToSend,
+        mode: state.agentMode,
+        effort: state.reasoningEffort || 'medium',
+        attachments: sentAttachments,
+      }, (evt) => {
+        handleAgentEvent(evt);
+      });
+    }
   }
 
   // Detect file-mutating tool calls in the just-finished turn. We only

@@ -158,6 +158,53 @@ contextBridge.exposeInMainWorld('electronAPI', {
       };
     },
     stop: (streamId) => ipcRenderer.invoke('agent:stop', streamId),
+    // ── Warm-session path (opt-in) ───────────────────────────────
+    // Same wire shape as agent.send so chat.js can swap call sites
+    // with a one-line conditional. Lazily calls agent:warm-open on
+    // first use so the renderer doesn't have to manage the lifecycle.
+    warmSend: (payload, onEvent) => {
+      const streamId = `agent-warm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const ch = `agent:event:${streamId}`;
+      const fn = (_e, evt) => onEvent(evt);
+      ipcRenderer.on(ch, fn);
+      streamListeners.set(streamId, { ch, fn });
+      const projectPath = payload.projectPath;
+      // Open-then-send. agent:warm-open is idempotent so calling on
+      // every send is fine — the second call returns reused:true.
+      (async () => {
+        try {
+          const opened = await ipcRenderer.invoke('agent:warm-open', { projectPath });
+          if (!opened || !opened.ok) {
+            onEvent({ type: 'error', error: 'warm-open failed: ' + (opened?.error || 'unknown') });
+            return;
+          }
+          const r = await ipcRenderer.invoke('agent:warm-send', {
+            streamId,
+            projectPath,
+            message: payload.message,
+          });
+          if (!r || !r.ok) onEvent({ type: 'error', error: 'warm-send failed: ' + (r?.error || 'unknown') });
+        } catch (err) {
+          onEvent({ type: 'error', error: String(err && err.message || err) });
+        }
+      })();
+      return {
+        warm: true,
+        stop: () => ipcRenderer.invoke('agent:warm-interrupt', { streamId }),
+        // No `answer` — AskUserQuestion goes through the shared
+        // agent:answer-question handler (cold path's IPC), same as
+        // the cold path. The bridge's pendingInputRequests is on ctx.
+        dispose: () => {
+          ipcRenderer.removeListener(ch, fn);
+          streamListeners.delete(streamId);
+        },
+      };
+    },
+    warmOpen: (projectPath) => ipcRenderer.invoke('agent:warm-open', { projectPath }),
+    warmClose: (projectPath) => ipcRenderer.invoke('agent:warm-close', { projectPath }),
+    warmSetModel: (projectPath, model) => ipcRenderer.invoke('agent:warm-set-model', { projectPath, model }),
+    warmSetPermissionMode: (projectPath, mode) => ipcRenderer.invoke('agent:warm-set-permission-mode', { projectPath, mode }),
+    warmStatus: () => ipcRenderer.invoke('agent:warm-status'),
     // AskUserQuestion (human-in-the-loop)
     answerQuestion: (requestId, answers) => ipcRenderer.invoke('agent:answer-question', { requestId, answers }),
     listSessions: (projectPath) => ipcRenderer.invoke('agent:list-sessions', projectPath),

@@ -199,7 +199,10 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
       // belt-and-braces guard so we don't interleave streams.
       return { ok: false, error: 'turn already in progress on this workspace' };
     }
-    const channel = `agent:stream:${streamId}`;
+    // Match the cold path's channel format so the renderer's existing
+    // `agent.send` listener machinery (preload streamListeners) works
+    // without a second subscription path.
+    const channel = `agent:event:${streamId}`;
     entry.currentTurn = { streamId, channel };
     streamToWorkspace.set(streamId, projectPath);
     try {
