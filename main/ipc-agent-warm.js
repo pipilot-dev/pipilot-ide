@@ -198,6 +198,12 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
         sessionId: baseOptions.resume || null,
         currentTurn: null,
         openedAt: Date.now(),
+        // Counts user turns we've sent into this warm session. Used to
+        // decide whether to inject prior-conversation context into the
+        // prompt: yes on turn 0 (the SDK process is fresh, has no
+        // memory of pre-restart history), no thereafter (SDK retains
+        // context within a session, re-injecting would just waste tokens).
+        turnCount: 0,
       };
       sessions.set(projectPath, entry);
 
@@ -268,15 +274,46 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
     entry.currentTurn = { streamId, channel, assistantText: '' };
     streamToWorkspace.set(streamId, projectPath);
     try {
-      // Persist the user turn BEFORE we hand to the SDK. Same shape
-      // and 40-message cap the cold path uses, so the wiki + recent-
-      // conversation viewers can't tell which path produced an entry.
+      // Persist the user turn (raw text, no injection) BEFORE we touch
+      // the SDK. Same shape + 40-message cap as cold so wiki / recent-
+      // conversation viewers can't tell the paths apart on disk.
       appendHistoryEntry(projectPath, {
         role: 'user',
         content: String(message),
         timestamp: new Date().toISOString(),
       });
-      entry.session.send(String(message));
+
+      // First turn of a fresh warm session: inject prior-conversation
+      // context the same way cold path's agent:send does. The SDK
+      // process holds no memory of pre-restart turns; subsequent turns
+      // inside this session don't need it (SDK keeps context natively).
+      let promptForSdk = String(message);
+      if (entry.turnCount === 0) {
+        try {
+          const raw = readHistoryRaw(projectPath);
+          // Drop the user entry we just appended above (it'd be a
+          // self-reference in the "Previous conversation:" block).
+          const prior = (raw.messages || []).slice(0, -1);
+          const recent = prior
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .slice(-6); // last 3 pairs, same cap as cold
+          if (recent.length > 0) {
+            const MAX_MSG_LEN = 400;
+            const ctxBlock = recent.map(m => {
+              const c = m.content || '';
+              const trimmed = c.length > MAX_MSG_LEN ? c.slice(0, MAX_MSG_LEN) + '...[truncated]' : c;
+              return `${m.role === 'user' ? 'Human' : 'Assistant'}: ${trimmed}`;
+            }).join('\n\n');
+            promptForSdk = `Previous conversation:\n${ctxBlock}\n\nCurrent request: ${message}`;
+            console.log(`[agent-warm] Injected ${recent.length} prior entries on turn 0`);
+          }
+        } catch (err) {
+          console.warn('[agent-warm] history injection failed:', err.message);
+        }
+      }
+
+      entry.session.send(promptForSdk);
+      entry.turnCount += 1;
       return { ok: true, channel };
     } catch (err) {
       entry.currentTurn = null;

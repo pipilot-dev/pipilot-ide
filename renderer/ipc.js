@@ -46,8 +46,10 @@ window.PiPilot.state = {
     builtinDependencyGraph: true,
     // Warm agent sessions: keep one Claude SDK subprocess alive per
     // workspace so follow-up chat messages skip the ~12 s cold start.
-    // Opt-in for now while the new path bakes; flipped via Settings.
-    agentWarmSessions: false,
+    // ON by default — fall back via the Settings toggle if you hit a
+    // case the warm path mishandles (the cold agent:send path stays
+    // intact for plan mode, attachments, missions, etc.).
+    agentWarmSessions: true,
   },
   agentMode: 'agent', // 'agent' | 'plan'
 };

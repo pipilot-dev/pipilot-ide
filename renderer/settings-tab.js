@@ -412,7 +412,7 @@
           ${rowNumber('__autoUpdateWikiCooldownMin', 'Wiki Cooldown (minutes)', 'Minimum gap between automatic wiki refreshes.', cooldownMin, 1, 240)}
         </div>
         <div class="st-card">
-          ${rowSwitch('agentWarmSessions', 'Warm Agent Sessions (experimental)', 'Keep one Claude SDK process alive per workspace so follow-up chat messages skip the ~12 s cold start. First message still pays the boot cost. Disables for plan mode and chats with attachments.', !!settings.agentWarmSessions)}
+          ${rowSwitch('agentWarmSessions', 'Warm Agent Sessions', 'Keep one Claude SDK process alive per workspace so follow-up chat messages skip the ~12 s cold start. First message still pays the boot cost. Plan mode and chats with attachments fall back to the cold path automatically.', settings.agentWarmSessions !== false)}
         </div>`;
     }
     if (id === 'features') {
