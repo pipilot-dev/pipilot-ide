@@ -386,11 +386,18 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
   });
 
   // Best-effort cleanup on app quit so the spawned CLI subprocesses
-  // don't outlive the IDE.
+  // don't outlive the IDE. Includes warm mission sessions (kept in a
+  // separate cache inside main/mission-agent.js).
   app.on('before-quit', async () => {
     await Promise.all(
       Array.from(sessions.values()).map((e) => e.session.close().catch(() => {}))
     );
     sessions.clear();
+    try {
+      const { closeAllWarmMissions } = require('./mission-agent');
+      if (typeof closeAllWarmMissions === 'function') closeAllWarmMissions();
+    } catch (err) {
+      console.warn('[agent-warm] warm-mission cleanup failed:', err.message);
+    }
   });
 };
