@@ -14,7 +14,7 @@
     if (markedLoading) return markedLoading;
     markedLoading = new Promise((resolve) => {
       const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js';
+      s.src = 'public/vendor/marked/marked.min.js';
       s.onload = () => {
         if (window.marked && window.marked.setOptions) {
           window.marked.setOptions({ breaks: true, gfm: true });
@@ -23,7 +23,7 @@
         // Also load Mermaid for diagram rendering
         if (!window.mermaid) {
           const m = document.createElement('script');
-          m.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
+          m.src = 'public/vendor/mermaid/mermaid.min.js';
           m.onload = () => {
             if (window.mermaid) window.mermaid.initialize({ startOnLoad: false, theme: 'dark' });
           };

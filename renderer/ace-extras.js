@@ -133,7 +133,12 @@
     //
     // Try cdnjs first (we already use it for ace.js), fall back to jsdelivr,
     // then to unpkg. All three serve the same ace-builds bundle.
+    // Local-first: if the optional public/vendor/ace/emmet.min.js exists
+    // (we may pre-bundle it later), load it without touching the network.
+    // Falls back to public CDNs only when we have connectivity. The npm
+    // ace-builds package doesn't ship emmet.js so we don't depend on it.
     const EMMET_CDNS = [
+      'public/vendor/ace/emmet.min.js',
       'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/emmet.min.js',
       'https://cdn.jsdelivr.net/npm/ace-builds@1.32.9/src-min-noconflict/emmet.js',
       'https://unpkg.com/ace-builds@1.32.9/src-min-noconflict/emmet.js',

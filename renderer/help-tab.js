@@ -44,7 +44,7 @@
     if (markedLoading) return markedLoading;
     markedLoading = new Promise((resolve) => {
       const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js';
+      s.src = 'public/vendor/marked/marked.min.js';
       s.onload = () => {
         if (window.marked && window.marked.setOptions) {
           window.marked.setOptions({ breaks: true, gfm: true });

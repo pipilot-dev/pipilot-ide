@@ -3,10 +3,12 @@
   const bus = window.PiPilot.bus;
   const state = window.PiPilot.state;
 
-  const XTERM_JS = 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js';
-  const XTERM_CSS = 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css';
-  const FIT_JS = 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js';
-  const LINKS_JS = 'https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js';
+  // Bundled locally under public/vendor/xterm/ via scripts/copy-vendor.js
+  // — terminal works fully offline.
+  const XTERM_JS = 'public/vendor/xterm/xterm.js';
+  const XTERM_CSS = 'public/vendor/xterm/xterm.css';
+  const FIT_JS = 'public/vendor/xterm/xterm-addon-fit.js';
+  const LINKS_JS = 'public/vendor/xterm/xterm-addon-web-links.js';
 
   // Per-theme xterm palettes. ANSI colors are theme-authentic; the rest
   // (background, foreground, cursor, selection) get derived from CSS vars

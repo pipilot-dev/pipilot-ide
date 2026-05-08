@@ -334,7 +334,7 @@
     if (html2pdfPromise) return html2pdfPromise;
     html2pdfPromise = new Promise((resolve, reject) => {
       const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js';
+      s.src = 'public/vendor/html2pdf/html2pdf.bundle.min.js';
       s.async = true;
       s.onload = () => window.html2pdf ? resolve(window.html2pdf) : reject(new Error('html2pdf global missing'));
       s.onerror = () => { html2pdfPromise = null; s.remove(); reject(new Error('Failed to load html2pdf.js from CDN')); };

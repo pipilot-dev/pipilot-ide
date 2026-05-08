@@ -34,6 +34,14 @@ if (!fontsOk) {
   process.exit(1);
 }
 
+// 1a. Copy CDN-served libs (ace, xterm, marked, mermaid, html2pdf) into
+//     public/vendor/ so the IDE works fully offline.
+const vendorOk = runNode('copy-vendor', path.join(__dirname, 'copy-vendor.js'));
+if (!vendorOk) {
+  console.error('[postinstall] copy-vendor is required — failing.');
+  process.exit(1);
+}
+
 // 1b. Generate public/icon.ico from public/icon.png so the Windows
 //     installer + Add/Remove Programs entry get a proper branded icon.
 //     Best-effort — falls back to Electron's default if the conversion

@@ -61,6 +61,17 @@ const ALWAYS_DROP = [
   // JWT via the auth-gated proxy at runtime.
   /^[\\/]?auth-token\.bin$/,
   /^[\\/]?test[\\/]/,                      // our own smoke tests, not shipped
+  // Vendored CDN libs are install-time copied to public/vendor/ by
+  // scripts/copy-vendor.js. The original node_modules copies would
+  // double the install size (~50 MB) for no runtime benefit.
+  /[\\/]node_modules[\\/]ace-builds[\\/]/,
+  /[\\/]node_modules[\\/]xterm[\\/]/,
+  /[\\/]node_modules[\\/]xterm-addon-fit[\\/]/,
+  /[\\/]node_modules[\\/]xterm-addon-web-links[\\/]/,
+  /[\\/]node_modules[\\/]mermaid[\\/]/,
+  /[\\/]node_modules[\\/]html2pdf\.js[\\/]/,
+  // marked has a tiny footprint but only the public/vendor copy is used.
+  /[\\/]node_modules[\\/]marked[\\/]/,
 ];
 
 module.exports = {

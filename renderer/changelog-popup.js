@@ -22,7 +22,7 @@
     if (markedReady || window.marked) { markedReady = true; return Promise.resolve(); }
     return new Promise((resolve) => {
       const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js';
+      s.src = 'public/vendor/marked/marked.min.js';
       s.onload = () => { markedReady = true; resolve(); };
       s.onerror = () => { markedReady = false; resolve(); };
       document.head.appendChild(s);

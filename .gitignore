@@ -35,6 +35,10 @@ auth-token.bin
 public/icon.ico
 public/icon.icns
 
+# Vendored CDN libs (ace, xterm, marked, mermaid, html2pdf) — regenerated
+# from node_modules by scripts/copy-vendor.js at every npm install.
+public/vendor/
+
 # Defunct artefact from old Vite migration.
 fiddle-pipilot-ide/
 .pipilot/checkpoints/

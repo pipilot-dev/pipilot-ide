@@ -13,7 +13,9 @@
   if (!hostEl || !tabBarEl) return;
 
   // ---------- Ace base path for dynamic mode/theme loading ----------
-  ace.config.set('basePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/');
+  // Local-first: ace assets ship under public/vendor/ace/ via copy-vendor.js.
+  // Keeps the editor working offline (no CDN round-trip for mode-*.js etc).
+  ace.config.set('basePath', 'public/vendor/ace/');
 
   const Range = ace.require('ace/range').Range;
 
@@ -297,12 +299,12 @@
     if (aceEditor) return aceEditor;
     const _t0 = performance.now();
 
-    // Configure worker path so Ace's built-in syntax checkers (JS, JSON, CSS, etc.) load from CDN
-    ace.config.set('workerPath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7');
-    // Themes are loaded lazily by setTheme() — point at the same CDN so
-    // dracula / github_dark / solarized_* etc. download on demand.
-    ace.config.set('themePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7');
-    ace.config.set('basePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7');
+    // All Ace assets (workers, themes, modes) live in public/vendor/ace/.
+    // Bundled at install time by scripts/copy-vendor.js so the editor works
+    // fully offline.
+    ace.config.set('workerPath', 'public/vendor/ace');
+    ace.config.set('themePath', 'public/vendor/ace');
+    ace.config.set('basePath', 'public/vendor/ace');
 
     // fonts.js owns font resolution: it applies the saved value (id or
     // raw CSS) and returns the final stack to use here. If fonts.js
