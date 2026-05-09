@@ -5898,6 +5898,16 @@
       isSending = false;
       setSending(false);
       bus.emit('agent:status', 'ready');
+      // Optimistically pull the streaming indicator out of the DOM so
+      // the user gets instant feedback. Either the main-side stop
+      // handler will follow up with a synthetic 'result' event (which
+      // finalizeResult() handles) or it won't — either way the
+      // "Working…" dots shouldn't sit there pulsing while we wait
+      // for the SDK to acknowledge the interrupt.
+      try {
+        const streamingEl = currentAssistantEl?.querySelector('.msg-streaming-indicator');
+        if (streamingEl) streamingEl.remove();
+      } catch {}
     });
   }
 

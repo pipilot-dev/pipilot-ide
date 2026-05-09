@@ -329,27 +329,26 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
   });
 
   // ── agent:warm-interrupt ──
-  // Order matters here: we MUST emit a synthetic result before
-  // clearing currentTurn, otherwise the renderer spinner stays up
-  // forever because (a) the dispatch's `if (!t) return` drops any
-  // post-clear SDK messages and (b) the SDK doesn't always emit a
-  // result event after Query.interrupt().
+  // Synthesize the terminal `result` event BEFORE awaiting
+  // session.interrupt(). Two reasons:
+  //   1. Query.interrupt() can be slow or even hang (it's awaiting
+  //      the SDK's IPC ack); the renderer would stay at "Working…"
+  //      until it returned.
+  //   2. After currentTurn is cleared the dispatcher drops every
+  //      message the SDK sends, including any natural result event
+  //      — so we can't rely on the SDK to terminate the turn cleanly.
+  // Emitting first means the renderer hides the spinner and finalises
+  // the message immediately, while interrupt() runs in the background.
   ipcMain.handle('agent:warm-interrupt', async (_e, { streamId } = {}) => {
     const projectPath = streamToWorkspace.get(streamId);
     if (!projectPath) return { ok: false, error: 'no active turn for streamId' };
     const entry = sessions.get(projectPath);
     if (!entry) return { ok: false, error: 'no session' };
     const turn = entry.currentTurn;
-    try {
-      // Tell the SDK to stop generating. Doesn't kill the subprocess
-      // — the warm session lives on, ready for the next turn.
-      try { await entry.session.interrupt(); } catch (err) {
-        console.warn('[agent-warm] interrupt failed:', err.message);
-      }
-      // Hand the renderer a terminal event so chat.js's case 'result'
-      // fires (clears isSending, hides "Working…", saves the partial
-      // assistant message). Same shape cold path emits on abort.
-      if (turn) {
+
+    // 1. Emit synthetic result FIRST.
+    if (turn) {
+      try {
         send(turn.channel, {
           type: 'result',
           subtype: 'aborted',
@@ -364,13 +363,18 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
           result: null,
           errors: null,
         });
-      }
-      streamToWorkspace.delete(streamId);
-      entry.currentTurn = null;
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: err.message };
+      } catch {}
     }
+    // 2. Clear turn state so post-interrupt SDK messages are dropped.
+    streamToWorkspace.delete(streamId);
+    entry.currentTurn = null;
+    // 3. Tell the SDK to actually stop generating. Doesn't kill the
+    //    subprocess — the warm session lives on, ready for the next
+    //    turn. We don't await this; the user already got their
+    //    "stopped" event.
+    Promise.resolve().then(() => entry.session.interrupt())
+      .catch((err) => console.warn('[agent-warm] interrupt failed:', err.message));
+    return { ok: true };
   });
 
   // ── agent:warm-set-model / set-permission-mode ──
