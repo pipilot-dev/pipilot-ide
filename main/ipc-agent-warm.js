@@ -38,6 +38,13 @@ const {
 // models.
 const COMPACT_THRESHOLD_TOKENS = 100_000;
 
+// Belt-and-braces fallback: even if the SDK's usage reporting flakes
+// (we got bitten once when input_tokens excluded cached-read tokens),
+// compact every N user turns so context can't grow unbounded. 8 user
+// turns ≈ 16 messages (user + assistant pairs) — after that level of
+// chat the model is rarely worse off for a summary anyway.
+const COMPACT_THRESHOLD_TURNS = 8;
+
 module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
   // pendingInputRequests is shared with the cold path so the existing
   // `agent:answer-question` handler can resolve answers from either.
@@ -212,11 +219,13 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
         turnCount: 0,
         // Last turn's input-token count. We track this so the next
         // send() can decide whether to fire /compact preemptively
-        // before the model OOCs. The proxy was hitting 292k+ token
-        // requests against models that cap at 196–262k — by then
-        // every fallback model rejected the call. Compacting at 150k
-        // leaves headroom for any of them.
+        // before the model OOCs.
         lastInputTokens: 0,
+        // User turns since the most recent /compact (or session
+        // start). Independent fallback trigger so we still compact
+        // even if SDK usage reporting goes wrong on us — we can't
+        // depend on token counts alone.
+        turnsSinceCompact: 0,
       };
       sessions.set(projectPath, entry);
 
@@ -234,10 +243,11 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
             dispatchSdkMessage(msg, (payload) => send(t.channel, payload));
           }
           if (msg.type === 'result') {
-            // /compact done. Reset token tally — post-compact context
-            // is dramatically smaller. Resolve so the awaiting send()
-            // can fire the user's actual prompt.
+            // /compact done. Reset both fallback counters — post-
+            // compact context is dramatically smaller and we want
+            // to give the model fresh runway before triggering again.
             entry.lastInputTokens = 0;
+            entry.turnsSinceCompact = 0;
             // Belt-and-braces: tell the renderer to hide its shimmer
             // even if the SDK never emitted compact_boundary above
             // (the renderer's case 'compact_boundary' is the normal
@@ -364,19 +374,26 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
         }
       }
 
-      // Auto-compact when the previous turn pushed input tokens past
-      // our safety threshold. The smallest free model in the proxy
-      // chain caps at 196k tokens — we compact at 150k so even after
-      // /compact's own overhead and a moderately-sized next prompt
-      // we stay well under every fallback's ceiling.
-      if (entry.lastInputTokens > COMPACT_THRESHOLD_TOKENS) {
+      // Auto-compact when EITHER:
+      //   1. the previous turn's input tokens (cached + uncached)
+      //      crossed COMPACT_THRESHOLD_TOKENS — primary, accurate
+      //      signal when the SDK's usage object is well-formed.
+      //   2. we've sent COMPACT_THRESHOLD_TURNS user turns since the
+      //      last compact — fallback that fires even if (1)'s token
+      //      counts are missing/wrong (we got burned once when cached
+      //      tokens were excluded). 8 turns ≈ 16 messages.
+      const tokensOver = entry.lastInputTokens > COMPACT_THRESHOLD_TOKENS;
+      const turnsOver  = entry.turnsSinceCompact >= COMPACT_THRESHOLD_TURNS;
+      if (tokensOver || turnsOver) {
         try {
-          // Tell the chat panel to show its shimmer indicator while
-          // /compact runs. We end it on compact_boundary (or on the
-          // 60s safety timeout below).
+          const reason = tokensOver
+            ? `~${Math.round(entry.lastInputTokens / 1000)}k tokens`
+            : `${entry.turnsSinceCompact} turns since last compact`;
+          console.log(`[agent-warm] auto-/compact triggered: ${reason}`);
           send(channel, {
             type: 'compacting_start',
             preTokens: entry.lastInputTokens,
+            preTurns: entry.turnsSinceCompact,
             // Same friendly phrasing as the SDK-internal auto-compact
             // pill — users see one consistent indicator regardless of
             // who triggered the compaction.
@@ -397,6 +414,7 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
                 entry.currentTurn.onCompactDone = null;
                 entry.currentTurn.compacting = false;
                 entry.lastInputTokens = 0;
+                entry.turnsSinceCompact = 0;
                 resolve();
               }
             }, 60000);
@@ -409,6 +427,7 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
 
       entry.session.send(promptForSdk);
       entry.turnCount += 1;
+      entry.turnsSinceCompact += 1;
       return { ok: true, channel };
     } catch (err) {
       entry.currentTurn = null;
