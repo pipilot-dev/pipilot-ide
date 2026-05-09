@@ -424,6 +424,53 @@ module.exports = function register(ipcMain, ctx) {
     return { ok: true };
   });
 
+  // OS → IDE drag-and-drop. `sources` is an array of absolute paths
+  // outside the project (resolved by webUtils.getPathForFile in
+  // preload). `destDir` is the project-relative or absolute directory
+  // they should land in. Files and directories are copied
+  // recursively. Name collisions get a " (n)" suffix so we never
+  // silently overwrite the user's existing files.
+  ipcMain.handle('files:import-external', async (_e, { sources = [], destDir } = {}) => {
+    if (!destDir || !Array.isArray(sources) || !sources.length) {
+      return { ok: false, error: 'sources and destDir required' };
+    }
+    const dst = safeAbsolute(destDir);
+    await fsp.mkdir(dst, { recursive: true });
+
+    async function uniqueDestPath(dir, name) {
+      let candidate = path.join(dir, name);
+      try { await fsp.access(candidate); }
+      catch { return candidate; } // doesn't exist → use as-is
+      const ext = path.extname(name);
+      const base = ext ? name.slice(0, -ext.length) : name;
+      for (let i = 1; i < 1000; i++) {
+        candidate = path.join(dir, `${base} (${i})${ext}`);
+        try { await fsp.access(candidate); }
+        catch { return candidate; }
+      }
+      throw new Error('too many name collisions');
+    }
+
+    const imported = [];
+    const errors = [];
+    for (const src of sources) {
+      if (!src || typeof src !== 'string') continue;
+      try {
+        const stat = await fsp.stat(src);
+        const dest = await uniqueDestPath(dst, path.basename(src));
+        if (stat.isDirectory()) {
+          await fsp.cp(src, dest, { recursive: true });
+        } else {
+          await fsp.copyFile(src, dest);
+        }
+        imported.push(dest);
+      } catch (err) {
+        errors.push({ src, error: err.message });
+      }
+    }
+    return { ok: errors.length === 0, imported, errors };
+  });
+
   ipcMain.handle('files:stat', async (_e, p) => {
     try {
       const abs = safeAbsolute(p);

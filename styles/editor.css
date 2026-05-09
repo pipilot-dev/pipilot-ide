@@ -489,6 +489,14 @@
   outline: 1px dashed var(--accent);
   outline-offset: -1px;
 }
+/* Whole-tree drop highlight — applied when the user is dragging
+   anywhere inside .file-tree but not over a specific folder row.
+   The drop lands at the project root (state.projectPath). */
+.file-tree.drop-target-root {
+  outline: 1px dashed var(--accent);
+  outline-offset: -2px;
+  background: var(--accent-dim);
+}
 
 .tree-chevron {
   width: 14px;

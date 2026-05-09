@@ -32,6 +32,69 @@
     return parts[parts.length - 1] || p;
   }
 
+  // Shared drop handler for the explorer: handles two cases.
+  //   1. External (OS file manager → IDE): e.dataTransfer.files is
+  //      populated. We resolve each File to an absolute path via the
+  //      preload-exposed webUtils.getPathForFile, then ask main to
+  //      copy them into destDir. Dirs are copied recursively, name
+  //      collisions get a " (n)" suffix.
+  //   2. Internal (folder/file within the tree): the drag carries
+  //      the custom 'application/pipilot-path' MIME we set on
+  //      dragstart. We rename/move into destDir.
+  // Returns true if anything was actually accepted, so callers know
+  // whether to refresh the tree.
+  async function handleExplorerDrop(e, destDir) {
+    if (!destDir) return false;
+    const dt = e.dataTransfer;
+
+    // External files take priority — the browser's File list overlaps
+    // with the internal MIME on some hosts, but only externals carry
+    // actual File objects.
+    const fileList = dt.files;
+    if (fileList && fileList.length && api.files?.pathForFile) {
+      const sources = [];
+      for (const f of fileList) {
+        const p = api.files.pathForFile(f);
+        if (p) sources.push(p);
+      }
+      if (sources.length) {
+        try {
+          const r = await api.files.importExternal(sources, destDir);
+          if (r?.imported?.length) {
+            bus.emit('toast:show', { type: 'ok', message: `Imported ${r.imported.length} item${r.imported.length === 1 ? '' : 's'}` });
+          }
+          if (r?.errors?.length) {
+            bus.emit('toast:show', { type: 'error', message: `${r.errors.length} import${r.errors.length === 1 ? '' : 's'} failed` });
+          }
+          return r?.imported?.length > 0;
+        } catch (err) {
+          bus.emit('toast:show', { type: 'error', message: 'Import failed: ' + (err.message || err) });
+          return false;
+        }
+      }
+    }
+
+    // Internal move within the tree.
+    const src = dt.getData('application/pipilot-path');
+    if (!src) return false;
+    const name = basename(src);
+    const dest = destDir.replace(/[\\/]+$/, '') + '/' + name;
+    if (dest === src) return false;
+    // Don't drop a folder into itself or a descendant.
+    if (dest.startsWith(src + '/') || dest.startsWith(src + '\\')) {
+      bus.emit('toast:show', { type: 'error', message: "Can't move a folder into itself" });
+      return false;
+    }
+    try {
+      await api.files.rename(src, dest);
+      bus.emit('toast:show', { type: 'ok', message: `Moved ${name}` });
+      return true;
+    } catch (err) {
+      bus.emit('toast:show', { type: 'error', message: 'Move failed: ' + (err.message || err) });
+      return false;
+    }
+  }
+
   function extOf(name) {
     const i = name.lastIndexOf('.');
     return i > 0 ? name.slice(i + 1).toLowerCase() : '';
@@ -276,26 +339,18 @@
     if (isDir) {
       row.addEventListener('dragover', (e) => {
         e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
+        e.dataTransfer.dropEffect = e.dataTransfer.types.includes('Files') ? 'copy' : 'move';
         row.classList.add('drop-target');
       });
       row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
       row.addEventListener('drop', async (e) => {
         e.preventDefault();
+        // Stop the tree-root handler from also firing — we're handling
+        // this drop fully here.
+        e.stopPropagation();
         row.classList.remove('drop-target');
-        const src = e.dataTransfer.getData('application/pipilot-path');
-        if (!src || src === node.path) return;
-        const name = basename(src);
-        const dest = node.path + '/' + name;
-        if (dest === src) return;
-        try {
-          await api.files.rename(src, dest);
-          bus.emit('toast:show', { type: 'ok', message: `Moved ${name}` });
-          await loadTree();
-          renderExplorer();
-        } catch (err) {
-          bus.emit('toast:show', { type: 'error', message: 'Move failed: ' + err.message });
-        }
+        const ok = await handleExplorerDrop(e, node.path);
+        if (ok) { await loadTree(); renderExplorer(); }
       });
     }
 
@@ -544,24 +599,24 @@
         ],
       });
     });
+    // Anywhere inside the tree that ISN'T a folder row routes to the
+    // project root. Folder rows stop propagation in their own drop
+    // handler, so they take priority over this catch-all.
     tree.addEventListener('dragover', (e) => {
-      if (e.target === tree) { e.preventDefault(); }
+      e.preventDefault();
+      e.dataTransfer.dropEffect = e.dataTransfer.types.includes('Files') ? 'copy' : 'move';
+      tree.classList.add('drop-target-root');
+    });
+    tree.addEventListener('dragleave', (e) => {
+      // Only clear the class when leaving the tree element entirely —
+      // bubbling dragleave from child rows otherwise removes the highlight.
+      if (!tree.contains(e.relatedTarget)) tree.classList.remove('drop-target-root');
     });
     tree.addEventListener('drop', async (e) => {
-      if (e.target !== tree) return;
       e.preventDefault();
-      const src = e.dataTransfer.getData('application/pipilot-path');
-      if (!src) return;
-      const name = basename(src);
-      const dest = state.projectPath + '/' + name;
-      if (dest === src) return;
-      try {
-        await api.files.rename(src, dest);
-        await loadTree();
-        renderExplorer();
-      } catch (err) {
-        bus.emit('toast:show', { type: 'error', message: 'Move failed: ' + err.message });
-      }
+      tree.classList.remove('drop-target-root');
+      const ok = await handleExplorerDrop(e, state.projectPath);
+      if (ok) { await loadTree(); renderExplorer(); }
     });
     console.log(`[startup] renderExplorer took ${(performance.now() - _t0).toFixed(0)}ms`);
   }

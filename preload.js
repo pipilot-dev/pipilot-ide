@@ -1,7 +1,7 @@
 // PiPilot IDE — Preload script
 // Exposes a safe IPC bridge to the renderer via window.electronAPI.
 
-const { contextBridge, ipcRenderer, clipboard } = require('electron');
+const { contextBridge, ipcRenderer, clipboard, webUtils } = require('electron');
 
 // Track active streams so renderer can clean them up
 const streamListeners = new Map();
@@ -90,6 +90,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     mkdir: (dirPath) => ipcRenderer.invoke('files:mkdir', dirPath),
     delete: (targetPath) => ipcRenderer.invoke('files:delete', targetPath),
     rename: (from, to) => ipcRenderer.invoke('files:rename', { from, to }),
+    // OS → IDE drag-and-drop. Renderer hands us File objects from a
+    // drop event; we resolve their on-disk paths via Electron's
+    // webUtils (Electron 32 removed the legacy `file.path` getter).
+    // The actual copy happens main-side via files:import-external.
+    pathForFile: (file) => {
+      try { return webUtils.getPathForFile(file); }
+      catch { return ''; }
+    },
+    importExternal: (sources, destDir) => ipcRenderer.invoke('files:import-external', { sources, destDir }),
     stat: (p) => ipcRenderer.invoke('files:stat', p),
     list: (dirPath) => ipcRenderer.invoke('files:list', dirPath),
     search: (projectPath, query, opts) => ipcRenderer.invoke('files:search', { projectPath, query, opts }),
