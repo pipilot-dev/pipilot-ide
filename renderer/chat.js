@@ -1942,6 +1942,7 @@
     project_memory:       S('<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/><circle cx="12" cy="11" r="1.5" fill="currentColor"/>'),
     run_code:             S('<polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>'),
     edit_file_patch:      S('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 14l2 2 4-4"/>'),
+    run_command:          S('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
     fetch_url:            S('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/><path d="M16 8l4-4M20 4h-3M20 4v3"/>'),
     // Embedded browser tools (browser_use)
     browser_open:         S('<circle cx="12" cy="12" r="9"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 3a15 15 0 0 1 4 9 15 15 0 0 1-4 9 15 15 0 0 1-4-9 15 15 0 0 1 4-9z"/>'),
@@ -2018,6 +2019,7 @@
     search_codebase: 'Search Codebase', screenshot_preview: 'Screenshot',
     generate_image: 'Generate Image', project_memory: 'Memory',
     edit_file_patch: 'Patch File', fetch_url: 'Fetch URL', run_code: 'Run Code',
+    run_command: 'Run Command',
     get_working_directory: 'Working Directory',
     // Embedded browser tools
     browser_open: 'Browser · Open',
@@ -2084,6 +2086,7 @@
     search_codebase: 'var(--accent)', screenshot_preview: '#56d4dd',
     generate_image: '#56d4dd', project_memory: '#ffd787',
     edit_file_patch: 'var(--accent)', fetch_url: 'var(--info)', run_code: 'var(--ok)',
+    run_command: 'var(--text-mid)',
     get_working_directory: 'var(--text-mid)',
     Read: 'var(--info)', Glob: 'var(--info)', Grep: 'var(--info)', WebSearch: 'var(--info)',
     Write: 'var(--ok)', Edit: 'var(--accent)', MultiEdit: 'var(--accent)',
@@ -2203,6 +2206,11 @@
     if (n === 'edit_file_patch') return input.filepath ? sanitizePath(input.filepath) : '';
     if (n === 'fetch_url') return input.url ? input.url.replace(/^https?:\/\//, '').slice(0, 60) : '';
     if (n === 'run_code') return input.language ? `${input.language}` : '';
+    if (n === 'run_command') {
+      const cmd = (input.command || '').slice(0, 80);
+      const tag = input.isolated ? ' (isolated)' : '';
+      return cmd ? `$ ${cmd}${tag}` : '';
+    }
     // Embedded browser tools
     if (n === 'browser_open' || n === 'browser_navigate') {
       const u = input.url || '';

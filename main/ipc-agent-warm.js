@@ -540,5 +540,13 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
     } catch (err) {
       console.warn('[agent-warm] warm-mission cleanup failed:', err.message);
     }
+    // Close every persistent bash session backing run_command so the
+    // bash subprocesses don't dangle past app exit.
+    try {
+      const { closeAllShells } = require('./persistent-shell');
+      if (typeof closeAllShells === 'function') closeAllShells();
+    } catch (err) {
+      console.warn('[agent-warm] persistent-shell cleanup failed:', err.message);
+    }
   });
 };

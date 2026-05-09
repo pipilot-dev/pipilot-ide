@@ -262,6 +262,46 @@ function buildIdeTools(sdk, ctx) {
       }
     ),
 
+    sdk.tool('run_command',
+      'Run a shell command on a PERSISTENT bash session shared across calls in this workspace. ' +
+      'PREFER THIS OVER `Bash` for normal shell work — Bash spawns a fresh shell per call (~3 s on Windows for `ls`); run_command keeps one bash alive and replays commands through it, so subsequent calls land in <50 ms. ' +
+      'State (cwd, exported vars, command history) PERSISTS across calls — that is by design. ' +
+      'Use `isolated: true` for one-off commands that should NOT leak cd / exports into the next call. ' +
+      'Combined stdout+stderr is returned (we redirect 2>&1). ' +
+      'Use the built-in `Bash` tool only when you genuinely need a fresh shell (env experiments, sourcing test-only files, etc.).',
+      {
+        command: z.string().describe('Shell command to execute (bash syntax)'),
+        cwd: z.string().optional().describe('Per-command cwd (uses pushd/popd so the persistent shell\'s cwd is unchanged). Default: workspace root.'),
+        timeoutMs: z.number().optional().default(60_000).describe('Kill the command after N ms via SIGINT. Default 60 s, hard cap 10 min.'),
+        isolated: z.boolean().optional().default(false).describe('Wrap in a subshell so cd/exports don\'t leak into subsequent calls.'),
+      },
+      async (args) => {
+        try {
+          const { getShell } = require('./persistent-shell');
+          const cwd = ideTools.workDir ? ideTools.workDir() : (ideTools._currentWorkDir || process.cwd());
+          const shell = getShell(cwd);
+          const r = await shell.exec(args.command, {
+            cwd: args.cwd,
+            timeoutMs: args.timeoutMs,
+            isolated: args.isolated,
+          });
+          const head = `exit ${r.exitCode} • ${r.elapsedMs} ms`;
+          const body = r.stdout || '(no output)';
+          // Cap at 16 KB inline; bigger output should use Bash with
+          // pipes to file or have the caller chunk.
+          const capped = body.length > 16_000
+            ? body.slice(0, 16_000) + `\n…\n[truncated, ${body.length} total chars]`
+            : body;
+          return {
+            content: [{ type: 'text', text: `${head}\n${capped}` }],
+            isError: r.exitCode !== 0,
+          };
+        } catch (e) {
+          return { content: [{ type: 'text', text: `run_command error: ${e.message}\n\n(Falling back to the built-in Bash tool is fine if bash isn\'t available on PATH.)` }], isError: true };
+        }
+      }
+    ),
+
     // ─── Embedded browser control ────────────────────────────────────
     // The IDE ships a real Chromium <webview>-based browser. These tools
     // let you drive it: open URLs, find elements by CSS selector, click,

@@ -1163,4 +1163,4 @@ function handleFileChange(projectPath, evt) {
   }
 }
 
-module.exports = { setWorkDir, getToolDefinitions, getWorkingDirectory, getDiagnostics, getProjectContext, updateProjectContext, frontendDesignGuide, projectMemory, searchCodebase, screenshotPreview, generateImage, runCode, editFilePatch, fetchUrl, getSearchIndex, handleFileChange };
+module.exports = { setWorkDir, workDir, getToolDefinitions, getWorkingDirectory, getDiagnostics, getProjectContext, updateProjectContext, frontendDesignGuide, projectMemory, searchCodebase, screenshotPreview, generateImage, runCode, editFilePatch, fetchUrl, getSearchIndex, handleFileChange };
