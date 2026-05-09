@@ -3615,6 +3615,44 @@
     if (!currentAssistantEl) return;
     const streamingEl = currentAssistantEl?.querySelector('.msg-streaming-indicator');
     if (streamingEl) streamingEl.remove();
+
+    // Sweep any tool pills still in the spinning "running" state. The
+    // SDK guarantees a tool_result for every tool_use it acknowledges,
+    // but on an aborted turn (user hit Stop) the SDK never produces
+    // results for tools it had in flight — those pills would otherwise
+    // pulse forever in the chat history. Treat unfinished tools as
+    // "stopped" on abort and "ok" on a normal finish (matches the
+    // history-rehydration behaviour at loadSession).
+    const aborted = result && result.subtype === 'aborted';
+    const finalStatusSvg = aborted ? STATUS_SVGS.error : STATUS_SVGS.success;
+    const finalStatusCls = aborted ? 'error' : 'success';
+    try {
+      const bw = getBodyWrap(currentAssistantEl) || currentAssistantEl;
+      bw.querySelectorAll('.tool-pill.running').forEach(pill => {
+        pill.classList.remove('running');
+        const st = pill.querySelector('.tool-pill-status');
+        if (st) {
+          st.classList.remove('running');
+          st.classList.add(finalStatusCls);
+          st.innerHTML = finalStatusSvg;
+        }
+      });
+      bw.querySelectorAll('.subagent-card.running').forEach(card => {
+        card.classList.remove('running');
+        const badge = card.querySelector('.subagent-status-badge');
+        if (badge) badge.innerHTML = finalStatusSvg;
+        const statusText = card.querySelector('.subagent-status-text');
+        if (statusText) statusText.textContent = aborted ? '✕ Agent stopped' : '✓ Agent completed';
+        const progressBar = card.querySelector('.subagent-progress-bar');
+        if (progressBar) progressBar.remove();
+      });
+      bw.querySelectorAll('.subagent-child.running').forEach(row => {
+        row.classList.remove('running');
+        row.classList.add(aborted ? 'stopped' : 'done');
+        const st = row.querySelector('.subagent-child-status');
+        if (st) st.innerHTML = finalStatusSvg;
+      });
+    } catch {}
     const footer = document.createElement('div');
     footer.className = 'msg-footer';
     const cost = result && (result.total_cost_usd || result.totalCostUsd);
@@ -5898,15 +5936,21 @@
       isSending = false;
       setSending(false);
       bus.emit('agent:status', 'ready');
-      // Optimistically pull the streaming indicator out of the DOM so
-      // the user gets instant feedback. Either the main-side stop
-      // handler will follow up with a synthetic 'result' event (which
-      // finalizeResult() handles) or it won't — either way the
-      // "Working…" dots shouldn't sit there pulsing while we wait
-      // for the SDK to acknowledge the interrupt.
+      // Optimistically pull the streaming indicator AND mark any
+      // in-flight tool pills as stopped, instead of leaving them in
+      // the running state forever. Either the main-side stop handler
+      // will follow up with a synthetic 'result' event (which
+      // finalizeResult() does the same sweep on) or it won't — either
+      // way the user gets instant feedback.
       try {
         const streamingEl = currentAssistantEl?.querySelector('.msg-streaming-indicator');
         if (streamingEl) streamingEl.remove();
+        const bw = getBodyWrap(currentAssistantEl) || currentAssistantEl;
+        bw?.querySelectorAll?.('.tool-pill.running').forEach(pill => {
+          pill.classList.remove('running');
+          const st = pill.querySelector('.tool-pill-status');
+          if (st) { st.classList.remove('running'); st.classList.add('error'); st.innerHTML = STATUS_SVGS.error; }
+        });
       } catch {}
     });
   }
