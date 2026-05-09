@@ -263,12 +263,13 @@ function buildIdeTools(sdk, ctx) {
     ),
 
     sdk.tool('run_command',
-      'Run a shell command on a PERSISTENT bash session shared across calls in this workspace. ' +
-      'PREFER THIS OVER `Bash` for normal shell work — Bash spawns a fresh shell per call (~3 s on Windows for `ls`); run_command keeps one bash alive and replays commands through it, so subsequent calls land in <50 ms. ' +
-      'State (cwd, exported vars, command history) PERSISTS across calls — that is by design. ' +
-      'Use `isolated: true` for one-off commands that should NOT leak cd / exports into the next call. ' +
-      'Combined stdout+stderr is returned (we redirect 2>&1). ' +
-      'Use the built-in `Bash` tool only when you genuinely need a fresh shell (env experiments, sourcing test-only files, etc.).',
+      'Run a shell command on a PERSISTENT shell session shared across calls in this workspace. ' +
+      'Shell is the OS-native default (cmd.exe on Windows, bash on macOS/Linux) — same one the user\'s terminal panel uses, so commands behave identically to typing them there. ' +
+      'On Windows that means cmd syntax: `&&` chaining works, `dir` lists files, env vars are `%FOO%`, redirection is `>` and `2>&1`. Native paths like `C:\\Users\\big\\proj` work as-is — no path translation needed. ' +
+      'On macOS/Linux it\'s plain bash. ' +
+      'PREFER THIS OVER `Bash` for normal shell work — `Bash` spawns a fresh shell per call (~3 s on Windows for `ls`); run_command keeps one shell alive and pipes commands through it, so subsequent calls land in <50 ms. ' +
+      'State (cwd, exported vars, command history) PERSISTS across calls — that is by design. Pass `cwd` to run a single command in a different directory (we pushd/popd around it so the persistent shell\'s cwd is unchanged). ' +
+      'Combined stdout+stderr is returned (we redirect 2>&1).',
       {
         command: z.string().describe('Shell command to execute (bash syntax)'),
         description: z.string().optional().describe('One-line human description of what the command does. Shown in the tool pill so the user can see your intent at a glance — e.g. "Install dependencies" or "Run unit tests". Optional but recommended.'),

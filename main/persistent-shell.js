@@ -1,24 +1,93 @@
 // PiPilot IDE — Per-workspace persistent shell session for the
 // agent's run_command tool.
 //
-// Why this exists: the SDK's built-in Bash tool spawns a fresh shell
-// per call (`bash -c "..."`). On Windows that's ~3 s of Git-Bash
-// startup for every `ls` or `git status`. Across a turn that fires a
-// dozen shell commands the cost dominates the agent's wall-clock
-// time. This module spawns ONE bash per workspace, pipes commands
-// through stdin, detects completion via a sentinel echoed after each
-// command, and returns { stdout, exitCode, elapsedMs }. First command
-// pays for spawn, every subsequent command lands in <50 ms.
+// One shell stays alive per workspace; commands flow through stdin
+// and we delimit each command's output with a sentinel echoed at
+// the end. First call pays for shell spawn; every call after lands
+// in <50 ms (vs ~3 s cold-spawn that the SDK's built-in Bash pays
+// per call on Windows).
 //
-// Scope: bash only. Almost every PiPilot dev on Windows has Git Bash
-// (it ships with Git for Windows, which the IDE already requires for
-// the in-app git features). If bash isn't on PATH we fail loudly and
-// the agent falls back to the SDK's built-in Bash tool. We don't
-// reimplement cmd / PowerShell shells — the failure mode is "this
-// optimisation isn't available", not "shell access is broken".
+// Shell choice mirrors the IDE's terminal panel — OS-native default
+// shell. cmd.exe on Windows, bash on macOS/Linux. On Windows this
+// also dodges the Git-Bash-vs-WSL-bash-vs-MSYS path-translation mess
+// (cmd accepts native `C:\Users\big\...` paths verbatim). bash on
+// macOS/Linux is the universal lingua franca for Unix and the agent
+// already speaks it natively.
 
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+
+// ── Shell strategies ───────────────────────────────────────────────
+// Each strategy abstracts the per-shell pieces:
+//   spawn  : argv to start the shell with stdin pipe open
+//   init   : line to send first to suppress echo / prompt noise
+//   wrap   : turn a (command, opts) pair into the script bash/cmd
+//            should evaluate
+//   eol    : line ending (\n on Unix, \r\n on Windows)
+const STRATEGIES = {
+  bash: {
+    spawn: () => ({ cmd: 'bash', args: ['--noprofile', '--norc'] }),
+    init: '',
+    wrap(command, opts, id) {
+      const cwdNorm = opts.cwd ? String(opts.cwd) : '';
+      const cd = cwdNorm ? `cd ${shellSingleQuote(cwdNorm)} && ` : '';
+      const inner = `${cd}${command} 2>&1`;
+      const wrapped = (opts.isolated || cwdNorm) ? `( ${inner} )` : inner;
+      // Sentinel echoed AFTER the command runs. `$?` is the prior
+      // line's exit code at parse time of THIS line — which is after
+      // the command finishes because bash reads stdin line by line.
+      return `${wrapped}\necho "__${id}__:$?"\n`;
+    },
+    parseExit: (s) => parseInt(String(s).trim(), 10),
+  },
+
+  cmd: {
+    // /Q  → @echo off implicitly
+    // /D  → don't run AutoRun (HKCU\…\AutoRun) which can reset prompt
+    // /K  → keep alive after running the (empty) start command,
+    //       so subsequent stdin lines execute as new commands
+    // /V:ON → enable delayed expansion so !ERRORLEVEL! evaluates
+    //         after a command in the same line runs (we still don't
+    //         rely on it heavily, but it keeps the door open).
+    spawn: () => ({ cmd: 'cmd.exe', args: ['/Q', '/D', '/V:ON', '/K'] }),
+    // Silence the prompt — without this every command would be
+    // followed by a line like "C:\path>", noise the agent has to
+    // skim around. `prompt $H` writes a single backspace which most
+    // terminals consume invisibly; if it leaks it's still tiny.
+    init: '@echo off\r\nprompt $H\r\n',
+    wrap(command, opts, id) {
+      // pushd handles drive letters natively (`pushd C:\x` switches
+      // drives transparently, popd returns). %ERRORLEVEL% is captured
+      // into a temp var BEFORE popd so popd's own success doesn't
+      // clobber the command's exit status.
+      const cwd = opts.cwd ? String(opts.cwd) : '';
+      const lines = [];
+      if (cwd) {
+        lines.push(`pushd ${cmdQuote(cwd)} || (echo __${id}__:1 & exit /b)`);
+        lines.push(`${command} 2>&1`);
+        lines.push(`set "_PIPILOT_EC=%ERRORLEVEL%"`);
+        lines.push(`popd`);
+        lines.push(`echo __${id}__:%_PIPILOT_EC%`);
+      } else {
+        lines.push(`${command} 2>&1`);
+        lines.push(`echo __${id}__:%ERRORLEVEL%`);
+      }
+      // Note: cmd doesn't have real subshells; `isolated:true` is a
+      // no-op on Windows. `pushd`/`popd` already insulates cwd
+      // changes, which is the most common leak.
+      return lines.join('\r\n') + '\r\n';
+    },
+    parseExit: (s) => {
+      // Trim any leading backspace bytes from the silenced prompt.
+      const cleaned = String(s).replace(/^[\b\r\n\s]+/, '').trim();
+      return parseInt(cleaned, 10);
+    },
+  },
+};
+
+function pickStrategy() {
+  return process.platform === 'win32' ? STRATEGIES.cmd : STRATEGIES.bash;
+}
 
 class PersistentShell {
   /**
@@ -26,21 +95,17 @@ class PersistentShell {
    *                      agent can `cd` from here freely; subsequent
    *                      commands inherit the new cwd (that's a
    *                      *feature* of the persistent shell — pass
-   *                      `isolated: true` to opt out per-command).
+   *                      `isolated: true` to opt out per-command
+   *                      where the strategy supports it).
    */
   constructor(cwd) {
     this.cwd = cwd;
-    /** Live ChildProcess or null if not yet spawned / has died. */
+    this.strategy = pickStrategy();
     this.shell = null;
-    /** FIFO of { command, opts, resolve, reject } awaiting the shell. */
     this.queue = [];
-    /** True while a command is in flight (sentinel not yet seen). */
     this.busy = false;
-    /** Currently-running job; null while the queue drains. */
     this.currentJob = null;
-    /** Pending stdout+stderr bytes — sentinel detection scans this. */
     this.outBuf = '';
-    /** Promise we hand out from ensureOpen() so concurrent awaiters dedupe. */
     this.opening = null;
   }
 
@@ -49,15 +114,8 @@ class PersistentShell {
     if (this.opening) return this.opening;
     this.opening = new Promise((resolve, reject) => {
       try {
-        // Spawn bash with no profile / login config so it boots fast
-        // and doesn't run user dotfiles that might prompt or hang.
-        // -i (interactive) is intentionally skipped — non-interactive
-        // shells exit cleanly when stdin closes, which is what we want.
-        // node child_process accepts native OS paths for `cwd` (it
-        // CreateProcess-es into the dir before spawning bash) so the
-        // Windows path passes through fine — only commands we send
-        // *into* the shell need the /c/Users/... translation.
-        const proc = spawn('bash', ['--noprofile', '--norc'], {
+        const { cmd, args } = this.strategy.spawn();
+        const proc = spawn(cmd, args, {
           cwd: this.cwd,
           env: process.env,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -69,31 +127,28 @@ class PersistentShell {
           reject(err);
         });
         proc.on('exit', () => {
-          // Shell died (Ctrl+D escaped, segfault, kill). Drop our
-          // reference; the next exec() call will spawn a fresh one.
-          // Reject any in-flight job so the agent learns about it
-          // instead of hanging forever.
           if (this.currentJob) {
             const j = this.currentJob;
+            clearTimeout(j.timeoutTimer);
+            clearTimeout(j.hardTimeoutTimer);
             this.currentJob = null;
             this.busy = false;
             j.reject(new Error('shell exited mid-command'));
           }
           this.shell = null;
         });
-        proc.stdout.on('data', (d) => {
+        const onData = (d) => {
           this.outBuf += d.toString('utf8');
           this._scanForSentinel();
-        });
-        // Merge stderr into the same buffer. We redirect each command's
-        // stderr to stdout via `2>&1` below, so stderr is normally
-        // empty — but bash itself can print to stderr (e.g. job-control
-        // notices) so we still drain it to keep the pipe from blocking.
-        proc.stderr.on('data', (d) => {
-          this.outBuf += d.toString('utf8');
-          this._scanForSentinel();
-        });
+        };
+        proc.stdout.on('data', onData);
+        proc.stderr.on('data', onData);
         this.shell = proc;
+        // Send strategy-specific init (e.g. cmd's prompt-silence)
+        // so subsequent commands get clean output.
+        if (this.strategy.init) {
+          try { proc.stdin.write(this.strategy.init); } catch {}
+        }
         this.opening = null;
         resolve();
       } catch (err) {
@@ -110,13 +165,9 @@ class PersistentShell {
    *
    * @param {string} command
    * @param {object} opts
-   * @param {string} [opts.cwd]        Per-command cwd; uses pushd/popd so
-   *                                   the persistent shell's cwd is unchanged.
-   * @param {number} [opts.timeoutMs]  Kill the command (SIGINT) after N ms.
-   *                                   Default 60 s, hard cap 10 min.
-   * @param {boolean} [opts.isolated]  Wrap in a subshell so cd / exports
-   *                                   from this command DON'T leak into the
-   *                                   next one. Trades persistence for safety.
+   * @param {string} [opts.cwd]        Per-command cwd.
+   * @param {number} [opts.timeoutMs]  Default 60 s, hard cap 10 min.
+   * @param {boolean} [opts.isolated]  Subshell wrap on bash; no-op on cmd.
    */
   async exec(command, opts = {}) {
     if (!command || typeof command !== 'string') {
@@ -138,17 +189,26 @@ class PersistentShell {
     this.currentJob = { ...job, id, startTs };
 
     const timeoutMs = Math.max(100, Math.min(600_000, Number(job.opts.timeoutMs) || 60_000));
-    // Two-stage timeout. The soft timeout sends SIGINT and stub
-    // sentinel — bash *should* recover. The hard timeout fires 5 s
-    // later if the soft path didn't unstick the job (e.g. SIGINT
-    // didn't actually deliver on Windows, bash didn't exit, sentinel
-    // never arrived). It rejects the Promise outright + tears down
-    // the shell so the next exec respawns. Belt-and-braces — without
-    // this the agent's tool call hangs forever.
+
+    // Soft timeout: try to interrupt the running command via signal
+    // and a stub sentinel. Often unsticks bash. On Windows kill('SIGINT')
+    // = TerminateProcess so cmd will die outright; that's also fine —
+    // the proc.exit handler rejects the job and the next exec respawns.
     this.currentJob.timeoutTimer = setTimeout(() => {
       try { this.shell?.kill('SIGINT'); } catch {}
-      try { this.shell?.stdin?.write(`echo "__${id}__:124"\n`); } catch {}
+      try {
+        const sentinel = process.platform === 'win32'
+          ? `echo __${id}__:124\r\n`
+          : `echo "__${id}__:124"\n`;
+        this.shell?.stdin?.write(sentinel);
+      } catch {}
     }, timeoutMs);
+
+    // Hard timeout: belt-and-braces guarantee the Promise always
+    // settles. If the soft path didn't unstick the job (signal lost,
+    // proc.on('exit') didn't fire, sentinel buffered behind a hung
+    // pipe) this resolves with a clear timed-out result and tears
+    // down the shell so the next call respawns clean.
     this.currentJob.hardTimeoutTimer = setTimeout(() => {
       if (!this.currentJob || this.currentJob.id !== id) return;
       const j = this.currentJob;
@@ -168,22 +228,13 @@ class PersistentShell {
       setImmediate(() => this._drain());
     }, timeoutMs + 5000);
 
-    // Build the line we send to bash. The sentinel echoes the prior
-    // command's exit code, separated from output by a newline, so the
-    // parser can pick out exactly the bytes that belonged to this
-    // command. Wrapping in `( … )` gives a subshell that contains
-    // any cd / export side effects so they don't leak across calls
-    // when isolated:true OR when a per-command cwd was specified.
-    const cwdNorm = job.opts.cwd ? toBashPath(job.opts.cwd) : '';
-    const cdPrefix = cwdNorm ? `cd ${shellSingleQuote(cwdNorm)} && ` : '';
-    const inner = `${cdPrefix}${job.command} 2>&1`;
-    const wrap = (job.opts.isolated || cwdNorm) ? `( ${inner} )` : inner;
-    const fullLine = `${wrap}\necho "__${id}__:$?"\n`;
+    const fullLine = this.strategy.wrap(job.command, job.opts, id);
 
     try {
       this.shell.stdin.write(fullLine);
     } catch (err) {
       clearTimeout(this.currentJob.timeoutTimer);
+      clearTimeout(this.currentJob.hardTimeoutTimer);
       this.currentJob = null;
       this.busy = false;
       job.reject(err);
@@ -196,13 +247,12 @@ class PersistentShell {
     const sentinel = `__${this.currentJob.id}__:`;
     const idx = this.outBuf.indexOf(sentinel);
     if (idx === -1) return;
-    // Everything before the sentinel is this command's output.
     const before = this.outBuf.slice(0, idx);
     const afterSentinel = this.outBuf.slice(idx + sentinel.length);
-    const eol = afterSentinel.indexOf('\n');
+    const eol = afterSentinel.search(/[\r\n]/);
     const exitStr = eol === -1 ? afterSentinel : afterSentinel.slice(0, eol);
-    const exitCode = parseInt(String(exitStr).trim(), 10);
-    this.outBuf = eol === -1 ? '' : afterSentinel.slice(eol + 1);
+    const exitCode = this.strategy.parseExit(exitStr);
+    this.outBuf = eol === -1 ? '' : afterSentinel.slice(eol).replace(/^[\r\n]+/, '');
 
     const job = this.currentJob;
     clearTimeout(job.timeoutTimer);
@@ -211,17 +261,14 @@ class PersistentShell {
     this.busy = false;
 
     job.resolve({
-      stdout: stripTrailingNewline(before),
+      stdout: cleanCmdOutput(stripTrailingNewline(before)),
       exitCode: Number.isFinite(exitCode) ? exitCode : -1,
       elapsedMs: Date.now() - job.startTs,
     });
-    // Drain any queued commands. setImmediate so we don't recurse
-    // arbitrarily deep on a long queue.
     setImmediate(() => this._drain());
   }
 
   close() {
-    // Drop pending jobs first so they don't hang forever.
     while (this.queue.length) {
       const j = this.queue.shift();
       try { j.reject(new Error('shell closed')); } catch {}
@@ -242,33 +289,25 @@ class PersistentShell {
 }
 
 function shellSingleQuote(s) {
-  // Escape for bash single-quoting: only ' is special inside '…'.
   return `'${String(s).replace(/'/g, `'"'"'`)}'`;
 }
+function cmdQuote(s) {
+  // cmd quoting: wrap in double quotes, escape internal " by doubling.
+  return `"${String(s).replace(/"/g, '""')}"`;
+}
 function stripTrailingNewline(s) {
-  return s.endsWith('\r\n') ? s.slice(0, -2) : s.endsWith('\n') ? s.slice(0, -1) : s;
+  return s.replace(/[\r\n]+$/, '');
+}
+function cleanCmdOutput(s) {
+  // The silenced cmd prompt occasionally bleeds a backspace + cr/lf
+  // pair before the next command's output. Trim leading control
+  // bytes so the agent gets clean stdout.
+  return process.platform === 'win32'
+    ? s.replace(/^[\b\r\n]+/, '')
+    : s;
 }
 
-// Convert a Windows-style path (`C:\Users\big\X`) to one bash can
-// actually navigate to. Git Bash / MSYS understands `/c/Users/big/X`
-// natively (and a forward-slash form like `C:/Users/big/X` if quoted).
-// On non-Windows the path is returned unchanged. Without this,
-// `cd 'C:\Users\big\X'` inside Git Bash treated the backslashes as
-// escapes and silently failed, leaving the persistent-shell tool
-// hung indefinitely waiting for its sentinel.
-function toBashPath(p) {
-  const s = String(p || '');
-  if (process.platform !== 'win32') return s;
-  // C:\Users\big → /c/Users/big — works in Git Bash, Cygwin, MSYS.
-  const m = /^([A-Za-z]):[\\/](.*)$/.exec(s);
-  if (m) return `/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`;
-  return s.replace(/\\/g, '/');
-}
-
-// One PersistentShell per workspace. Different workspaces get
-// different shells so cd / env-var state doesn't leak across projects.
 const shellsByCwd = new Map();
-
 function getShell(cwd) {
   const key = path.resolve(cwd || process.cwd());
   let s = shellsByCwd.get(key);
@@ -278,7 +317,6 @@ function getShell(cwd) {
   }
   return s;
 }
-
 function closeAllShells() {
   for (const [, s] of shellsByCwd) {
     try { s.close(); } catch {}
