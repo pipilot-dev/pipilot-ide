@@ -382,7 +382,7 @@ function buildIdeTools(sdk, ctx) {
       { tabId: z.string().optional() },
       async (args) => {
         try {
-          const r = await browserCtl.browserExec('snapshot', args, 30000);
+          const r = await browserCtl.browserExec('snapshot', args, 60000);
           const os = require('os');
           const dir = path.join(os.tmpdir(), 'pipilot-screenshots');
           try { fs.mkdirSync(dir, { recursive: true }); } catch {}
@@ -487,7 +487,7 @@ function buildIdeTools(sdk, ctx) {
       { tabId: z.string().optional(), selector: z.string().optional().describe('Optional CSS selector — omit to get the whole document body text') },
       async (args) => {
         try {
-          const r = await browserCtl.browserExec('get_text', args, 30000);
+          const r = await browserCtl.browserExec('get_text', args, 90000);
           const text = r?.text || '';
           return { content: [{ type: 'text', text: spillIfLong('text', text, 8000, 'txt') || '(no text)' }] };
         } catch (e) { return { content: [{ type: 'text', text: `browser_get_text error: ${e.message}` }], isError: true }; }
@@ -498,7 +498,7 @@ function buildIdeTools(sdk, ctx) {
       { tabId: z.string().optional(), selector: z.string().optional() },
       async (args) => {
         try {
-          const r = await browserCtl.browserExec('get_html', args, 30000);
+          const r = await browserCtl.browserExec('get_html', args, 90000);
           const html = r?.html || '';
           return { content: [{ type: 'text', text: spillIfLong('html', html, 12000, 'html') || '(no html)' }] };
         } catch (e) { return { content: [{ type: 'text', text: `browser_get_html error: ${e.message}` }], isError: true }; }
@@ -517,7 +517,7 @@ function buildIdeTools(sdk, ctx) {
       { tabId: z.string().optional(), expression: z.string().describe('Either a single expression OR a multi-statement function body that uses `return` to surface the result.') },
       async (args) => {
         try {
-          const r = await browserCtl.browserExec('eval', args, 30000);
+          const r = await browserCtl.browserExec('eval', args, 90000);
           return { content: [{ type: 'text', text: browserToolText('Eval', r) }] };
         } catch (e) { return { content: [{ type: 'text', text: `browser_eval error: ${e.message}` }], isError: true }; }
       }
@@ -526,7 +526,7 @@ function buildIdeTools(sdk, ctx) {
       'Get a structured summary of the active page: URL, title, viewport, scroll position, and lists of links / buttons / inputs. Use this BEFORE clicking or typing so you know which selectors are valid.',
       { tabId: z.string().optional() },
       async (args) => {
-        try { const r = await browserCtl.browserExec('summary', args, 20000); return { content: [{ type: 'text', text: browserToolText('Page summary', r) }] }; }
+        try { const r = await browserCtl.browserExec('summary', args, 45000); return { content: [{ type: 'text', text: browserToolText('Page summary', r) }] }; }
         catch (e) { return { content: [{ type: 'text', text: `browser_summary error: ${e.message}` }], isError: true }; }
       }
     ),
@@ -815,12 +815,12 @@ function buildIdeTools(sdk, ctx) {
 
     // ── File downloads ───────────────────────────────────────────────
     sdk.tool('browser_wait_for_download',
-      'Block until the next download finishes (or timeoutMs elapses) and return its saved path on disk. Pair with browser_click on a download link. Files land under the user\'s Downloads/PiPilot/ folder.',
-      { tabId: z.string().optional(), timeoutMs: z.number().default(60000) },
+      'Block until the next download finishes (or timeoutMs elapses) and return its saved path on disk. Pair with browser_click on a download link. Files land under the user\'s Downloads/PiPilot/ folder. Default cap is 5 minutes — large files / slow CDNs need real time.',
+      { tabId: z.string().optional(), timeoutMs: z.number().default(300000).describe('Max wait in ms; default 5 minutes, hard cap 10 minutes.') },
       async (args) => {
         try {
-          const cap = Math.max(2000, Math.min(600000, Number(args?.timeoutMs) || 60000));
-          const r = await browserCtl.browserExec('wait_for_download', args, cap + 5000);
+          const cap = Math.max(2000, Math.min(600000, Number(args?.timeoutMs) || 300000));
+          const r = await browserCtl.browserExec('wait_for_download', { ...args, timeoutMs: cap }, cap + 5000);
           if (r?.ok && r.savePath) return { content: [{ type: 'text', text: `Downloaded to ${r.savePath}` }] };
           return { content: [{ type: 'text', text: `Download did not complete (state=${r?.state || 'unknown'}).` }], isError: true };
         } catch (e) { return { content: [{ type: 'text', text: `browser_wait_for_download error: ${e.message}` }], isError: true }; }
