@@ -138,8 +138,16 @@ const _toolStartTimes = new Map(); // tool_use_id → { name, ts, inputPreview }
 
 function _previewInput(name, input) {
   if (!input || typeof input !== 'object') return '';
+  // Match the Bash tool's `description` convention. run_command takes
+  // a `description` from the agent — log that alongside the command
+  // so the timing line reads as intent + mechanism.
+  if (name && /run_command/.test(name)) {
+    const cmd = String(input.command || '').slice(0, 60);
+    return input.description ? `${input.description} — ${cmd}` : cmd;
+  }
   if (name === 'Bash' || name === 'BashOutput' || name === 'run_in_terminal') {
-    return String(input.command || '').slice(0, 80);
+    const cmd = String(input.command || '').slice(0, 60);
+    return input.description ? `${input.description} — ${cmd}` : cmd;
   }
   if (input.file_path) return String(input.file_path).split(/[\\/]/).pop();
   if (input.path)      return String(input.path).split(/[\\/]/).pop();

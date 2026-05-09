@@ -271,6 +271,7 @@ function buildIdeTools(sdk, ctx) {
       'Use the built-in `Bash` tool only when you genuinely need a fresh shell (env experiments, sourcing test-only files, etc.).',
       {
         command: z.string().describe('Shell command to execute (bash syntax)'),
+        description: z.string().optional().describe('One-line human description of what the command does. Shown in the tool pill so the user can see your intent at a glance — e.g. "Install dependencies" or "Run unit tests". Optional but recommended.'),
         cwd: z.string().optional().describe('Per-command cwd (uses pushd/popd so the persistent shell\'s cwd is unchanged). Default: workspace root.'),
         timeoutMs: z.number().optional().default(60_000).describe('Kill the command after N ms via SIGINT. Default 60 s, hard cap 10 min.'),
         isolated: z.boolean().optional().default(false).describe('Wrap in a subshell so cd/exports don\'t leak into subsequent calls.'),

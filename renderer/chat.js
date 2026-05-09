@@ -2208,8 +2208,14 @@
     if (n === 'run_code') return input.language ? `${input.language}` : '';
     if (n === 'run_command') {
       const cmd = (input.command || '').slice(0, 80);
+      const desc = (input.description || '').slice(0, 60).trim();
       const tag = input.isolated ? ' (isolated)' : '';
-      return cmd ? `$ ${cmd}${tag}` : '';
+      // When the agent supplied a description, show it FIRST and put
+      // the command on the next line so the pill reads as intent →
+      // mechanism: "Install deps  ($ pnpm install)". Without one we
+      // fall back to just the command.
+      if (desc && cmd) return `${desc}  ($ ${cmd}${tag})`;
+      return cmd ? `$ ${cmd}${tag}` : (desc || '');
     }
     // Embedded browser tools
     if (n === 'browser_open' || n === 'browser_navigate') {
