@@ -433,12 +433,49 @@
 
         try { await api.files.mkdir(projectPath); } catch {}
 
-        // Build full prompt with file references
-        let fullPrompt = prompt;
+        // Copy any attached files into <project>/_attached/ so the
+        // agent can Read them via absolute path. Previously we listed
+        // the file names + sizes in the prompt but never put the bytes
+        // anywhere on disk — the agent had no way to look at them.
+        const importedPaths = [];
         if (attachedFiles && attachedFiles.length > 0) {
-          fullPrompt += '\n\n--- Attached reference files ---\n';
-          fullPrompt += attachedFiles.map(f => `- ${f.name} (${(f.size / 1024).toFixed(1)}KB)`).join('\n');
-          fullPrompt += '\n\nUse these as reference when building the project.';
+          const attachedDir = `${projectPath}${sep}_attached`;
+          try { await api.files.mkdir(attachedDir); } catch {}
+          const sources = [];
+          for (const f of attachedFiles) {
+            try {
+              const p = api.files.pathForFile?.(f);
+              if (p) sources.push(p);
+            } catch {}
+          }
+          if (sources.length) {
+            try {
+              const r = await api.files.importExternal(sources, attachedDir);
+              if (Array.isArray(r?.imported)) importedPaths.push(...r.imported);
+            } catch (err) {
+              console.warn('[generate] attach copy failed:', err.message);
+            }
+          }
+        }
+
+        // Build the full prompt — the agent's task description plus
+        // workspace rules that match the chat agent's system prompt
+        // (manual scaffolding, pnpm preference, no interactive CLIs)
+        // and explicit Read-tool guidance for any attached files.
+        let fullPrompt = prompt;
+        fullPrompt += `\n\n--- Workspace rules ---`;
+        fullPrompt += `\nWorking directory: ${projectPath}`;
+        fullPrompt += `\n\n**Scaffolding rule** — Do NOT run interactive scaffolders (\`create-next-app\`, \`create-vite\`, \`npm init\`, \`yo\`, etc.). They block waiting for keyboard input that we can't provide. Instead:`;
+        fullPrompt += `\n  1. Write every template file directly with the Write tool — package.json, tsconfig.json, vite.config.* / next.config.*, src/ entrypoints, public/index.html or index.html, .gitignore, README.md.`;
+        fullPrompt += `\n  2. Then run \`pnpm install\` once to fetch deps.`;
+        fullPrompt += `\n  3. Start the dev server in the background with \`pnpm <script>\` (see Bash run_in_background).`;
+        fullPrompt += `\n\n**Package manager rule** — pnpm ONLY for this project. Never npm/npx/yarn (the chat agent's system prompt also enforces this). Translate any \`npm install foo\` → \`pnpm add foo\`, \`npm run dev\` → \`pnpm dev\`, \`npx tsc\` → \`pnpm dlx tsc\`. The single exception is \`npm i -g pnpm\` if pnpm itself isn't on PATH.`;
+        fullPrompt += `\n\n**Project-root rule** — All source lives directly in ${projectPath}. Do NOT create a wrapper subfolder like \`my-app/\`.`;
+        if (importedPaths.length) {
+          fullPrompt += `\n\n--- Attached reference files ---`;
+          fullPrompt += `\nThe user attached ${importedPaths.length} reference file${importedPaths.length === 1 ? '' : 's'} that have been copied into the project under \`_attached/\`. Read each one before designing — the user wants the build to take them into account.`;
+          for (const p of importedPaths) fullPrompt += `\n  - ${p}`;
+          fullPrompt += `\n\nWhen using an attached file in the actual build (logo image, config, sample data, etc.) MOVE it from \`_attached/\` into its final home (e.g. \`public/\`, \`src/assets/\`) with Bash mv — don't leave duplicates.`;
         }
 
         closeFn();
