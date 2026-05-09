@@ -238,6 +238,11 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
             // is dramatically smaller. Resolve so the awaiting send()
             // can fire the user's actual prompt.
             entry.lastInputTokens = 0;
+            // Belt-and-braces: tell the renderer to hide its shimmer
+            // even if the SDK never emitted compact_boundary above
+            // (the renderer's case 'compact_boundary' is the normal
+            // hide path; this is the fallback).
+            try { send(t.channel, { type: 'compacting_end' }); } catch {}
             const fn = t.onCompactDone;
             t.onCompactDone = null;
             t.compacting = false;
@@ -357,9 +362,13 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
       // we stay well under every fallback's ceiling.
       if (entry.lastInputTokens > COMPACT_THRESHOLD_TOKENS) {
         try {
+          // Tell the chat panel to show its shimmer indicator while
+          // /compact runs. We end it on compact_boundary (or on the
+          // 60s safety timeout below).
           send(channel, {
-            type: 'status',
-            status: `Context at ~${Math.round(entry.lastInputTokens / 1000)}k tokens — compacting before this turn…`,
+            type: 'compacting_start',
+            preTokens: entry.lastInputTokens,
+            label: 'Compacting History…',
           });
           entry.currentTurn.compacting = true;
           await new Promise((resolve) => {
@@ -372,6 +381,7 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
             setTimeout(() => {
               if (entry.currentTurn?.onCompactDone === resolve) {
                 console.warn('[agent-warm] /compact timed out after 60s — proceeding without it');
+                try { send(channel, { type: 'compacting_end' }); } catch {}
                 entry.currentTurn.onCompactDone = null;
                 entry.currentTurn.compacting = false;
                 entry.lastInputTokens = 0;

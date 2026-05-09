@@ -5419,8 +5419,17 @@
   }
 
   // ---------- Feature #8: Context Optimization Shimmer ----------
-  function showCompactIndicator() {
-    if (compactIndicator) compactIndicator.classList.remove('hidden');
+  // Show/hide the "[shimmer] <label>" pill above the chat compose.
+  // When called with a label we update it; without a label the
+  // existing label stays. The pill is fixed in index.html with two
+  // children: <svg class="compact-spin"> and <span class="compact-shimmer">.
+  function showCompactIndicator(label) {
+    if (!compactIndicator) return;
+    if (label) {
+      const text = compactIndicator.querySelector('.compact-shimmer');
+      if (text) text.textContent = label;
+    }
+    compactIndicator.classList.remove('hidden');
   }
   function hideCompactIndicator() {
     if (compactIndicator) compactIndicator.classList.add('hidden');
@@ -5736,11 +5745,29 @@
       case 'init':
       case 'system:init':
         break;
+      case 'compacting_start':
+        // Warm path is auto-firing /compact before our turn because
+        // context grew large. Show the shimmer until compact_boundary
+        // arrives; the user's actual prompt fires after that.
+        showCompactIndicator(evt.label || 'Compacting History…');
+        break;
+      case 'compacting_end':
+        // Belt-and-braces fallback from main if /compact finished or
+        // timed out without an SDK-emitted compact_boundary.
+        hideCompactIndicator();
+        break;
       case 'compact_boundary':
         appendBoundary('Context compacted' + (evt.trigger ? ` (${evt.trigger})` : ''));
-        // Feature #8: Compact indicator
-        showCompactIndicator();
-        setTimeout(hideCompactIndicator, 3000);
+        // Indicator was either lit by us at compacting_start or by an
+        // SDK-internal compact event. Either way the boundary is the
+        // signal to hide it. Also flash it briefly when we never lit
+        // it ourselves (SDK-internal trigger), as a courtesy cue.
+        if (compactIndicator?.classList.contains('hidden')) {
+          showCompactIndicator('Context compacted');
+          setTimeout(hideCompactIndicator, 1500);
+        } else {
+          hideCompactIndicator();
+        }
         break;
       case 'status':
         bus.emit('agent:status', evt.status || 'ready');
