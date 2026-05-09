@@ -28,6 +28,12 @@ const {
   formatCurrentTimePrefix,
 } = require('./agent-shared');
 
+// Auto-compact when the prior turn's input_tokens crossed this line.
+// Sized for the most cramped model in our proxy fallback chain
+// (minimax-m2.5 caps at ~196 k); 150k leaves room for the /compact
+// overhead, the user's next prompt, system prompt, and tool defs.
+const COMPACT_THRESHOLD_TOKENS = 150_000;
+
 module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
   // pendingInputRequests is shared with the cold path so the existing
   // `agent:answer-question` handler can resolve answers from either.
@@ -199,29 +205,49 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
         sessionId: baseOptions.resume || null,
         currentTurn: null,
         openedAt: Date.now(),
-        // Counts user turns we've sent into this warm session. Used to
-        // decide whether to inject prior-conversation context into the
-        // prompt: yes on turn 0 (the SDK process is fresh, has no
-        // memory of pre-restart history), no thereafter (SDK retains
-        // context within a session, re-injecting would just waste tokens).
         turnCount: 0,
+        // Last turn's input-token count. We track this so the next
+        // send() can decide whether to fire /compact preemptively
+        // before the model OOCs. The proxy was hitting 292k+ token
+        // requests against models that cap at 196–262k — by then
+        // every fallback model rejected the call. Compacting at 150k
+        // leaves headroom for any of them.
+        lastInputTokens: 0,
       };
       sessions.set(projectPath, entry);
 
       await session.start((msg) => {
         const t = entry.currentTurn;
         if (!t) return; // Stray message between turns — drop.
+
+        // Compaction phase. We inject /compact before the user's real
+        // turn when context is large; while it runs we don't want the
+        // renderer to see the /compact's text/result as if it were
+        // the user's reply. We DO forward compact_boundary so the UI
+        // can show its "Context compacted" indicator.
+        if (t.compacting) {
+          if (msg.type === 'system' && msg.subtype === 'compact_boundary') {
+            dispatchSdkMessage(msg, (payload) => send(t.channel, payload));
+          }
+          if (msg.type === 'result') {
+            // /compact done. Reset token tally — post-compact context
+            // is dramatically smaller. Resolve so the awaiting send()
+            // can fire the user's actual prompt.
+            entry.lastInputTokens = 0;
+            const fn = t.onCompactDone;
+            t.onCompactDone = null;
+            t.compacting = false;
+            try { fn && fn(); } catch {}
+          }
+          return;
+        }
+
         dispatchSdkMessage(msg, (payload) => send(t.channel, payload), {
           onSessionId: (sid) => {
             entry.sessionId = sid;
             persistSessionId(projectPath, sid);
           },
         });
-        // Accumulate assistant text for the current turn so we can
-        // write a single history entry at result-time. Cold path does
-        // the same — chat.js shows a stream of bubbles, the persisted
-        // log keeps just the final text (capped to 300 chars by
-        // appendHistoryEntry).
         if (msg && msg.type === 'assistant') {
           for (const b of (msg.message?.content || [])) {
             if (b?.type === 'text' && typeof b.text === 'string') {
@@ -230,7 +256,10 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
           }
         }
         if (msg && msg.type === 'result') {
-          // Persist the assistant turn before we clear state.
+          // Capture token usage for the next-send compaction decision.
+          // input_tokens already includes cached tokens; that's the
+          // figure the upstream proxy/model checks against its limit.
+          if (msg.usage?.input_tokens) entry.lastInputTokens = msg.usage.input_tokens;
           if (t.assistantText) {
             appendHistoryEntry(projectPath, {
               role: 'assistant',
@@ -238,7 +267,6 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
               timestamp: new Date().toISOString(),
             });
           }
-          // Turn complete — clear so the next agent:warm-send can take.
           streamToWorkspace.delete(t.streamId);
           entry.currentTurn = null;
         }
@@ -315,6 +343,41 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
           }
         } catch (err) {
           console.warn('[agent-warm] history injection failed:', err.message);
+        }
+      }
+
+      // Auto-compact when the previous turn pushed input tokens past
+      // our safety threshold. The smallest free model in the proxy
+      // chain caps at 196k tokens — we compact at 150k so even after
+      // /compact's own overhead and a moderately-sized next prompt
+      // we stay well under every fallback's ceiling.
+      if (entry.lastInputTokens > COMPACT_THRESHOLD_TOKENS) {
+        try {
+          send(channel, {
+            type: 'status',
+            status: `Context at ~${Math.round(entry.lastInputTokens / 1000)}k tokens — compacting before this turn…`,
+          });
+          entry.currentTurn.compacting = true;
+          await new Promise((resolve) => {
+            entry.currentTurn.onCompactDone = resolve;
+            entry.session.send('/compact');
+            // Hard cap — if /compact silently never finishes (rare,
+            // but the SDK has had streaming bugs in this area), give
+            // up and proceed with the original prompt anyway. The
+            // user will see the OOC error and can /clear manually.
+            setTimeout(() => {
+              if (entry.currentTurn?.onCompactDone === resolve) {
+                console.warn('[agent-warm] /compact timed out after 60s — proceeding without it');
+                entry.currentTurn.onCompactDone = null;
+                entry.currentTurn.compacting = false;
+                entry.lastInputTokens = 0;
+                resolve();
+              }
+            }, 60000);
+          });
+        } catch (err) {
+          console.warn('[agent-warm] auto-compact failed:', err.message);
+          if (entry.currentTurn) entry.currentTurn.compacting = false;
         }
       }
 
