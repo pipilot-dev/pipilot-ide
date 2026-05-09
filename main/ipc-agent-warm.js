@@ -29,10 +29,14 @@ const {
 } = require('./agent-shared');
 
 // Auto-compact when the prior turn's input_tokens crossed this line.
-// Sized for the most cramped model in our proxy fallback chain
-// (minimax-m2.5 caps at ~196 k); 150k leaves room for the /compact
-// overhead, the user's next prompt, system prompt, and tool defs.
-const COMPACT_THRESHOLD_TOKENS = 150_000;
+// Some fallback models in the proxy chain cap as low as 131k tokens
+// (and the typical "OOC at 292k" failures we saw came from one
+// turn's context already being > 200k). Compacting at 100k leaves
+// real headroom for the /compact step's own overhead + the user's
+// next prompt + system prompt + tool defs even on the smallest
+// endpoint, without forcing aggressive compaction on big-context
+// models.
+const COMPACT_THRESHOLD_TOKENS = 100_000;
 
 module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
   // pendingInputRequests is shared with the cold path so the existing
