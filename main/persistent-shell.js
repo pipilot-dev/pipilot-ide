@@ -53,6 +53,10 @@ class PersistentShell {
         // and doesn't run user dotfiles that might prompt or hang.
         // -i (interactive) is intentionally skipped — non-interactive
         // shells exit cleanly when stdin closes, which is what we want.
+        // node child_process accepts native OS paths for `cwd` (it
+        // CreateProcess-es into the dir before spawning bash) so the
+        // Windows path passes through fine — only commands we send
+        // *into* the shell need the /c/Users/... translation.
         const proc = spawn('bash', ['--noprofile', '--norc'], {
           cwd: this.cwd,
           env: process.env,
@@ -134,30 +138,47 @@ class PersistentShell {
     this.currentJob = { ...job, id, startTs };
 
     const timeoutMs = Math.max(100, Math.min(600_000, Number(job.opts.timeoutMs) || 60_000));
+    // Two-stage timeout. The soft timeout sends SIGINT and stub
+    // sentinel — bash *should* recover. The hard timeout fires 5 s
+    // later if the soft path didn't unstick the job (e.g. SIGINT
+    // didn't actually deliver on Windows, bash didn't exit, sentinel
+    // never arrived). It rejects the Promise outright + tears down
+    // the shell so the next exec respawns. Belt-and-braces — without
+    // this the agent's tool call hangs forever.
     this.currentJob.timeoutTimer = setTimeout(() => {
-      // Send SIGINT to the FOREGROUND command (not the shell itself).
-      // bash forwards SIGINT to its current foreground job, which is
-      // the user's command. The shell stays alive for the next exec.
       try { this.shell?.kill('SIGINT'); } catch {}
-      // Also flush a stub sentinel so the parser can complete the job.
       try { this.shell?.stdin?.write(`echo "__${id}__:124"\n`); } catch {}
     }, timeoutMs);
+    this.currentJob.hardTimeoutTimer = setTimeout(() => {
+      if (!this.currentJob || this.currentJob.id !== id) return;
+      const j = this.currentJob;
+      this.currentJob = null;
+      this.busy = false;
+      try { this.shell?.kill(); } catch {}
+      this.shell = null;
+      try {
+        j.resolve({
+          stdout: stripTrailingNewline(this.outBuf) + '\n[run_command timed out and the shell was killed]',
+          exitCode: 124,
+          elapsedMs: Date.now() - startTs,
+          timedOut: true,
+        });
+      } catch {}
+      this.outBuf = '';
+      setImmediate(() => this._drain());
+    }, timeoutMs + 5000);
 
     // Build the line we send to bash. The sentinel echoes the prior
     // command's exit code, separated from output by a newline, so the
     // parser can pick out exactly the bytes that belonged to this
-    // command. Wrapping in `( … )` for isolated:true gives a subshell
-    // — cd / export / etc. don't escape it.
-    const cmdSrc = job.opts.isolated
-      ? `( ${job.command} ) 2>&1`
-      : `${job.command} 2>&1`;
-    const cdPrefix = job.opts.cwd
-      ? `pushd ${shellSingleQuote(job.opts.cwd)} > /dev/null && `
-      : '';
-    const cdSuffix = job.opts.cwd
-      ? ` ; rc=$?; popd > /dev/null; ( exit $rc )`
-      : '';
-    const fullLine = `${cdPrefix}${cmdSrc}${cdSuffix}\necho "__${id}__:$?"\n`;
+    // command. Wrapping in `( … )` gives a subshell that contains
+    // any cd / export side effects so they don't leak across calls
+    // when isolated:true OR when a per-command cwd was specified.
+    const cwdNorm = job.opts.cwd ? toBashPath(job.opts.cwd) : '';
+    const cdPrefix = cwdNorm ? `cd ${shellSingleQuote(cwdNorm)} && ` : '';
+    const inner = `${cdPrefix}${job.command} 2>&1`;
+    const wrap = (job.opts.isolated || cwdNorm) ? `( ${inner} )` : inner;
+    const fullLine = `${wrap}\necho "__${id}__:$?"\n`;
 
     try {
       this.shell.stdin.write(fullLine);
@@ -185,6 +206,7 @@ class PersistentShell {
 
     const job = this.currentJob;
     clearTimeout(job.timeoutTimer);
+    clearTimeout(job.hardTimeoutTimer);
     this.currentJob = null;
     this.busy = false;
 
@@ -207,6 +229,7 @@ class PersistentShell {
     if (this.currentJob) {
       try { this.currentJob.reject(new Error('shell closed')); } catch {}
       clearTimeout(this.currentJob.timeoutTimer);
+      clearTimeout(this.currentJob.hardTimeoutTimer);
       this.currentJob = null;
     }
     this.busy = false;
@@ -224,6 +247,22 @@ function shellSingleQuote(s) {
 }
 function stripTrailingNewline(s) {
   return s.endsWith('\r\n') ? s.slice(0, -2) : s.endsWith('\n') ? s.slice(0, -1) : s;
+}
+
+// Convert a Windows-style path (`C:\Users\big\X`) to one bash can
+// actually navigate to. Git Bash / MSYS understands `/c/Users/big/X`
+// natively (and a forward-slash form like `C:/Users/big/X` if quoted).
+// On non-Windows the path is returned unchanged. Without this,
+// `cd 'C:\Users\big\X'` inside Git Bash treated the backslashes as
+// escapes and silently failed, leaving the persistent-shell tool
+// hung indefinitely waiting for its sentinel.
+function toBashPath(p) {
+  const s = String(p || '');
+  if (process.platform !== 'win32') return s;
+  // C:\Users\big → /c/Users/big — works in Git Bash, Cygwin, MSYS.
+  const m = /^([A-Za-z]):[\\/](.*)$/.exec(s);
+  if (m) return `/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`;
+  return s.replace(/\\/g, '/');
 }
 
 // One PersistentShell per workspace. Different workspaces get
