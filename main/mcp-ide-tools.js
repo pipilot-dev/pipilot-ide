@@ -200,50 +200,60 @@ async function frontendDesignGuide(params) {
 
   // ── scan: read existing design system from .pipilot/design.md + extract CSS tokens ──
   if (action === 'scan') {
-    const result = { existing: null, tokens: null, hasTailwind: false };
-
-    // Read existing design.md if present
+    let existing = null;
     try {
-      if (fs.existsSync(designPath)) {
-        result.existing = fs.readFileSync(designPath, 'utf8');
-      }
+      if (fs.existsSync(designPath)) existing = fs.readFileSync(designPath, 'utf8');
     } catch {}
 
-    // Extract design tokens from CSS files
-    const tokens = { colors: [], fonts: [], spacing: [] };
-    const cssFiles = [];
-    function findCSS(d) {
-      try {
-        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-          if (['node_modules', '.git', 'dist'].includes(e.name)) continue;
-          if (e.isDirectory()) findCSS(path.join(d, e.name));
-          else if (/\.(css|scss|less)$/.test(e.name)) cssFiles.push(path.join(d, e.name));
-        }
-      } catch {}
-    }
-    findCSS(dir);
-
-    for (const f of cssFiles.slice(0, 10)) {
-      try {
-        const css = fs.readFileSync(f, 'utf8');
-        const varMatches = css.matchAll(/--([a-zA-Z0-9-]+)\s*:\s*([^;]+)/g);
-        for (const m of varMatches) {
-          if (/color|bg|text|border|accent/i.test(m[1])) tokens.colors.push(`--${m[1]}: ${m[2].trim()}`);
-          else if (/font|family/i.test(m[1])) tokens.fonts.push(`--${m[1]}: ${m[2].trim()}`);
-          else if (/space|gap|padding|margin|size/i.test(m[1])) tokens.spacing.push(`--${m[1]}: ${m[2].trim()}`);
-        }
-      } catch {}
+    // Found a real design system — return it verbatim. The agent
+    // should READ this and follow it for any UI work; no further
+    // action calls needed.
+    if (existing) {
+      return {
+        content:
+          `# Design system found\n\n` +
+          `Path: ${designPath}\n\n` +
+          `Use the rules below for any UI work in this project. Do NOT call \`load\` or \`write\` — the design system already exists.\n\n` +
+          `---\n\n${existing}`,
+      };
     }
 
-    result.hasTailwind = fs.existsSync(path.join(dir, 'tailwind.config.js')) || fs.existsSync(path.join(dir, 'tailwind.config.ts'));
-    result.tokens = tokens;
-    result.cssFilesFound = cssFiles.length;
-
-    if (!result.existing && tokens.colors.length === 0 && tokens.fonts.length === 0) {
-      result.message = 'No design system found. Use action "load" to get the design skill guide, then "write" to create a design system for this project.';
-    }
-
-    return result;
+    // No design.md. Don't dump random CSS-var sniffing here — those
+    // tokens come from generic Tailwind / vendor stylesheets and the
+    // agent would mistake them for a real design system. Tell it
+    // exactly what to do next instead.
+    const hasTailwind = fs.existsSync(path.join(dir, 'tailwind.config.js'))
+      || fs.existsSync(path.join(dir, 'tailwind.config.ts'));
+    return {
+      content:
+        `# No design system found\n\n` +
+        `\`${designPath}\` does not exist yet. ` +
+        (hasTailwind
+          ? 'Tailwind is configured but no PiPilot design system has been authored. '
+          : '') +
+        `Create one before doing any UI work — bold, distinctive, intentional design starts here.\n\n` +
+        `## Next steps (call this tool twice)\n\n` +
+        `**Step 1 — load the design skill guide:**\n` +
+        `\`\`\`json\n` +
+        `{ "action": "load" }\n` +
+        `\`\`\`\n` +
+        `That returns the PiPilot Frontend Design Skill Guide (typography, color, motion, spatial-composition rules + a checklist of what to include).\n\n` +
+        `**Step 2 — write a design system tailored to THIS project:**\n` +
+        `\`\`\`json\n` +
+        `{\n` +
+        `  "action": "write",\n` +
+        `  "content": "<your design system as a markdown document>"\n` +
+        `}\n` +
+        `\`\`\`\n` +
+        `The \`content\` should be a complete markdown document covering:\n` +
+        `  1. **Aesthetic direction & tone** (1 short paragraph — pick ONE bold direction)\n` +
+        `  2. **Color palette** as CSS variables (\`--color-primary\`, \`--color-bg\`, \`--color-text\`, \`--color-accent\`, etc.)\n` +
+        `  3. **Typography** — chosen display + body fonts, scale, weights\n` +
+        `  4. **Spacing scale** (e.g. 4 / 8 / 16 / 24 / 32 / 48 / 64 px)\n` +
+        `  5. **Component patterns** — buttons, cards, inputs, navigation\n` +
+        `  6. **Animation approach** — which library, which moments\n\n` +
+        `Then implement UI to that spec. Don't skip step 1 — the skill guide has critical "NEVER use" rules (no Inter / Roboto, no cliched purple gradients on white) that distinguish PiPilot output.`,
+    };
   }
 
   // ── load: return the frontend design skill guide for the AI to follow ──
