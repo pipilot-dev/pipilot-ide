@@ -368,7 +368,10 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
           send(channel, {
             type: 'compacting_start',
             preTokens: entry.lastInputTokens,
-            label: 'Compacting History…',
+            // Same friendly phrasing as the SDK-internal auto-compact
+            // pill — users see one consistent indicator regardless of
+            // who triggered the compaction.
+            label: 'Optimizing context…',
           });
           entry.currentTurn.compacting = true;
           await new Promise((resolve) => {

@@ -5749,7 +5749,7 @@
         // Warm path is auto-firing /compact before our turn because
         // context grew large. Show the shimmer until compact_boundary
         // arrives; the user's actual prompt fires after that.
-        showCompactIndicator(evt.label || 'Compacting History…');
+        showCompactIndicator(evt.label || 'Optimizing context…');
         break;
       case 'compacting_end':
         // Belt-and-braces fallback from main if /compact finished or
