@@ -127,6 +127,28 @@ function makeAskUserCanUseTool({ sendEvent, pendingInputRequests, streamId }) {
   };
 }
 
+// ── Tool-execution timing instrumentation ────────────────────────
+// Records the wall time between an SDK tool_use arriving and the
+// matching tool_result coming back, so we can see where Bash (and
+// any other tool) actually spends its time. Triggered on every call;
+// logs to the main-process console with name + duration + input
+// preview. Toggle off by setting PIPILOT_TOOL_TIMING=0.
+const TOOL_TIMING_ENABLED = process.env.PIPILOT_TOOL_TIMING !== '0';
+const _toolStartTimes = new Map(); // tool_use_id → { name, ts, inputPreview }
+
+function _previewInput(name, input) {
+  if (!input || typeof input !== 'object') return '';
+  if (name === 'Bash' || name === 'BashOutput' || name === 'run_in_terminal') {
+    return String(input.command || '').slice(0, 80);
+  }
+  if (input.file_path) return String(input.file_path).split(/[\\/]/).pop();
+  if (input.path)      return String(input.path).split(/[\\/]/).pop();
+  if (input.pattern)   return String(input.pattern);
+  if (input.url)       return String(input.url).slice(0, 60);
+  if (input.query)     return String(input.query).slice(0, 60);
+  return '';
+}
+
 // Translate raw SDK messages into the wire-format the renderer's
 // chat.js already speaks. Lifted from ipc-agent.js's `for await msg
 // of result` loop, preserved 1:1 so the renderer doesn't need to
@@ -198,6 +220,16 @@ function dispatchSdkMessage(msg, sendEvent, opts = {}) {
       } else if (b.type === 'redacted_thinking') {
         sendEvent({ type: 'thinking', text: '[redacted]', redacted: true }); n++;
       } else if (b.type === 'tool_use' || b.type === 'mcp_tool_use' || b.type === 'server_tool_use') {
+        // Mark the start so the matching tool_result can compute
+        // the round-trip elapsed below. Includes the input preview
+        // so the log line is grep-able by command.
+        if (TOOL_TIMING_ENABLED && b.id) {
+          _toolStartTimes.set(b.id, {
+            name: b.name || '?',
+            ts: Date.now(),
+            inputPreview: _previewInput(b.name, b.input),
+          });
+        }
         sendEvent({
           type: 'tool_call',
           id: b.id, name: b.name, input: b.input,
@@ -218,6 +250,18 @@ function dispatchSdkMessage(msg, sendEvent, opts = {}) {
         'code_execution_tool_result', 'bash_code_execution_tool_result',
         'text_editor_code_execution_tool_result'];
       if (TR_KINDS.includes(b.type)) {
+        // Close the timing record for this tool use and log it.
+        // Format: "[tool-timing] Bash 234 ms ✓: ls -la"
+        if (TOOL_TIMING_ENABLED && b.tool_use_id) {
+          const start = _toolStartTimes.get(b.tool_use_id);
+          if (start) {
+            _toolStartTimes.delete(b.tool_use_id);
+            const elapsed = Date.now() - start.ts;
+            const status = b.is_error ? '✗' : '✓';
+            const tag = start.inputPreview ? `: ${start.inputPreview}` : '';
+            console.log(`[tool-timing] ${start.name} ${elapsed} ms ${status}${tag}`);
+          }
+        }
         let preview = b.content;
         if (Array.isArray(preview)) {
           preview = preview.map(p => (p && p.type === 'text') ? p.text : JSON.stringify(p)).join('\n');
