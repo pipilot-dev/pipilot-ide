@@ -379,23 +379,77 @@
         });
       });
 
-      // File attach
+      // attachedFiles is now an array of { name, path } — `path` is
+      // an absolute on-disk location the agent's Read tool can hit
+      // directly, no in-project copy needed. Two sources populate it:
+      //   1. File picker → resolve via webUtils.getPathForFile.
+      //   2. Clipboard paste of an image → write the image bytes to
+      //      <os.tmpdir>/pipilot-paste/ via files.saveTemp, then push
+      //      that returned path. Lets the user Cmd+V a screenshot
+      //      straight into the modal and have the agent see it.
+
+      function addAttachment(name, path) {
+        if (!path) return;
+        const item = { name: name || path.split(/[\\/]/).pop(), path };
+        attachedFiles.push(item);
+        const tag = document.createElement('span');
+        tag.className = 'gen-file-tag';
+        tag.title = path;
+        tag.innerHTML = `${escapeHtml(item.name)} <button class="gen-file-remove">&times;</button>`;
+        tag.querySelector('.gen-file-remove').addEventListener('click', () => {
+          const idx = attachedFiles.indexOf(item);
+          if (idx >= 0) attachedFiles.splice(idx, 1);
+          tag.remove();
+        });
+        filesList.appendChild(tag);
+      }
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+      }
+
+      // File attach (picker)
       dialog.querySelector('#gen-attach').addEventListener('click', () => fileInput.click());
       fileInput.addEventListener('change', () => {
         for (const f of fileInput.files) {
-          attachedFiles.push(f);
-          const tag = document.createElement('span');
-          tag.className = 'gen-file-tag';
-          tag.innerHTML = `${f.name} <button class="gen-file-remove">&times;</button>`;
-          tag.querySelector('.gen-file-remove').addEventListener('click', () => {
-            const idx = attachedFiles.indexOf(f);
-            if (idx >= 0) attachedFiles.splice(idx, 1);
-            tag.remove();
-          });
-          filesList.appendChild(tag);
+          let p = '';
+          try { p = api.files.pathForFile?.(f) || ''; } catch {}
+          if (p) addAttachment(f.name, p);
+          else console.warn('[generate] could not resolve OS path for', f.name);
         }
         fileInput.value = '';
       });
+
+      // Clipboard paste — pick up images dropped via Cmd/Ctrl+V on the
+      // prompt textarea, save them to the OS temp dir, and attach the
+      // resulting path. Plain-text pastes flow through to the textarea
+      // as normal because we only preventDefault on image items.
+      promptInput.addEventListener('paste', async (e) => {
+        const items = e.clipboardData?.items;
+        if (!items || !items.length) return;
+        const images = Array.from(items).filter(it => it.type && it.type.startsWith('image/'));
+        if (!images.length) return;
+        e.preventDefault();
+        for (const it of images) {
+          const file = it.getAsFile();
+          if (!file) continue;
+          try {
+            const buf = await file.arrayBuffer();
+            const base64 = bufferToBase64(buf);
+            const ext = (file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '');
+            const name = `paste-${Date.now()}.${ext}`;
+            const r = await api.files.saveTemp(name, base64);
+            if (r?.ok && r.path) addAttachment(name, r.path);
+          } catch (err) {
+            console.warn('[generate] paste-to-temp failed:', err.message);
+          }
+        }
+      });
+      function bufferToBase64(buf) {
+        const bytes = new Uint8Array(buf);
+        let s = '';
+        for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+        return btoa(s);
+      }
 
       const close = () => overlay.remove();
       overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
@@ -433,30 +487,14 @@
 
         try { await api.files.mkdir(projectPath); } catch {}
 
-        // Copy any attached files into <project>/_attached/ so the
-        // agent can Read them via absolute path. Previously we listed
-        // the file names + sizes in the prompt but never put the bytes
-        // anywhere on disk — the agent had no way to look at them.
-        const importedPaths = [];
-        if (attachedFiles && attachedFiles.length > 0) {
-          const attachedDir = `${projectPath}${sep}_attached`;
-          try { await api.files.mkdir(attachedDir); } catch {}
-          const sources = [];
-          for (const f of attachedFiles) {
-            try {
-              const p = api.files.pathForFile?.(f);
-              if (p) sources.push(p);
-            } catch {}
-          }
-          if (sources.length) {
-            try {
-              const r = await api.files.importExternal(sources, attachedDir);
-              if (Array.isArray(r?.imported)) importedPaths.push(...r.imported);
-            } catch (err) {
-              console.warn('[generate] attach copy failed:', err.message);
-            }
-          }
-        }
+        // attachedFiles is already an array of { name, path } where
+        // each path is an absolute on-disk location (file picker:
+        // user's original location; clipboard paste: <tmp>/pipilot-paste/).
+        // The agent reads them via Read tool directly — no in-project
+        // copy needed. If a file should be USED in the build (logo,
+        // sample data, etc.) the agent copies it into the project as
+        // part of its work via Bash cp.
+        const attachmentPaths = (attachedFiles || []).map(a => a?.path).filter(Boolean);
 
         // Build the full prompt — the agent's task description plus
         // workspace rules that match the chat agent's system prompt
@@ -471,11 +509,11 @@
         fullPrompt += `\n  3. Start the dev server in the background with \`pnpm <script>\` (see Bash run_in_background).`;
         fullPrompt += `\n\n**Package manager rule** — pnpm ONLY for this project. Never npm/npx/yarn (the chat agent's system prompt also enforces this). Translate any \`npm install foo\` → \`pnpm add foo\`, \`npm run dev\` → \`pnpm dev\`, \`npx tsc\` → \`pnpm dlx tsc\`. The single exception is \`npm i -g pnpm\` if pnpm itself isn't on PATH.`;
         fullPrompt += `\n\n**Project-root rule** — All source lives directly in ${projectPath}. Do NOT create a wrapper subfolder like \`my-app/\`.`;
-        if (importedPaths.length) {
+        if (attachmentPaths.length) {
           fullPrompt += `\n\n--- Attached reference files ---`;
-          fullPrompt += `\nThe user attached ${importedPaths.length} reference file${importedPaths.length === 1 ? '' : 's'} that have been copied into the project under \`_attached/\`. Read each one before designing — the user wants the build to take them into account.`;
-          for (const p of importedPaths) fullPrompt += `\n  - ${p}`;
-          fullPrompt += `\n\nWhen using an attached file in the actual build (logo image, config, sample data, etc.) MOVE it from \`_attached/\` into its final home (e.g. \`public/\`, \`src/assets/\`) with Bash mv — don't leave duplicates.`;
+          fullPrompt += `\nThe user attached ${attachmentPaths.length} reference file${attachmentPaths.length === 1 ? '' : 's'}. Each path below is an ABSOLUTE on-disk location (outside the project — files picked from the user's filesystem, or pasted images saved to the OS temp dir). Read each one with the Read tool before designing — the user wants the build to take them into account.`;
+          for (const p of attachmentPaths) fullPrompt += `\n  - ${p}`;
+          fullPrompt += `\n\nIf an attached file should ship as part of the project itself (logo image, sample data, config snippet), COPY it into its real home (e.g. ${projectPath}${sep}public${sep}, ${projectPath}${sep}src${sep}assets${sep}) with Bash \`cp\` — leave the original where it is.`;
         }
 
         closeFn();
