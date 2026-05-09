@@ -265,10 +265,19 @@ module.exports = function registerAgentWarmHandlers(ipcMain, ctx) {
           }
         }
         if (msg && msg.type === 'result') {
-          // Capture token usage for the next-send compaction decision.
-          // input_tokens already includes cached tokens; that's the
-          // figure the upstream proxy/model checks against its limit.
-          if (msg.usage?.input_tokens) entry.lastInputTokens = msg.usage.input_tokens;
+          // Capture TOTAL context tokens for the next-send compaction
+          // decision. With prompt caching (which the SDK enables by
+          // default once context grows), `input_tokens` only counts
+          // the new uncached portion — the bulk of the conversation
+          // hides in `cache_read_input_tokens`. Both occupy the
+          // model's context window, so both must count toward the
+          // threshold. We also fall back to OpenAI-shape `prompt_tokens`
+          // in case the proxy translates it.
+          const u = msg.usage || {};
+          const total = (u.input_tokens || u.prompt_tokens || 0)
+            + (u.cache_read_input_tokens || 0)
+            + (u.cache_creation_input_tokens || 0);
+          if (total > 0) entry.lastInputTokens = total;
           if (t.assistantText) {
             appendHistoryEntry(projectPath, {
               role: 'assistant',
