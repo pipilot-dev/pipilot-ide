@@ -2209,7 +2209,10 @@
     if (n === 'run_command') {
       const cmd = (input.command || '').slice(0, 80);
       const desc = (input.description || '').slice(0, 60).trim();
-      const tag = input.isolated ? ' (isolated)' : '';
+      const tags = [];
+      if (input.run_in_background) tags.push('bg');
+      if (input.isolated)          tags.push('isolated');
+      const tag = tags.length ? ` (${tags.join(', ')})` : '';
       // When the agent supplied a description, show it FIRST and put
       // the command on the next line so the pill reads as intent →
       // mechanism: "Install deps  ($ pnpm install)". Without one we

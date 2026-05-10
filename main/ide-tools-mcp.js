@@ -274,8 +274,9 @@ function buildIdeTools(sdk, ctx) {
         command: z.string().describe('Shell command to execute (bash syntax)'),
         description: z.string().optional().describe('One-line human description of what the command does. Shown in the tool pill so the user can see your intent at a glance — e.g. "Install dependencies" or "Run unit tests". Optional but recommended.'),
         cwd: z.string().optional().describe('Per-command cwd (uses pushd/popd so the persistent shell\'s cwd is unchanged). Default: workspace root.'),
-        timeoutMs: z.number().optional().default(60_000).describe('Kill the command after N ms via SIGINT. Default 60 s, hard cap 10 min.'),
-        isolated: z.boolean().optional().default(false).describe('Wrap in a subshell so cd/exports don\'t leak into subsequent calls.'),
+        timeoutMs: z.number().optional().default(60_000).describe('Kill the command after N ms via SIGINT. Default 60 s, hard cap 10 min. Ignored when run_in_background:true.'),
+        isolated: z.boolean().optional().default(false).describe('Wrap in a subshell so cd/exports don\'t leak into subsequent calls. (No-op on Windows cmd.)'),
+        run_in_background: z.boolean().optional().default(false).describe('Fire-and-forget mode for long-running processes (dev servers, watchers). Returns immediately with the on-disk log path; the command keeps running. The agent can later poll the log via `tail -n 50 <path>` (bash) or `type <path>` (cmd). Use for `pnpm dev`, `vite`, `next dev`, etc. — anything you don\'t want to block on.'),
       },
       async (args) => {
         try {
@@ -284,10 +285,17 @@ function buildIdeTools(sdk, ctx) {
           const shell = getShell(cwd);
           const r = await shell.exec(args.command, {
             cwd: args.cwd,
-            timeoutMs: args.timeoutMs,
+            // Background mode skips the timeout entirely — we return
+            // as soon as the shell echoes the sentinel, which is
+            // immediate after start /B (Windows) or & (bash). The
+            // dev server keeps running.
+            timeoutMs: args.run_in_background ? 5_000 : args.timeoutMs,
             isolated: args.isolated,
+            run_in_background: args.run_in_background,
           });
-          const head = `exit ${r.exitCode} • ${r.elapsedMs} ms`;
+          const head = args.run_in_background
+            ? `started in background • ${r.elapsedMs} ms`
+            : `exit ${r.exitCode} • ${r.elapsedMs} ms`;
           const body = r.stdout || '(no output)';
           // Cap at 16 KB inline; bigger output should use Bash with
           // pipes to file or have the caller chunk.

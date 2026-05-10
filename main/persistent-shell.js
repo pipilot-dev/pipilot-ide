@@ -16,6 +16,16 @@
 
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+
+// Per-background-job log file. We keep them under a single dir so
+// the agent + user can find/clean them up easily. Created lazily.
+const BG_LOG_DIR = path.join(os.tmpdir(), 'pipilot-run-command-bg');
+function bgLogPath(id) {
+  try { fs.mkdirSync(BG_LOG_DIR, { recursive: true }); } catch {}
+  return path.join(BG_LOG_DIR, `${id}.log`);
+}
 
 // ── Shell strategies ───────────────────────────────────────────────
 // Each strategy abstracts the per-shell pieces:
@@ -31,6 +41,20 @@ const STRATEGIES = {
     wrap(command, opts, id) {
       const cwdNorm = opts.cwd ? String(opts.cwd) : '';
       const cd = cwdNorm ? `cd ${shellSingleQuote(cwdNorm)} && ` : '';
+      // Background mode: redirect output to a temp log, fork via &,
+      // echo the pid + log path, and report exit 0 immediately. The
+      // command keeps running after we return; when the persistent
+      // shell dies (app quit) SIGHUP propagates and the bg process
+      // dies with it — which is what we want for dev-server use cases.
+      if (opts.run_in_background) {
+        const logPath = bgLogPath(id);
+        const inner = `${cd}${command}`;
+        return (
+          `${inner} > ${shellSingleQuote(logPath)} 2>&1 &\n` +
+          `echo "[run_command background] pid=$!  log=${logPath}"\n` +
+          `echo "__${id}__:0"\n`
+        );
+      }
       const inner = `${cd}${command} 2>&1`;
       const wrapped = (opts.isolated || cwdNorm) ? `( ${inner} )` : inner;
       // Sentinel echoed AFTER the command runs. `$?` is the prior
@@ -56,12 +80,28 @@ const STRATEGIES = {
     // terminals consume invisibly; if it leaks it's still tiny.
     init: '@echo off\r\nprompt $H\r\n',
     wrap(command, opts, id) {
+      const cwd = opts.cwd ? String(opts.cwd) : '';
+      const lines = [];
+      // Background mode on Windows: `start /B` runs the program in
+      // the background without a new console window, returning
+      // control immediately. We wrap it in a child cmd so we can
+      // redirect its output to a log file. The agent gets the log
+      // path back so it can poll `type <log>` for status / errors.
+      if (opts.run_in_background) {
+        const logPath = bgLogPath(id);
+        if (cwd) {
+          lines.push(`pushd ${cmdQuote(cwd)} || (echo __${id}__:1 & exit /b)`);
+        }
+        lines.push(`start /B "" cmd /C "${command.replace(/"/g, '""')} > ${cmdQuote(logPath)} 2>&1"`);
+        if (cwd) lines.push(`popd`);
+        lines.push(`echo [run_command background] log=${logPath}`);
+        lines.push(`echo __${id}__:0`);
+        return lines.join('\r\n') + '\r\n';
+      }
       // pushd handles drive letters natively (`pushd C:\x` switches
       // drives transparently, popd returns). %ERRORLEVEL% is captured
       // into a temp var BEFORE popd so popd's own success doesn't
       // clobber the command's exit status.
-      const cwd = opts.cwd ? String(opts.cwd) : '';
-      const lines = [];
       if (cwd) {
         lines.push(`pushd ${cmdQuote(cwd)} || (echo __${id}__:1 & exit /b)`);
         lines.push(`${command} 2>&1`);
